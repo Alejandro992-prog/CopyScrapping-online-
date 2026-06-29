@@ -24,6 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const lastCaptureContainer = document.getElementById("last-capture-container");
     const recentCapturesHeaders = document.getElementById("recent-captures-headers");
     const recentCapturesBody = document.getElementById("recent-captures-body");
+    const btnDownloadRaw = document.getElementById("btn-download-raw");
     
     // Tab 2 Elements
     const provNameInput = document.getElementById("prov-name");
@@ -256,13 +257,14 @@ document.addEventListener("DOMContentLoaded", () => {
             "atributos": "Atributos Técnicos"
         };
         return mappings[key] || key;
-    }
-
-    async function loadRecentCaptures() {
+    }    async function loadRecentCaptures() {
         if (!activeProviderId) {
             showEmptyRecentTable();
             return;
         }
+        
+        btnDownloadRaw.href = `/api/extractions/download/${activeProviderId}`;
+        btnDownloadRaw.style.display = "inline-block";
         
         const provider = savedProviders.find(p => p.id === activeProviderId);
         if (!provider) return;
@@ -317,10 +319,11 @@ document.addEventListener("DOMContentLoaded", () => {
             showEmptyRecentTable();
         }
     }
-
+ 
     function showEmptyRecentTable() {
         recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th>`;
         recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">Selecciona un proveedor activo para visualizar sus capturas locales.</td></tr>`;
+        btnDownloadRaw.style.display = "none";
     }
 
     // ----------------------------------------------------

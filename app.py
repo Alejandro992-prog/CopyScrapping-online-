@@ -91,53 +91,223 @@ def clean_price(price_str: str) -> float:
     except ValueError:
         return 0.0
 
+def extract_products_adaptively(text: str) -> List[Dict[str, Any]]:
+    results = []
+    
+    # 1. Encontrar todos los modelos posibles en el texto.
+    # Exigimos que tengan al menos una letra y al menos un número, y mayúsculas/números/guiones (de 5 a 15 caracteres)
+    # Ejemplo: 3TS3107BD, 3TS382B, WUU28T6XES, etc.
+    model_pattern = r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,15}\b'
+    
+    # Atributos comunes como capacidad (kg) y velocidad (rpm)
+    attr_pattern = r'\b\d+\s*(?:kg|KG|Kg|rpm|RPM)\b'
+    
+    # Precios
+    price_pattern = r'\b\d+(?:[\.,]\d+)?\s*€'
+    
+    # Procesar línea por línea
+    lines = text.split('\n')
+    spec_lines = []
+    
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+            
+        # Descartamos líneas que terminan en puntos suspensivos ("...") o que son de ruido obvio
+        if line_stripped.endswith('...') or re.search(r'\.\.\.\s*\d*$', line_stripped):
+            continue
+        if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
+            continue
+            
+        # Buscar modelos (sin re.IGNORECASE para evitar que coincidan palabras en minúsculas)
+        models_in_line = re.findall(model_pattern, line_stripped)
+        
+        # Filtrar modelos falsos que son unidades de medida (ej: 1400RPM, 10KG)
+        models_in_line = [m for m in models_in_line if not re.match(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', m, re.IGNORECASE)]
+        
+        has_attrs = re.search(attr_pattern, line_stripped, re.IGNORECASE) is not None
+        has_keywords = any(kw in line_stripped.lower() for kw in ['lavadora', 'carga frontal', 'balay', 'secadora', 'lavavajillas', 'electro'])
+        
+        # Si tiene modelo y atributos/palabras clave, la consideramos línea de especificación principal
+        if models_in_line and (has_attrs or has_keywords):
+            spec_lines.append({
+                'index': i,
+                'line': line_stripped,
+                'model': models_in_line[0],
+                'models': models_in_line
+            })
+            
+    # Si no hay líneas de especificación con atributos, buscamos cualquier línea con un modelo válido
+    if not spec_lines:
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            if line_stripped.endswith('...') or re.search(r'\.\.\.\s*\d*$', line_stripped):
+                continue
+            if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
+                continue
+            models_in_line = re.findall(model_pattern, line_stripped)
+            models_in_line = [m for m in models_in_line if not re.match(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', m, re.IGNORECASE)]
+            if models_in_line:
+                spec_lines.append({
+                    'index': i,
+                    'line': line_stripped,
+                    'model': models_in_line[0],
+                    'models': models_in_line
+                })
+                
+    if not spec_lines:
+        return []
+        
+    # 2. Para cada línea de especificación, delimitamos su bloque y extraemos los datos
+    for idx, spec in enumerate(spec_lines):
+        start_line_idx = spec['index']
+        end_line_idx = spec_lines[idx+1]['index'] if idx + 1 < len(spec_lines) else len(lines)
+        
+        # El bloque de texto para este producto específico (hasta el inicio del siguiente producto)
+        product_block = "\n".join(lines[start_line_idx:end_line_idx])
+        
+        spec_line = spec['line']
+        model = spec['model']
+        
+        # Extraer Atributos Técnicos de la línea de especificación.
+        attr_match = re.search(r'\b\d+\s*(?:kg|KG|Kg)\b', spec_line, re.IGNORECASE)
+        if attr_match:
+            attributes = spec_line[attr_match.start():].strip()
+        else:
+            attr_match_rpm = re.search(r'\b\d+\s*(?:rpm|RPM)\b', spec_line, re.IGNORECASE)
+            if attr_match_rpm:
+                attributes = spec_line[attr_match_rpm.start():].strip()
+            else:
+                model_pos = spec_line.find(model)
+                if model_pos != -1:
+                    attributes = spec_line[model_pos + len(model):].strip()
+                else:
+                    attributes = ""
+                    
+        # Limpiar atributos
+        attributes = re.sub(r'\s+', ' ', attributes).strip()
+        
+        # Extraer Precio: primer precio en el bloque
+        price_match = re.search(price_pattern, product_block)
+        price = price_match.group(0) if price_match else "No disponible"
+        
+        # Limpiar precio de los atributos si se coló al final de la línea de especificación
+        if price != "No disponible" and attributes:
+            attributes_clean = attributes.replace(price, "").strip()
+            # Eliminar guiones, comas o espacios finales sobrantes
+            attributes = re.sub(r'\s+[-–,]\s*$', '', attributes_clean).strip()
+            
+        # Extraer Producto: es la línea de especificación menos el modelo y los atributos
+        product = spec_line
+        if attributes:
+            # Quitamos los atributos originales de la línea
+            product = product.replace(spec_line[attr_match.start():] if attr_match else attributes, '')
+            
+        product_parts = product.split(model)
+        product_clean = " ".join([part.strip() for part in product_parts if part.strip()])
+        
+        product_clean = re.sub(r'\s+', ' ', product_clean).strip()
+        product_clean = product_clean.strip(',').strip('-').strip()
+        
+        results.append({
+            'product': product_clean,
+            'model': model,
+            'attributes': attributes,
+            'price': price
+        })
+        
+    return results
+
 def process_text(text: str, provider: Dict[str, Any]):
     regex_pattern = provider.get("regex")
     if not regex_pattern:
         return
         
     try:
-        match = re.match(regex_pattern, text.strip())
-        if match:
-            data = match.groupdict()
-            # Agregar timestamp
-            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Limpiar anclajes antiguos
+        pattern = regex_pattern
+        if pattern.startswith("^"):
+            pattern = pattern[1:]
+        if pattern.endswith("$"):
+            pattern = pattern[:-1]
             
-            # Nombre de archivo de salida
-            filepath = provider.get("output_file")
-            if not filepath:
-                filepath = os.path.join(EXTRACTIONS_DIR, f"{provider['id']}.csv")
+        matches = list(re.finditer(pattern, text))
+        extracted_data_list = []
+        
+        if matches:
+            for match in matches:
+                extracted_data_list.append(match.groupdict())
+        elif text.strip():
+            # Fallback inteligente: si no hay coincidencias con la regex principal,
+            # intentamos el extractor adaptativo para capturar de forma robusta la información.
+            add_log("info", "Regex exacta sin coincidencias. Iniciando extracción adaptativa inteligente...")
+            adaptive_matches = extract_products_adaptively(text)
+            if adaptive_matches:
+                expected_fields = provider.get("fields", [])
+                for item in adaptive_matches:
+                    data = {}
+                    for field in expected_fields:
+                        if field in ["product", "producto"]:
+                            data[field] = item["product"]
+                        elif field in ["model", "modelo"]:
+                            data[field] = item["model"]
+                        elif field in ["attributes", "atributos"]:
+                            data[field] = item["attributes"]
+                        elif field in ["price", "precio"]:
+                            data[field] = item["price"]
+                        else:
+                            data[field] = ""
+                            
+                    if not data:
+                        data = item
+                    extracted_data_list.append(data)
+        
+        if extracted_data_list:
+            added_count = 0
+            for data in extracted_data_list:
+                # Agregar timestamp
+                data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-            file_format = provider.get("file_format", "csv")
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            
-            df_new = pd.DataFrame([data])
-            
-            # Guardar en base al formato
-            if file_format == "xlsx":
-                if os.path.exists(filepath):
-                    try:
-                        df_existing = pd.read_excel(filepath)
-                        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                    except Exception:
-                        df_combined = df_new
-                else:
-                    df_combined = df_new
-                df_combined.to_excel(filepath, index=False)
-            else:
-                # CSV
-                if os.path.exists(filepath):
-                    try:
-                        df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
-                        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                    except Exception:
-                        df_combined = df_new
-                else:
-                    df_combined = df_new
-                df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
+                # Nombre de archivo de salida
+                filepath = provider.get("output_file")
+                if not filepath:
+                    filepath = os.path.join(EXTRACTIONS_DIR, f"{provider['id']}.csv")
+                    
+                file_format = provider.get("file_format", "csv")
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
                 
-            product_name = data.get("product") or data.get("producto") or list(data.values())[0]
-            add_log("success", f"Capturado y guardado: {product_name}", data)
+                df_new = pd.DataFrame([data])
+                
+                # Guardar en base al formato
+                if file_format == "xlsx":
+                    if os.path.exists(filepath):
+                        try:
+                            df_existing = pd.read_excel(filepath)
+                            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                        except Exception:
+                            df_combined = df_new
+                    else:
+                        df_combined = df_new
+                    df_combined.to_excel(filepath, index=False)
+                else:
+                    # CSV
+                    if os.path.exists(filepath):
+                        try:
+                            df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
+                            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                        except Exception:
+                            df_combined = df_new
+                    else:
+                        df_combined = df_new
+                    df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
+                    
+                product_name = data.get("product") or data.get("producto") or list(data.values())[0]
+                add_log("success", f"Capturado y guardado: {product_name}", data)
+                added_count += 1
+                
+            if added_count > 1:
+                add_log("success", f"Se han procesado y guardado {added_count} productos del portapapeles.")
         else:
             # Ignorar de forma pasiva, pero registrar en el log informativo local
             add_log("info", f"Texto copiado ignorado (no coincide con la plantilla de '{provider['name']}')")
@@ -351,35 +521,79 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
     sorted_labels = sorted(req.labels, key=lambda x: x.start)
     
     parts = []
-    last_idx = 0
     
+    # Función para determinar el patrón genérico de una etiqueta basada en su nombre o valor
+    def get_generic_pattern(label_name: str, label_val: str) -> str:
+        name_lower = label_name.lower()
+        val_clean = label_val.strip()
+        
+        # Si es un precio: contiene dígitos y opcionalmente símbolos de moneda
+        if "precio" in name_lower or "price" in name_lower or (re.search(r'\d', val_clean) and any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur'])):
+            return r"\d+(?:[.,]\d+)?\s*(?:€|EUR|eur|usd|\$|EUR)?"
+            
+        # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura
+        if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[A-Za-z0-9-]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
+            return r"\b[A-Za-z0-9-]{3,25}\b"
+            
+        # Si es producto/marca o atributos:
+        if "producto" in name_lower or "product" in name_lower or "marca" in name_lower or "brand" in name_lower:
+            return r"[^\n]+?"
+            
+        if "atributo" in name_lower or "attr" in name_lower or "spec" in name_lower:
+            return r"[^\n]+?"
+            
+        # Fallback por defecto: capturar caracteres sin saltos de línea de forma perezosa
+        return r"[^\n]+?"
+        
+    # Construir la expresión regular iterando sobre las etiquetas y los textos intermedios
+    last_idx = 0
     for i, label in enumerate(sorted_labels):
         start = label.start
         end = label.end
         name = label.name
+        val = raw_text[start:end]
         
-        # Segmento literal antes del label
-        literal = raw_text[last_idx:start]
-        escaped_literal = re.escape(literal)
-        # Estandarizar espacios
-        escaped_literal = escaped_literal.replace('\\ ', '\\s+')
-        parts.append(escaped_literal)
+        literal_between = raw_text[last_idx:start]
         
-        # Grupo de captura
-        parts.append(f"(?P<{name}>.+?)")
+        if i > 0:
+            # Comprobar si la etiqueta anterior o la actual es un precio, o si el literal intermedio tiene saltos de línea
+            prev_label = sorted_labels[i-1]
+            prev_name = prev_label.name.lower()
+            
+            is_prev_price = "precio" in prev_name or "price" in prev_name
+            is_curr_price = "precio" in name.lower() or "price" in name.lower()
+            
+            if is_prev_price or is_curr_price or "\n" in literal_between:
+                # Transición multilínea flexible
+                parts.append(r"[\s\S]*?")
+            else:
+                # Transición en la misma línea
+                parts.append(r"[^\n]*?")
+        elif last_idx < start:
+            # Para el inicio del texto, si hay texto antes del primer grupo
+            if "\n" in literal_between:
+                parts.append(r"[\s\S]*?")
+            else:
+                parts.append(r"[^\n]*?")
+                
+        # Añadir el grupo de captura genérico
+        group_pattern = get_generic_pattern(name, val)
+        parts.append(f"(?P<{name}>{group_pattern})")
         last_idx = end
         
-    # Literal después del último label
-    literal_end = raw_text[last_idx:]
-    escaped_literal_end = re.escape(literal_end)
-    escaped_literal_end = escaped_literal_end.replace('\\ ', '\\s+')
-    parts.append(escaped_literal_end)
+    # Al final, si hay texto sobrante
+    if last_idx < len(raw_text):
+        literal_after = raw_text[last_idx:]
+        if "\n" in literal_after:
+            parts.append(r"[\s\S]*?")
+        else:
+            parts.append(r"[^\n]*?")
+            
+    pattern = "".join(parts)
     
-    pattern = "^" + "".join(parts) + "$"
-    
-    # Validar que haga match con el texto original
+    # Validar usando re.search en el texto de muestra (sin anclajes strictly "^" y "$")
     try:
-        match = re.match(pattern, raw_text.strip())
+        match = re.search(pattern, raw_text)
         if match:
             extracted = match.groupdict()
             return {
@@ -391,7 +605,7 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
             return {
                 "status": "warning",
                 "regex": pattern,
-                "message": "La expresión regular se generó pero no coincide de forma exacta con el texto de muestra. Ajusta los límites."
+                "message": "La expresión regular se generó pero no coincide con el texto de muestra. Por favor revisa los límites."
             }
     except Exception as e:
         return {
@@ -550,6 +764,25 @@ async def merge_extractions(req: MergeRequest):
         "columns": list(merged_df.columns),
         "data": records
     }
+
+@app.get("/api/extractions/download/{provider_id}")
+async def download_provider_extraction(provider_id: str):
+    from fastapi.responses import FileResponse
+    config = load_config()
+    providers = config.get("providers", [])
+    provider = next((p for p in providers if p["id"] == provider_id), None)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+        
+    filepath = provider.get("output_file")
+    if not filepath:
+        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider_id}.csv")
+        
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Archivo de extracción no encontrado para este proveedor")
+        
+    filename = os.path.basename(filepath)
+    return FileResponse(filepath, media_type="application/octet-stream", filename=filename)
 
 @app.get("/api/consolidated/download/{filename}")
 async def download_consolidated(filename: str):
