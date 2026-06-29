@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Garde Clipboard Parser - Automatización Inteligente</title>
+    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="header-logo">
+                <span class="logo-icon">⚡</span>
+                <div class="logo-text">
+                    <h1>Garde</h1>
+                    <span>Clipboard Parser</span>
+                </div>
+            </div>
+            <div class="header-status">
+                <div class="status-indicator">
+                    <span id="status-dot" class="dot offline"></span>
+                    <span id="status-text">Cargando estado...</span>
+                </div>
+                <div class="active-badge" id="active-provider-badge">
+                    Proveedor: Ninguno
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN TABS NAVIGATION -->
+        <nav class="app-nav">
+            <button class="nav-tab active" data-tab="tab-monitor" id="tab-btn-monitor">
+                <span class="tab-icon">👁️</span> Monitoreo en Vivo
+            </button>
+            <button class="nav-tab" data-tab="tab-train" id="tab-btn-train">
+                <span class="tab-icon">🎯</span> Asistente No-Code
+            </button>
+            <button class="nav-tab" data-tab="tab-merge" id="tab-btn-merge">
+                <span class="tab-icon">📊</span> Fusión & Comparador
+            </button>
+        </nav>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="app-content">
+
+            <!-- TAB 1: LIVE MONITORING -->
+            <section id="tab-monitor" class="tab-content active">
+                <div class="grid-2col">
+                    <!-- Left: Controls & Last Capture -->
+                    <div class="card card-controls">
+                        <h2 class="card-title">Panel de Control</h2>
+                        <div class="control-row">
+                            <label for="monitor-toggle">Escucha del Portapapeles:</label>
+                            <label class="switch">
+                                <input type="checkbox" id="monitor-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                        <div class="control-row">
+                            <label for="provider-select">Proveedor Activo:</label>
+                            <select id="provider-select" class="form-select">
+                                <option value="">-- Seleccionar Proveedor --</option>
+                            </select>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <h3 class="section-title">Última Captura</h3>
+                        <div id="last-capture-container" class="empty-state">
+                            Ningún dato capturado en esta sesión. Copia algún texto para empezar.
+                        </div>
+                    </div>
+
+                    <!-- Right: Console Log -->
+                    <div class="card card-log">
+                        <div class="card-header-flex">
+                            <h2 class="card-title">Log del Sistema (Terminal Pasiva)</h2>
+                            <button id="clear-logs" class="btn btn-secondary btn-sm">Limpiar</button>
+                        </div>
+                        <div class="console-log" id="console-log-feed">
+                            <!-- Logs will stream here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom: Recent Captures Table -->
+                <div class="card recent-table-card mt-20">
+                    <h2 class="card-title">Capturas Recientes del Proveedor Activo</h2>
+                    <div class="table-container">
+                        <table id="recent-captures-table">
+                            <thead>
+                                <tr id="recent-captures-headers">
+                                    <th>Cargando...</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-captures-body">
+                                <tr>
+                                    <td class="table-empty" colspan="100%">Selecciona un proveedor activo para visualizar sus capturas locales.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: NO-CODE TRAINING & TEMPLATE LIBRARY -->
+            <section id="tab-train" class="tab-content">
+                <div class="grid-sidebar-layout">
+                    <!-- Sidebar: Saved Templates -->
+                    <div class="card sidebar-card">
+                        <h2 class="card-title">Plantillas Guardadas</h2>
+                        <div class="provider-list" id="saved-providers-list">
+                            <!-- Provider items will list here -->
+                        </div>
+                    </div>
+
+                    <!-- Main Form & Highlight Tool -->
+                    <div class="card main-train-card">
+                        <h2 class="card-title">Entrenamiento de Expresiones Regulares</h2>
+                        <p class="card-subtitle">Pega un texto de ejemplo real y selecciona las partes con el ratón para etiquetarlas.</p>
+                        
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="prov-name">Nombre del Competidor/Proveedor:</label>
+                                <input type="text" id="prov-name" placeholder="Ej: Balay Electro" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="prov-id">ID Único (Minúsculas y sin espacios):</label>
+                                <input type="text" id="prov-id" placeholder="ej: balay_electro" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="prov-format">Formato de Fichero:</label>
+                                <select id="prov-format" class="form-select">
+                                    <option value="csv">CSV (.csv)</option>
+                                    <option value="xlsx">Excel (.xlsx)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group mt-20">
+                            <label for="raw-train-text">Texto Bruto de Muestra:</label>
+                            <textarea id="raw-train-text" placeholder="Pega aquí el texto que copiarías con Ctrl+C de la web del proveedor. Ejemplo: Lavadora Balay 3TS273BA 419 EUR Blanco A" class="form-textarea"></textarea>
+                        </div>
+
+                        <!-- Interactive Labeling Tool -->
+                        <div class="labeling-workspace mt-20" id="labeling-workspace-container" style="display:none;">
+                            <label>Herramienta de Etiquetado Visual:</label>
+                            <p class="help-text">Sombrea el texto con el ratón y selecciona un campo para etiquetarlo.</p>
+                            
+                            <!-- Label selection buttons -->
+                            <div class="tag-buttons-container">
+                                <button class="tag-btn tag-product" data-tag="product">🏷️ Producto</button>
+                                <button class="tag-btn tag-model" data-tag="model">🧩 Modelo / SKU</button>
+                                <button class="tag-btn tag-price" data-tag="price">💵 Precio</button>
+                                <button class="tag-btn tag-attributes" data-tag="attributes">⚙️ Atributos Técnicos</button>
+                                <button id="clear-selections" class="btn btn-secondary btn-sm">Limpiar Selección</button>
+                            </div>
+
+                            <div class="interactive-text-box" id="interactive-text-box">
+                                <!-- Styled chunks of text will render here -->
+                            </div>
+                        </div>
+
+                        <!-- Active Tags List -->
+                        <div class="active-tags-section mt-20" id="active-tags-section" style="display:none;">
+                            <label>Etiquetas Asignadas:</label>
+                            <div class="tags-badge-container" id="tags-badge-container">
+                                <!-- Tags here -->
+                            </div>
+                        </div>
+
+                        <div class="action-buttons-row mt-20">
+                            <button id="btn-generate-regex" class="btn btn-secondary">Generar y Testear Regex</button>
+                            <button id="btn-save-provider" class="btn btn-primary" disabled>Guardar Proveedor</button>
+                        </div>
+
+                        <!-- Regex results -->
+                        <div class="regex-results-card mt-20" id="regex-results-card" style="display:none;">
+                            <h3 class="section-title">Resultado de Generación</h3>
+                            <div class="regex-pattern-box">
+                                <strong>Regex Generado:</strong>
+                                <code id="generated-regex-string">^...$</code>
+                            </div>
+                            <div class="regex-match-status" id="regex-match-status">
+                                <!-- Success or warning status -->
+                            </div>
+                            <div class="extracted-fields-box">
+                                <strong>Campos Extraídos de Muestra:</strong>
+                                <pre id="extracted-fields-json">{}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: SMART MERGE -->
+            <section id="tab-merge" class="tab-content">
+                <div class="grid-2col">
+                    <!-- Left: Merge config -->
+                    <div class="card">
+                        <h2 class="card-title">Consolidación de Archivos de Precios</h2>
+                        <p class="card-subtitle">Selecciona los archivos recolectados para unificarlos en una Matriz Única de Comparativa.</p>
+                        
+                        <div class="form-group mt-20">
+                            <label>Seleccionar Archivos de Proveedores:</label>
+                            <div class="files-checklist-container" id="files-checklist">
+                                <!-- List of files from data/extractions -->
+                                <p class="empty-text">Buscando archivos de extracción en local...</p>
+                            </div>
+                        </div>
+
+                        <div class="form-grid mt-20">
+                            <div class="form-group">
+                                <label for="merge-key">Clave de Unión (Columna):</label>
+                                <select id="merge-key" class="form-select">
+                                    <option value="model">Modelo / SKU</option>
+                                    <option value="product">Producto / Nombre</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="merge-output">Nombre del Archivo Consolidado:</label>
+                                <input type="text" id="merge-output" value="comparativa_precios.xlsx" class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="mt-20">
+                            <button id="btn-run-merge" class="btn btn-primary btn-block">⚡ Unificar Tablas y Comparar Precios</button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Quick metrics & instructions -->
+                    <div class="card card-accent">
+                        <h2 class="card-title">¿Cómo funciona la Fusión Inteligente?</h2>
+                        <div class="guide-steps">
+                            <div class="step-item">
+                                <span class="step-number">1</span>
+                                <div class="step-text">
+                                    <strong>Normalización:</strong> Pandas lee los archivos independientes y limpia los nombres y modelos para que coincidan de forma inteligente.
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <span class="step-number">2</span>
+                                <div class="step-text">
+                                    <strong>Cruce Cruzado:</strong> Coloca en paralelo los precios de cada competidor para el mismo ítem.
+                                </div>
+                            </div>
+                            <div class="step-item">
+                                <span class="step-number">3</span>
+                                <div class="step-text">
+                                    <strong>Cálculo de Oportunidad:</strong> Detecta al líder en coste y te indica la diferencia exacta en porcentaje (%) respecto al competidor más cercano.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="divider"></div>
+                        <div class="alert-box-info">
+                            <strong>Nota Corporativa:</strong> Toda la fusión se procesa offline, garantizando total privacidad sobre los datos capturados.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Merged results table -->
+                <div class="card mt-20" id="merged-results-card" style="display:none;">
+                    <div class="card-header-flex">
+                        <h2 class="card-title">Matriz de Comparativa de Precios Cruzados</h2>
+                        <div class="btn-group">
+                            <a id="btn-download-consolidated" href="#" class="btn btn-secondary btn-sm" target="_blank">📥 Descargar Fichero</a>
+                        </div>
+                    </div>
+                    <div class="table-container mt-20">
+                        <table id="merged-results-table">
+                            <thead>
+                                <tr id="merged-results-headers">
+                                    <!-- Dynamic headers -->
+                                </tr>
+                            </thead>
+                            <tbody id="merged-results-body">
+                                <!-- Dynamic body -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+        
+        <!-- FOOTER -->
+        <footer class="app-footer">
+            <p>Garde Clipboard Parser v1.0.0 — Solución Segura de Monitoreo Pasivo Local (0% Red externa / 0% Bloqueos)</p>
+        </footer>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

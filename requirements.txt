@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+pyperclip
+pandas
+openpyxl
