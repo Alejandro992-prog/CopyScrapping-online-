@@ -269,6 +269,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const provider = savedProviders.find(p => p.id === activeProviderId);
         if (!provider) return;
         
+        const ext = provider.file_format || "csv";
+        btnDownloadRaw.setAttribute("download", `${provider.id}.${ext}`);
+        
         // Cargar los últimos datos guardados leyendo su archivo local vía una API o similar
         // Para simplificar, la API de backend escribe el archivo pero no hay API dedicada para leerlo completo
         // Crearemos una lectura rápida en backend o simularemos, ¡espera, usemos los datos del log o leamos la extracción!
@@ -760,6 +763,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function displayMergeResults(result) {
         mergedResultsCard.style.display = "block";
         btnDownloadConsolidated.href = `/api/consolidated/download/${result.file}`;
+        btnDownloadConsolidated.setAttribute("download", result.file);
         
         // Render headers
         mergedResultsHeaders.innerHTML = "";
