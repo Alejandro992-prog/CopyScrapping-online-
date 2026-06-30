@@ -25,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const recentCapturesHeaders = document.getElementById("recent-captures-headers");
     const recentCapturesBody = document.getElementById("recent-captures-body");
     const btnDownloadRaw = document.getElementById("btn-download-raw");
+    const btnClearCaptures = document.getElementById("btn-clear-captures");
     
     // Tab 2 Elements
     const provNameInput = document.getElementById("prov-name");
@@ -54,6 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const mergedResultsHeaders = document.getElementById("merged-results-headers");
     const mergedResultsBody = document.getElementById("merged-results-body");
     const btnDownloadConsolidated = document.getElementById("btn-download-consolidated");
+    const btnClearMerged = document.getElementById("btn-clear-merged");
 
     // ----------------------------------------------------
     // 1. TABS MANAGEMENT
@@ -265,6 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
         
         btnDownloadRaw.href = `/api/extractions/download/${activeProviderId}`;
         btnDownloadRaw.style.display = "inline-block";
+        btnClearCaptures.style.display = "inline-block";
         
         const provider = savedProviders.find(p => p.id === activeProviderId);
         if (!provider) return;
@@ -272,18 +275,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const ext = provider.file_format || "csv";
         btnDownloadRaw.setAttribute("download", `${provider.id}.${ext}`);
         
-        // Cargar los últimos datos guardados leyendo su archivo local vía una API o similar
-        // Para simplificar, la API de backend escribe el archivo pero no hay API dedicada para leerlo completo
-        // Crearemos una lectura rápida en backend o simularemos, ¡espera, usemos los datos del log o leamos la extracción!
-        // En app.py no hay endpoint directo para leer las capturas de un archivo, vamos a implementar un endpoint rápido en app.py para ver las capturas del proveedor actual
-        // Hagamos un edit rápido de app.py para soportar GET /api/providers/{id}/data
-        // Pero primero mostremos el esqueleto. Haremos el fetch a /api/providers/${activeProviderId}/data
         try {
             const res = await fetch(`/api/providers/${activeProviderId}/data`);
             if (!res.ok) {
                 recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">El archivo de extracción aún no existe. Comienza a copiar datos para crearlo.</td></tr>`;
-                // Configurar headers vacíos
-                recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th>`;
+                recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th><th>Acciones</th>`;
+                btnClearCaptures.style.display = "none";
                 return;
             }
             const data = await res.json();
@@ -297,13 +294,20 @@ document.addEventListener("DOMContentLoaded", () => {
                     recentCapturesHeaders.appendChild(th);
                 });
                 
+                // Header de acciones
+                const thActions = document.createElement("th");
+                thActions.textContent = "Acciones";
+                thActions.style.textAlign = "center";
+                recentCapturesHeaders.appendChild(thActions);
+                
                 // Render body
                 recentCapturesBody.innerHTML = "";
                 if (data.records.length === 0) {
                     recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">No hay registros en este archivo.</td></tr>`;
+                    btnClearCaptures.style.display = "none";
                 } else {
-                    // Mostrar los últimos 10 de forma invertida (más reciente primero)
-                    const displayData = data.records.slice(-10).reverse();
+                    // Mostrar los últimos 50 de forma invertida (más reciente primero)
+                    const displayData = data.records.slice(-50).reverse();
                     displayData.forEach(row => {
                         const tr = document.createElement("tr");
                         data.columns.forEach(col => {
@@ -311,6 +315,23 @@ document.addEventListener("DOMContentLoaded", () => {
                             td.textContent = row[col] !== null ? row[col] : "";
                             tr.appendChild(td);
                         });
+                        
+                        // Celda de acciones con botón de borrado individual
+                        const tdAction = document.createElement("td");
+                        tdAction.style.textAlign = "center";
+                        
+                        const btnDel = document.createElement("button");
+                        btnDel.className = "btn-delete-row";
+                        btnDel.innerHTML = "🗑️";
+                        btnDel.title = "Borrar esta captura";
+                        btnDel.onclick = async () => {
+                            if (confirm("¿Estás seguro de que deseas eliminar esta captura específica?")) {
+                                await deleteCaptureRow(row._index);
+                            }
+                        };
+                        
+                        tdAction.appendChild(btnDel);
+                        tr.appendChild(tdAction);
                         recentCapturesBody.appendChild(tr);
                     });
                 }
@@ -324,10 +345,46 @@ document.addEventListener("DOMContentLoaded", () => {
     }
  
     function showEmptyRecentTable() {
-        recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th>`;
+        recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th><th>Acciones</th>`;
         recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">Selecciona un proveedor activo para visualizar sus capturas locales.</td></tr>`;
         btnDownloadRaw.style.display = "none";
+        btnClearCaptures.style.display = "none";
     }
+
+    async function deleteCaptureRow(index) {
+        try {
+            const res = await fetch(`/api/providers/${activeProviderId}/delete-row`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ index: index })
+            });
+            if (res.ok) {
+                loadRecentCaptures();
+            } else {
+                alert("Error al intentar eliminar la captura.");
+            }
+        } catch (err) {
+            console.error("Error eliminando captura:", err);
+        }
+    }
+
+    btnClearCaptures.addEventListener("click", async () => {
+        if (!activeProviderId) return;
+        if (confirm("¿Estás seguro de que deseas vaciar y eliminar todas las capturas de este proveedor? Esta acción no se puede deshacer.")) {
+            try {
+                const res = await fetch(`/api/providers/${activeProviderId}/clear`, {
+                    method: "POST"
+                });
+                if (res.ok) {
+                    loadRecentCaptures();
+                } else {
+                    alert("Error al intentar limpiar las capturas.");
+                }
+            } catch (err) {
+                console.error("Error limpiando capturas:", err);
+            }
+        }
+    });
 
     // ----------------------------------------------------
     // 4. NO-CODE REGEX TRAINING & ASSISTANT
@@ -825,6 +882,12 @@ document.addEventListener("DOMContentLoaded", () => {
         // Hacer scroll suave hacia los resultados
         mergedResultsCard.scrollIntoView({ behavior: "smooth" });
     }
+
+    btnClearMerged.addEventListener("click", () => {
+        mergedResultsBody.innerHTML = "";
+        mergedResultsHeaders.innerHTML = "";
+        mergedResultsCard.style.display = "none";
+    });
 
     // Initialize Page
     initSSEConnection();

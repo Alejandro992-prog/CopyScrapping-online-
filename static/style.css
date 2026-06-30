@@ -880,3 +880,31 @@ tr:hover td {
     padding-top: 20px;
     border-top: 1px solid var(--border-color);
 }
+
+/* Delete actions styles */
+.btn-danger {
+    background-color: var(--error-bg);
+    border: 1px solid var(--error);
+    color: #fca5a5;
+}
+
+.btn-danger:hover {
+    background-color: var(--error);
+    color: #fff;
+}
+
+.btn-delete-row {
+    background: transparent;
+    border: none;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    opacity: 0.6;
+    transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn-delete-row:hover {
+    opacity: 1;
+    transform: scale(1.15);
+}
