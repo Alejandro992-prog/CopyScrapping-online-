@@ -1,4 +1,4 @@
-# 📋 Garde Clipboard Parser - Clipboard Parser Inteligente para Análisis de Precios
+# 📋  Clipboard Parser - Clipboard Parser Inteligente para Análisis de Precios
 
 ¡Bienvenido a ** Clipboard Parser**! Una potente herramienta local de automatización y análisis pasivo de precios locales y de competidores, diseñada para el **Proyecto **. 
 
