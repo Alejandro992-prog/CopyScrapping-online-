@@ -1,6 +1,6 @@
 # 📋 Garde Clipboard Parser - Clipboard Parser Inteligente para Análisis de Precios
 
-¡Bienvenido a **Garde Clipboard Parser**! Una potente herramienta local de automatización y análisis pasivo de precios locales y de competidores, diseñada para el **Proyecto Garde**. 
+¡Bienvenido a ** Clipboard Parser**! Una potente herramienta local de automatización y análisis pasivo de precios locales y de competidores, diseñada para el **Proyecto **. 
 
 Este sistema escucha en segundo plano el portapapeles de tu sistema operativo de forma 100% offline, detecta patrones de productos mediante Expresiones Regulares (Regex) auto-generadas y extrae y unifica datos en archivos tabulares (CSV/Excel) de forma silenciosa y eficiente.
 
@@ -74,4 +74,4 @@ Para ver una guía detallada paso a paso sobre cómo crear proveedores, entrenar
 
 ## 🛡️ Licencia
 
-Este proyecto es de uso privado y local para el **Proyecto Garde**. Todos los derechos reservados.
+Este proyecto es de uso privado y local para el **Proyecto Clipboard Parser**. Todos los derechos reservados.
