@@ -36,6 +36,20 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
 
 ---
 
-## 4. Estado de Ejecución del Servidor
-*   **URL Local**: `http://127.0.0.1:8000`
-*   **Monitoreo**: Activo en segundo plano.
+## 4. Estado de Ejecución y Empaquetado
+
+*   **Rama de Git Dedicada:** `feature/executable-packaging`
+*   **Ejecución en Desarrollo:**
+    *   Iniciar el servidor: `uvicorn app:app --reload`
+    *   URL Local: `http://127.0.0.1:8000`
+*   **Empaquetado para Usuarios Finales:**
+    *   Ejecuta el script de compilación automatizada:
+        ```bash
+        python build_exe.py
+        ```
+    *   Este script utiliza **PyInstaller** para empaquetar el código, las dependencias y la carpeta `static/` en un único archivo binario autónomo:
+        👉 `dist/GardeClipboardParser.exe`
+*   **Características del Ejecutable:**
+    *   **Consola Visible:** Mantiene la terminal abierta para facilitar la monitorización, depuración y finalización ordenada (con `Ctrl + C` o cerrando la ventana).
+    *   **Apertura Automática:** Abre de forma automática el navegador web por defecto del usuario apuntando a `http://127.0.0.1:8000` transcurrido 1.5 segundos tras el inicio del servidor.
+    *   **Persistencia Local:** Las rutas de guardado de configuraciones (`config.json`) y datos recopilados (`data/`) se resuelven dinámicamente para guardarse en la misma carpeta física en la que el usuario coloque el ejecutable `.exe`, evitando que se borren al cerrar la aplicación (ya que PyInstaller extrae los recursos de solo lectura a una ruta temporal `sys._MEIPASS`).
