@@ -3,3 +3,4 @@ uvicorn
 pyperclip
 pandas
 openpyxl
+pyinstaller

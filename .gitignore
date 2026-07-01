@@ -3,3 +3,6 @@ data/
 *.pyc
 .DS_Store
 config.json
+build/
+dist/
+*.spec

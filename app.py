@@ -1,9 +1,11 @@
 import os
+import sys
 import re
 import json
 import time
 import asyncio
 import threading
+import webbrowser
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
@@ -14,11 +16,27 @@ from pydantic import BaseModel
 import pandas as pd
 import pyperclip
 
+def get_resource_path(relative_path: str) -> str:
+    """Obtiene la ruta absoluta para un recurso, funciona en desarrollo y con PyInstaller."""
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def get_writeable_path(relative_path: str) -> str:
+    """Obtiene la ruta absoluta para archivos persistentes de escritura en el directorio del ejecutable."""
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 # Directorios de datos
-DATA_DIR = "data"
+DATA_DIR = get_writeable_path("data")
 EXTRACTIONS_DIR = os.path.join(DATA_DIR, "extractions")
 CONSOLIDATED_DIR = os.path.join(DATA_DIR, "consolidated")
-CONFIG_FILE = "config.json"
+CONFIG_FILE = get_writeable_path("config.json")
 
 # Estado global
 is_monitoring = True
@@ -428,6 +446,16 @@ async def app_lifespan(app: FastAPI):
     listener_thread = threading.Thread(target=clipboard_listener, daemon=True)
     listener_thread.start()
     
+    # Apertura automática del navegador
+    def open_browser():
+        time.sleep(1.5)
+        try:
+            webbrowser.open("http://127.0.0.1:8000")
+        except Exception as e:
+            add_log("error", f"No se pudo abrir el navegador automáticamente: {str(e)}")
+            
+    threading.Thread(target=open_browser, daemon=True).start()
+    
     yield
     
     is_monitoring = False
@@ -438,9 +466,13 @@ app = FastAPI(
     lifespan=app_lifespan
 )
 
-# Servir estáticos
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Servir estáticos (ruta compatible con PyInstaller)
+static_dir = get_resource_path("static")
+try:
+    os.makedirs(static_dir, exist_ok=True)
+except Exception:
+    pass
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Modelos Pydantic
 class LabelModel(BaseModel):
@@ -473,7 +505,7 @@ class MergeRequest(BaseModel):
 # Rutas API
 @app.get("/")
 async def get_index():
-    index_path = os.path.join("static", "index.html")
+    index_path = os.path.join(get_resource_path("static"), "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
@@ -982,4 +1014,9 @@ async def sse_stream():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    import sys
+    if getattr(sys, 'frozen', False):
+        # En el ejecutable compilado, pasamos el objeto app directamente y desactivamos reload
+        uvicorn.run(app, host="127.0.0.1", port=8000)
+    else:
+        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
