@@ -38,12 +38,24 @@ EXTRACTIONS_DIR = os.path.join(DATA_DIR, "extractions")
 CONSOLIDATED_DIR = os.path.join(DATA_DIR, "consolidated")
 CONFIG_FILE = get_writeable_path("config.json")
 
+def get_provider_filepath(provider: Dict[str, Any]) -> str:
+    """Obtiene la ruta absoluta para el archivo de salida de un proveedor."""
+    filepath = provider.get("output_file")
+    file_format = provider.get("file_format", "csv")
+    if not filepath:
+        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider['id']}.{file_format}")
+    elif not os.path.isabs(filepath):
+        filepath = get_writeable_path(filepath)
+    return filepath
+
 # Estado global
 is_monitoring = True
 active_provider: Optional[Dict[str, Any]] = None
 previous_clipboard = ""
+last_sequence_number = 0
 logs_buffer: List[Dict[str, Any]] = []
 latest_log_index = 0
+logs_lock = threading.Lock()
 
 def add_log(msg_type: str, message: str, data: Any = None):
     global latest_log_index
@@ -53,10 +65,12 @@ def add_log(msg_type: str, message: str, data: Any = None):
         "message": message,
         "data": data
     }
-    logs_buffer.append(log_entry)
-    if len(logs_buffer) > 100:
-        logs_buffer.pop(0)
-    latest_log_index += 1
+    print(f"[{log_entry['timestamp']}] [{msg_type.upper()}] {message}", flush=True)
+    with logs_lock:
+        logs_buffer.append(log_entry)
+        if len(logs_buffer) > 100:
+            logs_buffer.pop(0)
+        latest_log_index += 1
 
 def load_config() -> Dict[str, Any]:
     global active_provider
@@ -76,7 +90,7 @@ def load_config() -> Dict[str, Any]:
         return config
     except Exception as e:
         add_log("error", f"Error cargando config.json: {str(e)}")
-        return {"active_provider_id": None, "providers": []}
+        raise RuntimeError(f"Error cargando config.json: {str(e)}") from e
 
 def save_config(config: Dict[str, Any]):
     try:
@@ -92,18 +106,30 @@ def clean_price(price_str: str) -> float:
     cleaned = re.sub(r'[^\d,.-]', '', price_str)
     # Estandarizar separador de decimales a punto
     if ',' in cleaned and '.' in cleaned:
-        # e.g., 1.250,50 o 1,250.50
+        # Ambos presentes, por ejemplo: 1.250,50 o 1,250.50
         if cleaned.find('.') < cleaned.find(','):
             cleaned = cleaned.replace('.', '').replace(',', '.')
         else:
             cleaned = cleaned.replace(',', '')
     elif ',' in cleaned:
-        # Si la coma funciona como decimal (muy típico en España, ej: 349,00)
-        parts = cleaned.split(',')
-        if len(parts) == 2 and len(parts[1]) <= 2:
-            cleaned = cleaned.replace(',', '.')
-        else:
+        # Solo comas
+        if cleaned.count(',') > 1:
             cleaned = cleaned.replace(',', '')
+        else:
+            parts = cleaned.split(',')
+            if len(parts) == 2 and len(parts[1]) <= 2:
+                cleaned = cleaned.replace(',', '.')
+            else:
+                cleaned = cleaned.replace(',', '')
+    elif '.' in cleaned:
+        # Solo puntos
+        if cleaned.count('.') > 1:
+            cleaned = cleaned.replace('.', '')
+        else:
+            parts = cleaned.split('.')
+            if len(parts) == 2 and len(parts[1]) == 3:
+                # Ej: 1.250 -> miles (el electrodoméstico vale 1250, no 1.25)
+                cleaned = cleaned.replace('.', '')
     try:
         return float(cleaned)
     except ValueError:
@@ -121,7 +147,7 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
     attr_pattern = r'\b\d+\s*(?:kg|KG|Kg|rpm|RPM)\b'
     
     # Precios
-    price_pattern = r'\b\d+(?:[\.,]\d+)?\s*€'
+    price_pattern = r'\b\d+(?:[\.,]\d+)*\s*€'
     
     # Extraer palabras clave del proveedor dinámicamente
     provider_keywords = set()
@@ -273,6 +299,71 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         
     return results
 
+def find_model_column(df_columns, provider_fields) -> Optional[str]:
+    # 1. Buscar nombres exactos comunes
+    for col in df_columns:
+        if col.lower() in ['model', 'modelo', 'sku', 'ref', 'referencia']:
+            return col
+    # 2. Buscar coincidencias parciales
+    for col in df_columns:
+        col_lower = col.lower()
+        if 'model' in col_lower or 'sku' in col_lower or 'ref' in col_lower:
+            return col
+    # 3. Buscar en los campos configurados del proveedor
+    for field in provider_fields:
+        if field.lower() in ['model', 'modelo', 'sku', 'ref', 'referencia']:
+            # Encontrar el nombre real de la columna en df
+            for col in df_columns:
+                if col.lower() == field.lower():
+                    return col
+    return None
+
+def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFrame:
+    if df.empty or model_col not in df.columns:
+        return df
+        
+    # Crear una copia temporal de la clave limpia para agrupar
+    df['_temp_key'] = df[model_col].astype(str).str.strip().str.lower()
+    
+    # Excluir de la agrupación filas con clave vacía/nula
+    df_valid = df[~df['_temp_key'].isin(['', 'nan', 'none'])].copy()
+    df_invalid = df[df['_temp_key'].isin(['', 'nan', 'none'])].copy()
+    
+    if df_valid.empty:
+        df = df.drop(columns=['_temp_key'], errors='ignore')
+        return df
+        
+    # Calcular la "completitud" de cada fila: contar cuántas celdas no son nulas y no contienen marcadores de datos vacíos
+    def count_valid_info(row):
+        count = 0
+        for col, val in row.items():
+            if col in ['_temp_key', 'timestamp']:
+                continue
+            if pd.notnull(val):
+                val_str = str(val).strip().lower()
+                if val_str not in ["", "no disponible", "nan", "none", "null", "n/a", "-"]:
+                    count += 1
+        return count
+
+    df_valid['_info_score'] = df_valid.apply(count_valid_info, axis=1)
+    
+    # Crear una columna con el índice original para mantener estabilidad
+    df_valid['_orig_index'] = df_valid.index
+    # Ordenar por '_info_score' descendente y '_orig_index' descendente (el más reciente primero en caso de empate)
+    df_valid = df_valid.sort_values(by=['_info_score', '_orig_index'], ascending=[False, False])
+    
+    # Eliminar duplicados en la clave temporal, conservando la primera (la de más info y más reciente)
+    df_clean = df_valid.drop_duplicates(subset=['_temp_key'], keep='first')
+    
+    # Restaurar el orden original por el índice
+    df_clean = df_clean.sort_values(by='_orig_index')
+    
+    # Limpiar columnas temporales
+    df_clean = df_clean.drop(columns=['_temp_key', '_info_score', '_orig_index'], errors='ignore')
+    df_invalid = df_invalid.drop(columns=['_temp_key'], errors='ignore')
+    
+    return pd.concat([df_clean, df_invalid], ignore_index=True)
+
 def process_text(text: str, provider: Dict[str, Any]):
     regex_pattern = provider.get("regex")
     if not regex_pattern:
@@ -305,9 +396,17 @@ def process_text(text: str, provider: Dict[str, Any]):
         if required_keywords:
             text_lower = text.lower()
             has_any_match = any(kw in text_lower for kw in required_keywords)
-            if not has_any_match:
+            
+            # Permitir si contiene una estructura clara de producto (modelo + precio)
+            has_product_structure = False
+            model_match = re.search(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,15}\b', text)
+            price_match = re.search(r'\b\d+(?:[\.,]\d+)*\s*€', text)
+            if model_match and price_match:
+                has_product_structure = True
+                
+            if not has_any_match and not has_product_structure:
                 # Silenciosamente no hacemos nada, o informamos en logs sin saturar
-                add_log("info", f"Texto ignorado: no contiene palabras clave requeridas del proveedor activo '{provider['name']}' ({', '.join(required_keywords)}).")
+                add_log("info", f"Texto ignorado: no contiene palabras clave de '{provider['name']}' ni estructura de producto.")
                 return
                 
         # Limpiar anclajes antiguos
@@ -366,9 +465,7 @@ def process_text(text: str, provider: Dict[str, Any]):
                 data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Nombre de archivo de salida
-                filepath = provider.get("output_file")
-                if not filepath:
-                    filepath = os.path.join(EXTRACTIONS_DIR, f"{provider['id']}.csv")
+                filepath = get_provider_filepath(provider)
                     
                 file_format = provider.get("file_format", "csv")
                 os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -385,6 +482,12 @@ def process_text(text: str, provider: Dict[str, Any]):
                             df_combined = df_new
                     else:
                         df_combined = df_new
+                        
+                    # Deduplicación inteligente
+                    model_col = find_model_column(df_combined.columns, provider.get("fields", []))
+                    if model_col:
+                        df_combined = deduplicate_by_completeness(df_combined, model_col)
+                        
                     df_combined.to_excel(filepath, index=False)
                 else:
                     # CSV
@@ -396,6 +499,12 @@ def process_text(text: str, provider: Dict[str, Any]):
                             df_combined = df_new
                     else:
                         df_combined = df_new
+                        
+                    # Deduplicación inteligente
+                    model_col = find_model_column(df_combined.columns, provider.get("fields", []))
+                    if model_col:
+                        df_combined = deduplicate_by_completeness(df_combined, model_col)
+                        
                     df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
                     
                 product_name = data.get("product") or data.get("producto") or list(data.values())[0]
@@ -410,23 +519,42 @@ def process_text(text: str, provider: Dict[str, Any]):
     except Exception as e:
         add_log("error", f"Error en el análisis del portapapeles: {str(e)}")
 
+def get_clipboard_seq() -> int:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            return ctypes.windll.user32.GetClipboardSequenceNumber()
+        except Exception:
+            return 0
+    return 0
+
 def clipboard_listener():
-    global previous_clipboard
+    global previous_clipboard, last_sequence_number
     # Inicializar
     try:
         previous_clipboard = pyperclip.paste()
     except Exception:
         previous_clipboard = ""
         
+    last_sequence_number = get_clipboard_seq()
     add_log("info", "Servicio de escucha de portapapeles activo.")
     
     while is_monitoring:
         if active_provider:
             try:
                 current_text = pyperclip.paste()
-                if current_text and current_text != previous_clipboard:
+                seq = get_clipboard_seq()
+                
+                clipboard_changed = False
+                if sys.platform == "win32":
+                    if seq != last_sequence_number:
+                        last_sequence_number = seq
+                        clipboard_changed = True
+                
+                if clipboard_changed or current_text != previous_clipboard:
                     previous_clipboard = current_text
-                    process_text(current_text, active_provider)
+                    if current_text and current_text.strip():
+                        process_text(current_text, active_provider)
             except Exception:
                 # Capturar posibles fallos cuando el OS bloquea el portapapeles temporalmente
                 pass
@@ -522,10 +650,14 @@ async def get_status():
 
 @app.post("/api/status/toggle")
 async def toggle_status():
-    global is_monitoring
+    global is_monitoring, previous_clipboard, last_sequence_number
     is_monitoring = not is_monitoring
     state = "activado" if is_monitoring else "desactivado"
     add_log("info", f"Monitoreo de portapapeles {state} por el usuario.")
+    if is_monitoring:
+        # Al activar, reiniciamos el portapapeles previo para permitir re-capturar lo que ya esté copiado
+        previous_clipboard = ""
+        last_sequence_number = 0
     return {"is_monitoring": is_monitoring}
 
 @app.get("/api/providers")
@@ -535,6 +667,7 @@ async def get_providers():
 
 @app.post("/api/providers")
 async def save_provider(provider: ProviderModel):
+    global previous_clipboard, last_sequence_number
     config = load_config()
     providers = config.get("providers", [])
     
@@ -553,6 +686,8 @@ async def save_provider(provider: ProviderModel):
     config["providers"] = providers
     save_config(config)
     load_config() # Recargar global
+    previous_clipboard = ""
+    last_sequence_number = 0
     return {"status": "success", "provider": provider_dict}
 
 @app.delete("/api/providers/{provider_id}")
@@ -575,7 +710,7 @@ async def delete_provider(provider_id: str):
 
 @app.post("/api/providers/select")
 async def select_provider(req: SelectProviderRequest):
-    global active_provider
+    global active_provider, previous_clipboard, last_sequence_number
     config = load_config()
     providers = config.get("providers", [])
     
@@ -593,6 +728,9 @@ async def select_provider(req: SelectProviderRequest):
         add_log("info", f"Proveedor seleccionado para captura: '{prov['name']}'.")
         
     save_config(config)
+    # Al cambiar de proveedor, reiniciamos previous_clipboard para permitir capturar con las nuevas reglas
+    previous_clipboard = ""
+    last_sequence_number = 0
     return {"status": "success", "active_provider": active_provider}
 
 @app.get("/api/providers/{provider_id}/data")
@@ -603,8 +741,8 @@ async def get_provider_data(provider_id: str):
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
-    filepath = provider.get("output_file")
-    if not filepath or not os.path.exists(filepath):
+    filepath = get_provider_filepath(provider)
+    if not os.path.exists(filepath):
         return {"columns": provider.get("fields", []) + ["timestamp"], "records": []}
         
     try:
@@ -613,6 +751,18 @@ async def get_provider_data(provider_id: str):
             df = pd.read_excel(filepath)
         else:
             df = pd.read_csv(filepath, encoding='utf-8-sig')
+            
+        # Deduplicación al vuelo para limpiar cualquier duplicado residual en el archivo físico
+        model_col = find_model_column(df.columns, provider.get("fields", []))
+        if model_col:
+            df_clean = deduplicate_by_completeness(df, model_col)
+            if len(df_clean) < len(df):
+                df = df_clean
+                # Guardar el archivo de datos limpio de vuelta
+                if file_format == "xlsx":
+                    df.to_excel(filepath, index=False)
+                else:
+                    df.to_csv(filepath, index=False, encoding='utf-8-sig')
             
         df = df.replace({pd.NA: None, float('nan'): None})
         
@@ -641,9 +791,7 @@ async def clear_provider_data(provider_id: str):
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
-    filepath = provider.get("output_file")
-    if not filepath:
-        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider_id}.csv")
+    filepath = get_provider_filepath(provider)
         
     if os.path.exists(filepath):
         try:
@@ -662,9 +810,7 @@ async def delete_provider_row(provider_id: str, req: DeleteRowRequest):
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
-    filepath = provider.get("output_file")
-    if not filepath:
-        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider_id}.csv")
+    filepath = get_provider_filepath(provider)
         
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Archivo de datos no encontrado")
@@ -843,10 +989,14 @@ async def merge_extractions(req: MergeRequest):
             continue
             
         # Leer archivo
-        if filepath.endswith('.xlsx'):
-            df = pd.read_excel(filepath)
-        else:
-            df = pd.read_csv(filepath, encoding='utf-8-sig')
+        try:
+            if filepath.endswith('.xlsx'):
+                df = pd.read_excel(filepath)
+            else:
+                df = pd.read_csv(filepath, encoding='utf-8-sig')
+        except Exception as e:
+            add_log("warning", f"No se pudo leer el archivo '{filename}': {str(e)}")
+            continue
             
         if df.empty:
             continue
@@ -873,7 +1023,9 @@ async def merge_extractions(req: MergeRequest):
                 break
                 
         # Limpieza de clave
+        df = df.dropna(subset=[key_col])
         df['_merge_key_clean'] = df[key_col].astype(str).str.strip().str.lower()
+        df = df[~df['_merge_key_clean'].isin(['', 'nan', 'none'])]
         
         # Limpieza de precio
         if price_col:
@@ -881,8 +1033,8 @@ async def merge_extractions(req: MergeRequest):
         else:
             df['_price_clean'] = 0.0
             
-        # Desduplicar y tomar el último
-        df_clean = df.dropna(subset=['_merge_key_clean']).drop_duplicates(subset=['_merge_key_clean'], keep='last')
+        # Desduplicar de forma inteligente manteniendo el registro con más información
+        df_clean = deduplicate_by_completeness(df, key_col)
         
         provider_name = filename.replace('.csv', '').replace('.xlsx', '').replace('_', ' ').title()
         
@@ -936,7 +1088,7 @@ async def merge_extractions(req: MergeRequest):
             second_name = second_provider.replace('Precio ', '').replace(' (€)', '')
             return f"{cheapest_name} empata con {second_name}"
             
-        diff_pct = ((cheapest_price - second_price) / second_price) * 100
+        diff_pct = ((second_price - cheapest_price) / second_price) * 100
         return f"{cheapest_name} es {diff_pct:.1f}% más barato"
         
     merged_df['Diferencia / Oportunidad'] = merged_df.apply(calculate_opportunity, axis=1)
@@ -974,9 +1126,7 @@ async def download_provider_extraction(provider_id: str):
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
-    filepath = provider.get("output_file")
-    if not filepath:
-        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider_id}.csv")
+    filepath = get_provider_filepath(provider)
         
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Archivo de extracción no encontrado para este proveedor")
@@ -995,18 +1145,25 @@ async def download_consolidated(filename: str):
 @app.get("/api/stream")
 async def sse_stream():
     async def event_generator():
-        last_sent_idx = latest_log_index
+        with logs_lock:
+            current_logs = list(logs_buffer)
+            last_sent_idx = latest_log_index
         # Envío inicial del búfer de logs
-        yield f"data: {json.dumps({'type': 'init', 'logs': logs_buffer}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'init', 'logs': current_logs}, ensure_ascii=False)}\n\n"
         while True:
             await asyncio.sleep(0.5)
-            if last_sent_idx < latest_log_index:
-                diff = latest_log_index - last_sent_idx
-                start_pos = max(0, len(logs_buffer) - diff)
-                new_logs = logs_buffer[start_pos:]
+            with logs_lock:
+                if last_sent_idx < latest_log_index:
+                    diff = latest_log_index - last_sent_idx
+                    start_pos = max(0, len(logs_buffer) - diff)
+                    new_logs = list(logs_buffer)[start_pos:]
+                    last_sent_idx = latest_log_index
+                else:
+                    new_logs = []
+            
+            if new_logs:
                 for log in new_logs:
                     yield f"data: {json.dumps({'type': 'log', 'log': log}, ensure_ascii=False)}\n\n"
-                last_sent_idx = latest_log_index
             else:
                 yield f"data: {json.dumps({'type': 'ping'}, ensure_ascii=False)}\n\n"
                 

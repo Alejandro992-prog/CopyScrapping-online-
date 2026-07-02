@@ -281,6 +281,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">El archivo de extracción aún no existe. Comienza a copiar datos para crearlo.</td></tr>`;
                 recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th><th>Acciones</th>`;
                 btnClearCaptures.style.display = "none";
+                btnDownloadRaw.style.display = "none";
                 return;
             }
             const data = await res.json();
@@ -305,6 +306,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.records.length === 0) {
                     recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">No hay registros en este archivo.</td></tr>`;
                     btnClearCaptures.style.display = "none";
+                    btnDownloadRaw.style.display = "none";
                 } else {
                     // Mostrar los últimos 50 de forma invertida (más reciente primero)
                     const displayData = data.records.slice(-50).reverse();
