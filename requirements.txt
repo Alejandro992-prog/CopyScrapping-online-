@@ -1,6 +1,4 @@
 fastapi
 uvicorn
-pyperclip
 pandas
 openpyxl
-pyinstaller

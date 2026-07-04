@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let eventSource = null;
     let activeProviderId = null;
     let savedProviders = [];
+    let lastProcessedClipboard = "";
 
     // Cached DOM Elements
     const statusDot = document.getElementById("status-dot");
@@ -26,6 +27,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const recentCapturesBody = document.getElementById("recent-captures-body");
     const btnDownloadRaw = document.getElementById("btn-download-raw");
     const btnClearCaptures = document.getElementById("btn-clear-captures");
+    const btnPasteClipboard = document.getElementById("btn-paste-clipboard");
+    const pasteInputArea = document.getElementById("paste-input-area");
     
     // Tab 2 Elements
     const provNameInput = document.getElementById("prov-name");
@@ -57,6 +60,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnDownloadConsolidated = document.getElementById("btn-download-consolidated");
     const btnClearMerged = document.getElementById("btn-clear-merged");
 
+    // Tab 4 Elements (Root Only)
+    const tabUsersBtn = document.getElementById("tab-users-btn");
+    const newUsernameInput = document.getElementById("new-username");
+    const newPasswordInput = document.getElementById("new-password");
+    const btnCreateUser = document.getElementById("btn-create-user");
+    const registeredUsersList = document.getElementById("registered-users-list");
+    const authWarningBox = document.getElementById("auth-warning-box");
+
     // ----------------------------------------------------
     // 1. TABS MANAGEMENT
     // ----------------------------------------------------
@@ -74,6 +85,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadExtractionFiles();
             } else if (tab.dataset.tab === "tab-train") {
                 loadProviders();
+            } else if (tab.dataset.tab === "tab-users") {
+                loadRegisteredUsers();
             }
         });
     });
@@ -173,6 +186,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 providerSelect.value = "";
                 showEmptyRecentTable();
             }
+
+            // Actualizar la interfaz de usuario en base a los privilegios
+            if (data.is_root) {
+                tabUsersBtn.style.display = "inline-block";
+                authWarningBox.style.display = data.auth_enabled ? "none" : "block";
+            } else {
+                tabUsersBtn.style.display = "none";
+            }
         } catch (err) {
             console.error("Error cargando estado:", err);
         }
@@ -212,6 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
             activeProviderId = data.active_provider ? data.active_provider.id : null;
             updateActiveBadge(data.active_provider);
             loadStatus();
+            lastProcessedClipboard = ""; // Reset duplicate detection on provider change
         } catch (err) {
             console.error("Error al cambiar proveedor:", err);
         }
@@ -889,6 +911,191 @@ document.addEventListener("DOMContentLoaded", () => {
         mergedResultsBody.innerHTML = "";
         mergedResultsHeaders.innerHTML = "";
         mergedResultsCard.style.display = "none";
+    });
+
+    async function sendTextToProcess(text) {
+        if (!activeProviderId) {
+            alert("Por favor, selecciona un proveedor activo antes de procesar.");
+            return;
+        }
+        
+        lastProcessedClipboard = text; // Update the tracking variable to prevent double processing
+        
+        try {
+            const res = await fetch("/api/process-text", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: text })
+            });
+            if (!res.ok) {
+                const errData = await res.json();
+                console.error("Error al procesar el texto:", errData.detail);
+            }
+        } catch (err) {
+            console.error("Error en la conexión al enviar el texto:", err);
+        }
+    }
+
+    // Auto-read clipboard when tab/window recovers focus
+    async function checkClipboardOnFocus() {
+        if (!monitorToggle.checked || !activeProviderId) {
+            return;
+        }
+        
+        // Safeguard for insecure contexts (HTTP) or older browsers where Clipboard API is not available
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+            console.log("El portapapeles no está disponible (requiere conexión segura HTTPS o localhost).");
+            return;
+        }
+        
+        try {
+            // Attempt to read text directly from system clipboard
+            const text = await navigator.clipboard.readText();
+            if (text && text.trim()) {
+                if (text !== lastProcessedClipboard) {
+                    sendTextToProcess(text);
+                }
+            }
+        } catch (err) {
+            // Silently handle exceptions, e.g. before clipboard permissions are granted
+            console.log("No se pudo auto-leer el portapapeles al enfocar (puede requerir permisos en el navegador):", err);
+        }
+    }
+
+    // Bind focus and visibility events
+    window.addEventListener("focus", checkClipboardOnFocus);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+            checkClipboardOnFocus();
+        }
+    });
+
+    // Intercept manual copy-paste (Ctrl+V) globally on the document
+    document.addEventListener("paste", (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        const text = e.clipboardData.getData("text");
+        if (text && text.trim()) {
+            sendTextToProcess(text);
+        }
+    });
+
+    // Button to manually trigger paste from clipboard
+    btnPasteClipboard.addEventListener("click", async () => {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+            alert("El portapapeles no está disponible en este navegador o requiere una conexión segura (HTTPS).");
+            return;
+        }
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text && text.trim()) {
+                sendTextToProcess(text);
+            }
+        } catch (err) {
+            alert("No se pudo acceder al portapapeles. Asegúrate de dar permisos de portapapeles en el navegador.");
+        }
+    });
+
+    // Process pasted text in the quick-paste textbox
+    pasteInputArea.addEventListener("paste", () => {
+        setTimeout(() => {
+            const text = pasteInputArea.value;
+            if (text && text.trim()) {
+                sendTextToProcess(text);
+                pasteInputArea.value = "";
+            }
+        }, 50);
+    });
+
+    // ----------------------------------------------------
+    // 6. USER MANAGEMENT (Root Only)
+    // ----------------------------------------------------
+    async function loadRegisteredUsers() {
+        try {
+            const res = await fetch("/api/users");
+            if (!res.ok) return;
+            const data = await res.json();
+            
+            registeredUsersList.innerHTML = "";
+            const users = data.users || [];
+            
+            if (users.length === 0) {
+                registeredUsersList.innerHTML = `<p class="empty-text">No hay otros usuarios registrados.</p>`;
+                return;
+            }
+            
+            users.forEach(username => {
+                const item = document.createElement("div");
+                item.className = "provider-item";
+                
+                const info = document.createElement("div");
+                info.className = "provider-info";
+                
+                const h4 = document.createElement("h4");
+                h4.textContent = username;
+                
+                const pSpan = document.createElement("p");
+                pSpan.textContent = "Rol: Usuario Estándar";
+                
+                info.appendChild(h4);
+                info.appendChild(pSpan);
+                
+                const deleteBtn = document.createElement("button");
+                deleteBtn.className = "btn-delete-prov";
+                deleteBtn.innerHTML = "🗑️";
+                deleteBtn.title = "Eliminar usuario";
+                deleteBtn.onclick = () => deleteUser(username);
+                
+                item.appendChild(info);
+                item.appendChild(deleteBtn);
+                registeredUsersList.appendChild(item);
+            });
+        } catch (err) {
+            console.error("Error al cargar usuarios:", err);
+        }
+    }
+
+    async function deleteUser(username) {
+        if (!confirm(`¿Seguro que deseas eliminar al usuario '${username}'?`)) return;
+        try {
+            const res = await fetch(`/api/users/${username}`, { method: "DELETE" });
+            if (res.ok) {
+                loadRegisteredUsers();
+            } else {
+                const errData = await res.json();
+                alert(`Error al eliminar usuario: ${errData.detail}`);
+            }
+        } catch (err) {
+            console.error("Error al eliminar usuario:", err);
+        }
+    }
+
+    btnCreateUser.addEventListener("click", async () => {
+        const username = newUsernameInput.value.trim();
+        const password = newPasswordInput.value;
+        
+        if (!username || password.length < 6) {
+            alert("Por favor, introduce un nombre de usuario y una contraseña de al menos 6 caracteres.");
+            return;
+        }
+        
+        try {
+            const res = await fetch("/api/users", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password })
+            });
+            
+            if (res.ok) {
+                newUsernameInput.value = "";
+                newPasswordInput.value = "";
+                loadRegisteredUsers();
+            } else {
+                const errData = await res.json();
+                alert(`Error al registrar usuario: ${errData.detail}`);
+            }
+        } catch (err) {
+            console.error("Error al crear usuario:", err);
+        }
     });
 
     // Initialize Page

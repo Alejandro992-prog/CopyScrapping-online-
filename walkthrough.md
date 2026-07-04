@@ -1,6 +1,6 @@
 # Registro de Desarrollo y Walkthrough - Clipboard Parser (Proyecto Garde)
 
-Este documento contiene el registro de desarrollo e inicialización de la herramienta **Garde Clipboard Parser Inteligente**, creada para el análisis pasivo de precios locales.
+Este documento contiene el registro de desarrollo e inicialización de la herramienta **Garde Clipboard Parser Inteligente**, creada para el análisis de precios locales de proveedores en entornos locales u online.
 
 ---
 
@@ -9,8 +9,8 @@ Este documento contiene el registro de desarrollo e inicialización de la herram
 Se configuró un archivo de directrices en la carpeta del agente de desarrollo local:
 *   **Ruta de Configuración**: `.agents/skills/proyecto_garde/SKILL.md`
 *   **Competencias Clave**:
-    1.  **Ejecución Local (Aislamiento de Red)**: Diseño 100% offline para evitar bloqueos de IP y sistemas anti-bot.
-    2.  **Manejo Eficiente del Portapapeles**: Escucha en bucle con micro-pausas (`time.sleep(0.5)`) para mantener el uso de CPU en 0%.
+    1.  **Ejecución Multi-entorno (Docker y Local)**: Diseñado para funcionar de manera local o en la nube mediante contenedores, adaptándose al puerto de entorno `$PORT`.
+    2.  **Manejo del Portapapeles en Navegador (Seguridad Web)**: Detección automática de enfoque y lectura del portapapeles en el frontend (usando `navigator.clipboard`), soporte para Ctrl+V global en la página y caja de pegado rápido para entornos donde el portapapeles del host no es accesible por el backend.
     3.  **Procesamiento Semántico (Regex)**: Análisis robusto y mapeo dinámico de grupos nombrados.
     4.  **Ingeniería de Datos (Pandas)**: Manipulación de estructuras tabulares y exportación con codificación `utf-8-sig`.
     5.  **Tolerancia a Fallos**: Excepciones controladas para ignorar textos no coincidentes de forma pasiva sin interrumpir la ejecución.
@@ -19,37 +19,32 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
 
 ## 2. Arquitectura de Archivos en el Espacio de Trabajo
 
-*   **`requirements.txt`**: Librerías de Python instaladas localmente (`fastapi`, `uvicorn`, `pyperclip`, `pandas`, `openpyxl`).
-*   **`config.json`**: Base de datos de configuración de proveedores y expresiones regulares entrenadas.
-*   **`app.py`**: Backend principal en FastAPI que implementa la lógica del daemon de captura, generación automática de Regex y el unificador analítico de Pandas.
+*   **`requirements.txt`**: Librerías de Python instaladas (`fastapi`, `uvicorn`, `pandas`, `openpyxl`).
+*   **`data/config.json`**: Base de datos de configuración de proveedores y expresiones regulares entrenadas (ubicada en `data/` para simplificar la persistencia a través de un único volumen montado).
+*   **`app.py`**: Backend principal en FastAPI que implementa la lógica de la API de procesamiento de texto, autogeneración de Regex, normalización de datos y el unificador analítico de Pandas.
 *   **`static/index.html`**: Layout interactivo con pestañas de Monitoreo, Entrenamiento No-Code y Fusión.
 *   **`static/style.css`**: Hoja de estilos Vanilla CSS con un tema premium oscuro y estilos de etiquetado visual.
-*   **`static/app.js`**: Integración Javascript que maneja la selección interactiva de texto para entrenamiento y la visualización de los datos.
+*   **`static/app.js`**: Integración Javascript que maneja la selección interactiva de texto para entrenamiento, lectura del portapapeles del navegador en enfoque / pegado, y la visualización de los datos.
+*   **`Dockerfile`**: Configuración de Docker optimizada para despliegues en la nube (Render, Railway, Fly.io, etc.).
 
 ---
 
 ## 3. Características Clave del Sistema
 
 *   **Asistente No-Code de Regex**: Permite resaltar texto bruto (ej. descripciones de productos) directamente en el navegador, etiquetar campos (Producto, Modelo, Precio, Atributos) y el backend genera de forma automática la expresión regular ideal.
-*   **Daemon de Captura Pasiva**: Funciona en segundo plano de manera invisible. Cuando el usuario pulsa `Ctrl + C` sobre un producto coincidente en cualquier sitio web, este se añade y formatea al instante en un archivo Excel/CSV propio de ese proveedor.
+*   **Captura Inteligente por Enfoque y Ctrl+V (Versión Online)**: Cuando el usuario pulsa `Ctrl+C` en cualquier sitio web para copiar un producto y vuelve a la pestaña de CopyScrapping, la aplicación web detecta automáticamente el enfoque y lee el portapapeles (previo permiso de privacidad del navegador), procesándolo al instante. También soporta pegado manual mediante `Ctrl+V` global y una caja de pegado rápido.
 *   **Unificación y Consolidación Inteligente**: Módulo que recibe múltiples bases de datos de proveedores, las unifica de manera inteligente por el SKU/Modelo y calcula automáticamente al proveedor líder en coste y la diferencia porcentual con respecto al resto de competidores.
 
 ---
 
-## 4. Estado de Ejecución y Empaquetado
+## 4. Estado de Ejecución y Despliegue
 
-*   **Rama de Git Dedicada:** `feature/executable-packaging`
 *   **Ejecución en Desarrollo:**
-    *   Iniciar el servidor: `uvicorn app:app --reload`
+    *   Iniciar el servidor: `uvicorn app:app --reload` o `python app.py`
     *   URL Local: `http://127.0.0.1:8000`
-*   **Empaquetado para Usuarios Finales:**
-    *   Ejecuta el script de compilación automatizada:
-        ```bash
-        python build_exe.py
-        ```
-    *   Este script utiliza **PyInstaller** para empaquetar el código, las dependencias y la carpeta `static/` en un único archivo binario autónomo:
-        👉 `dist/GardeClipboardParser.exe`
-*   **Características del Ejecutable:**
-    *   **Consola Visible:** Mantiene la terminal abierta para facilitar la monitorización, depuración y finalización ordenada (con `Ctrl + C` o cerrando la ventana).
-    *   **Apertura Automática:** Abre de forma automática el navegador web por defecto del usuario apuntando a `http://127.0.0.1:8000` transcurrido 1.5 segundos tras el inicio del servidor.
-    *   **Persistencia Local:** Las rutas de guardado de configuraciones (`config.json`) y datos recopilados (`data/`) se resuelven dinámicamente para guardarse en la misma carpeta física en la que el usuario coloque el ejecutable `.exe`, evitando que se borren al cerrar la aplicación (ya que PyInstaller extrae los recursos de solo lectura a una ruta temporal `sys._MEIPASS`).
+*   **Despliegue y Contenedores (Docker):**
+    *   La aplicación incluye un `Dockerfile` que expone el puerto definido por `$PORT` (por defecto `8000`).
+    *   **Persistencia Centralizada**: El archivo de configuración `config.json` y los directorios de datos se ubican bajo la carpeta `/app/data`. Esto permite configurar persistencia permanente en la nube montando un único disco/volumen en `/app/data`.
+    *   **Migración Automática**: El backend detecta si existía un archivo `config.json` heredado en la raíz y lo migra automáticamente a `/app/data/config.json` al iniciar, garantizando la retrocompatibilidad.
+*   **Empaquetado Local (PyInstaller):**
+    *   Si se requiere una versión ejecutable de escritorio local, se puede usar `python build_exe.py` (requiere instalar `pyinstaller`). Genera el archivo autónomo `dist/GardeClipboardParser.exe`.

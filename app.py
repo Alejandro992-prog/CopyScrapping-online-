@@ -9,12 +9,12 @@ import webbrowser
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
-import pyperclip
 
 def get_resource_path(relative_path: str) -> str:
     """Obtiene la ruta absoluta para un recurso, funciona en desarrollo y con PyInstaller."""
@@ -36,17 +36,111 @@ def get_writeable_path(relative_path: str) -> str:
 DATA_DIR = get_writeable_path("data")
 EXTRACTIONS_DIR = os.path.join(DATA_DIR, "extractions")
 CONSOLIDATED_DIR = os.path.join(DATA_DIR, "consolidated")
-CONFIG_FILE = get_writeable_path("config.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
 def get_provider_filepath(provider: Dict[str, Any]) -> str:
     """Obtiene la ruta absoluta para el archivo de salida de un proveedor."""
-    filepath = provider.get("output_file")
+    provider_id = provider.get("id", "default")
+    # Sanitizar provider_id para evitar inyección de rutas
+    safe_id = os.path.basename(provider_id).replace("..", "").strip()
+    if not safe_id or safe_id == ".":
+        safe_id = "default"
     file_format = provider.get("file_format", "csv")
-    if not filepath:
-        filepath = os.path.join(EXTRACTIONS_DIR, f"{provider['id']}.{file_format}")
-    elif not os.path.isabs(filepath):
-        filepath = get_writeable_path(filepath)
-    return filepath
+    if file_format not in ["csv", "xlsx"]:
+        file_format = "csv"
+    # Forzar a que el archivo esté estrictamente en EXTRACTIONS_DIR con un nombre seguro
+    return os.path.join(EXTRACTIONS_DIR, f"{safe_id}.{file_format}")
+
+import hashlib
+import secrets
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16).hex()
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000
+    )
+    return f"{salt}:{key.hex()}"
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    try:
+        salt, key_hex = stored_password.split(":")
+        provided_key = hashlib.pbkdf2_hmac(
+            'sha256',
+            provided_password.encode('utf-8'),
+            salt.encode('utf-8'),
+            100000
+        )
+        return secrets.compare_digest(provided_key.hex(), key_hex)
+    except Exception:
+        return False
+
+def load_users() -> Dict[str, str]:
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_users(users: Dict[str, str]):
+    try:
+        os.makedirs(os.path.dirname(USERS_FILE), exist_ok=True)
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        add_log("error", f"Error guardando users.json: {str(e)}")
+
+def check_authentication(credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False))):
+    correct_password = os.environ.get("ADMIN_PASSWORD")
+    # Si no se define contraseña en el entorno, la autenticación está desactivada
+    if not correct_password:
+        return "developer"
+        
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Autenticación requerida",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+        
+    # 1. Verificar contra credenciales Root (entorno)
+    correct_username = os.environ.get("ADMIN_USERNAME", "admin")
+    is_correct_username = secrets.compare_digest(credentials.username, correct_username)
+    is_correct_password = secrets.compare_digest(credentials.password, correct_password)
+    
+    if is_correct_username and is_correct_password:
+        return credentials.username
+        
+    # 2. Verificar contra usuarios guardados en users.json
+    users = load_users()
+    if credentials.username in users:
+        stored_hash = users[credentials.username]
+        if verify_password(stored_hash, credentials.password):
+            return credentials.username
+            
+    # Si ninguno coincide, levantar excepción
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciales incorrectas",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+def require_root(username: str = Depends(check_authentication)):
+    correct_username = os.environ.get("ADMIN_USERNAME", "admin")
+    # Si la contraseña no está definida en el entorno, permitimos el acceso a nivel de desarrollo
+    if not os.environ.get("ADMIN_PASSWORD"):
+        return username
+    if username != correct_username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso denegado: se requiere el rol de administrador principal (root)"
+        )
+    return username
 
 # Estado global
 is_monitoring = True
@@ -74,10 +168,22 @@ def add_log(msg_type: str, message: str, data: Any = None):
 
 def load_config() -> Dict[str, Any]:
     global active_provider
+    old_config = get_writeable_path("config.json")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    
+    # Migrar config.json si existe en la ubicación antigua y no en la nueva
+    if CONFIG_FILE != old_config and os.path.exists(old_config) and not os.path.exists(CONFIG_FILE):
+        try:
+            import shutil
+            shutil.move(old_config, CONFIG_FILE)
+            add_log("info", f"Migrado config.json de {old_config} a {CONFIG_FILE}")
+        except Exception as e:
+            add_log("warning", f"No se pudo migrar config.json automáticamente: {str(e)}")
+
     if not os.path.exists(CONFIG_FILE):
         config = {"active_provider_id": None, "providers": []}
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+            json.dump(config, f, indent=2, ensure_ascii=False)
         return config
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -322,6 +428,9 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
     if df.empty or model_col not in df.columns:
         return df
         
+    # Hacemos una copia del DataFrame para evitar mutar el original por referencia.
+    df = df.copy()
+    
     # Crear una copia temporal de la clave limpia para agrupar
     df['_temp_key'] = df[model_col].astype(str).str.strip().str.lower()
     
@@ -519,47 +628,6 @@ def process_text(text: str, provider: Dict[str, Any]):
     except Exception as e:
         add_log("error", f"Error en el análisis del portapapeles: {str(e)}")
 
-def get_clipboard_seq() -> int:
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            return ctypes.windll.user32.GetClipboardSequenceNumber()
-        except Exception:
-            return 0
-    return 0
-
-def clipboard_listener():
-    global previous_clipboard, last_sequence_number
-    # Inicializar
-    try:
-        previous_clipboard = pyperclip.paste()
-    except Exception:
-        previous_clipboard = ""
-        
-    last_sequence_number = get_clipboard_seq()
-    add_log("info", "Servicio de escucha de portapapeles activo.")
-    
-    while is_monitoring:
-        if active_provider:
-            try:
-                current_text = pyperclip.paste()
-                seq = get_clipboard_seq()
-                
-                clipboard_changed = False
-                if sys.platform == "win32":
-                    if seq != last_sequence_number:
-                        last_sequence_number = seq
-                        clipboard_changed = True
-                
-                if clipboard_changed or current_text != previous_clipboard:
-                    previous_clipboard = current_text
-                    if current_text and current_text.strip():
-                        process_text(current_text, active_provider)
-            except Exception:
-                # Capturar posibles fallos cuando el OS bloquea el portapapeles temporalmente
-                pass
-        time.sleep(0.5)
-
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     global is_monitoring
@@ -570,20 +638,6 @@ async def app_lifespan(app: FastAPI):
     # Cargar configuración inicial
     load_config()
     
-    # Iniciar hilo de escucha
-    listener_thread = threading.Thread(target=clipboard_listener, daemon=True)
-    listener_thread.start()
-    
-    # Apertura automática del navegador
-    def open_browser():
-        time.sleep(1.5)
-        try:
-            webbrowser.open("http://127.0.0.1:8000")
-        except Exception as e:
-            add_log("error", f"No se pudo abrir el navegador automáticamente: {str(e)}")
-            
-    threading.Thread(target=open_browser, daemon=True).start()
-    
     yield
     
     is_monitoring = False
@@ -591,7 +645,8 @@ async def app_lifespan(app: FastAPI):
 app = FastAPI(
     title="Garde Clipboard Parser",
     description="Local background app to parse clipboard data",
-    lifespan=app_lifespan
+    lifespan=app_lifespan,
+    dependencies=[Depends(check_authentication)]
 )
 
 # Servir estáticos (ruta compatible con PyInstaller)
@@ -630,7 +685,65 @@ class MergeRequest(BaseModel):
     merge_key: str
     output_filename: str
 
+class ProcessTextRequest(BaseModel):
+    text: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+
 # Rutas API
+@app.post("/api/process-text")
+async def process_text_endpoint(req: ProcessTextRequest):
+    global active_provider, is_monitoring
+    if not is_monitoring:
+        raise HTTPException(status_code=400, detail="El procesamiento online está desactivado.")
+    if not active_provider:
+        raise HTTPException(status_code=400, detail="Ningún proveedor activo seleccionado.")
+    
+    process_text(req.text, active_provider)
+    return {"status": "success"}
+
+@app.get("/api/users")
+async def get_users(username: str = Depends(require_root)):
+    users = load_users()
+    # Devolver sólo los nombres de usuario, no sus contraseñas hash
+    return {"users": list(users.keys())}
+
+@app.post("/api/users")
+async def create_user(req: CreateUserRequest, username: str = Depends(require_root)):
+    cleaned_username = req.username.strip()
+    if not cleaned_username:
+        raise HTTPException(status_code=400, detail="El nombre de usuario no puede estar vacío.")
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres.")
+    
+    # Comprobar que no coincida con el admin del entorno
+    correct_username = os.environ.get("ADMIN_USERNAME", "admin")
+    if cleaned_username.lower() == correct_username.lower():
+        raise HTTPException(status_code=400, detail="No se puede crear un usuario con el nombre de administrador principal.")
+        
+    users = load_users()
+    if cleaned_username in users:
+        raise HTTPException(status_code=400, detail="El nombre de usuario ya está registrado.")
+        
+    hashed = hash_password(req.password)
+    users[cleaned_username] = hashed
+    save_users(users)
+    add_log("info", f"Usuario estándar '{cleaned_username}' registrado por '{username}'.")
+    return {"status": "success"}
+
+@app.delete("/api/users/{username_to_delete}")
+async def delete_user_route(username_to_delete: str, username: str = Depends(require_root)):
+    users = load_users()
+    if username_to_delete not in users:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+    del users[username_to_delete]
+    save_users(users)
+    add_log("info", f"Usuario estándar '{username_to_delete}' eliminado por '{username}'.")
+    return {"status": "success"}
+
 @app.get("/")
 async def get_index():
     index_path = os.path.join(get_resource_path("static"), "index.html")
@@ -640,12 +753,23 @@ async def get_index():
     return HTMLResponse("<h1>Dashboard no encontrado. Por favor, crea static/index.html</h1>")
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(username: str = Depends(check_authentication)):
     global active_provider, is_monitoring
+    is_root_user = False
+    correct_username = os.environ.get("ADMIN_USERNAME", "admin")
+    correct_password = os.environ.get("ADMIN_PASSWORD")
+    
+    # Si la autenticación está desactivada o el usuario es el admin/root
+    if not correct_password or username == correct_username:
+        is_root_user = True
+        
     return {
         "is_monitoring": is_monitoring,
         "active_provider": active_provider,
-        "has_active_provider": active_provider is not None
+        "has_active_provider": active_provider is not None,
+        "username": username,
+        "is_root": is_root_user,
+        "auth_enabled": correct_password is not None
     }
 
 @app.post("/api/status/toggle")
@@ -1137,10 +1261,12 @@ async def download_provider_extraction(provider_id: str):
 @app.get("/api/consolidated/download/{filename}")
 async def download_consolidated(filename: str):
     from fastapi.responses import FileResponse
-    filepath = os.path.join(CONSOLIDATED_DIR, filename)
+    # Evitar Path Traversal sanitizando el nombre de archivo
+    safe_filename = os.path.basename(filename)
+    filepath = os.path.join(CONSOLIDATED_DIR, safe_filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
-    return FileResponse(filepath, media_type="application/octet-stream", filename=filename)
+    return FileResponse(filepath, media_type="application/octet-stream", filename=safe_filename)
 
 @app.get("/api/stream")
 async def sse_stream():
@@ -1171,9 +1297,10 @@ async def sse_stream():
 
 if __name__ == "__main__":
     import uvicorn
+    import os
     import sys
-    if getattr(sys, 'frozen', False):
-        # En el ejecutable compilado, pasamos el objeto app directamente y desactivamos reload
-        uvicorn.run(app, host="127.0.0.1", port=8000)
-    else:
-        uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    # En la versión online, enlazamos a 0.0.0.0 para ser accesibles externamente.
+    # Desactivamos reload si se ejecuta compilado (PyInstaller) o en producción para evitar bucles.
+    should_reload = not getattr(sys, 'frozen', False) and os.environ.get("ENV") != "production"
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=should_reload)

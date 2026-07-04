@@ -43,6 +43,9 @@
             <button class="nav-tab" data-tab="tab-merge" id="tab-btn-merge">
                 <span class="tab-icon">📊</span> Fusión & Comparador
             </button>
+            <button class="nav-tab" data-tab="tab-users" id="tab-users-btn" style="display: none;">
+                <span class="tab-icon">👥</span> Usuarios
+            </button>
         </nav>
 
         <!-- MAIN CONTENT AREA -->
@@ -55,7 +58,7 @@
                     <div class="card card-controls">
                         <h2 class="card-title">Panel de Control</h2>
                         <div class="control-row">
-                            <label for="monitor-toggle">Escucha del Portapapeles:</label>
+                            <label for="monitor-toggle">Monitoreo Automático (Enfoque / Ctrl+V):</label>
                             <label class="switch">
                                 <input type="checkbox" id="monitor-toggle">
                                 <span class="slider round"></span>
@@ -66,6 +69,15 @@
                             <select id="provider-select" class="form-select">
                                 <option value="">-- Seleccionar Proveedor --</option>
                             </select>
+                        </div>
+                        <div class="control-row mt-10" style="width: 100%;">
+                            <button id="btn-paste-clipboard" class="btn btn-primary btn-block" style="width: 100%;">
+                                📋 Pegar Portapapeles
+                            </button>
+                        </div>
+                        <div class="control-row mt-10" style="display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 6px;">
+                            <label for="paste-input-area" style="font-size: 13px; color: var(--text-muted); align-self: flex-start;">Caja de Pegado Rápido:</label>
+                            <textarea id="paste-input-area" placeholder="Pega texto aquí (Ctrl+V) para procesar..." class="form-textarea" style="height: 60px; font-size: 12px;"></textarea>
                         </div>
 
                         <div class="divider"></div>
@@ -293,11 +305,50 @@
                 </div>
             </section>
 
+            <!-- TAB 4: USER MANAGEMENT (Root Only) -->
+            <section id="tab-users" class="tab-content">
+                <div class="grid-sidebar-layout">
+                    <!-- Left Column: Create User Form -->
+                    <div class="card main-train-card">
+                        <h2 class="card-title">Crear Nuevo Usuario</h2>
+                        <p class="card-subtitle">Registra usuarios estándar que puedan acceder al sistema sin privilegios de administración.</p>
+                        
+                        <div class="form-grid" style="grid-template-columns: 1fr;">
+                            <div class="form-group">
+                                <label for="new-username">Nombre de Usuario:</label>
+                                <input type="text" id="new-username" placeholder="Ej: operador_balay" class="form-input">
+                            </div>
+                            <div class="form-group mt-10">
+                                <label for="new-password">Contraseña:</label>
+                                <input type="password" id="new-password" placeholder="Mínimo 6 caracteres" class="form-input">
+                            </div>
+                        </div>
+                        
+                        <div class="action-buttons-row mt-20">
+                            <button id="btn-create-user" class="btn btn-primary">➕ Registrar Usuario</button>
+                        </div>
+                        
+                        <div id="auth-warning-box" class="regex-match-status status-box-warning mt-20" style="display: none;">
+                            ⚠ La autenticación de producción está desactivada. Los usuarios creados no se exigirán hasta que configures la variable de entorno `ADMIN_PASSWORD`.
+                        </div>
+                    </div>
+                    
+                    <!-- Right Column: User list -->
+                    <div class="card sidebar-card">
+                        <h2 class="card-title">Usuarios Registrados</h2>
+                        <p class="card-subtitle">Listado de cuentas activas en el sistema.</p>
+                        <div class="provider-list mt-10" id="registered-users-list">
+                            <!-- Users will list here -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
         </main>
         
         <!-- FOOTER -->
         <footer class="app-footer">
-            <p>Garde Clipboard Parser v1.0.0 — Solución Segura de Monitoreo Pasivo Local (0% Red externa / 0% Bloqueos)</p>
+            <p>Garde Clipboard Parser Online v1.0.0 — Solución de Monitoreo Online Cloud</p>
         </footer>
     </div>
     <script src="/static/app.js?v=1.0.1"></script>
