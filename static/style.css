@@ -970,3 +970,20 @@ tr:hover td {
     font-size: 13px;
     color: var(--text-muted);
 }
+
+.btn-delete-file {
+    background: transparent;
+    border: none;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.2s, transform 0.1s;
+    margin-left: 10px;
+}
+
+.btn-delete-file:hover {
+    opacity: 1;
+    transform: scale(1.2);
+}

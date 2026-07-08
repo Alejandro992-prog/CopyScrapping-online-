@@ -1343,6 +1343,20 @@ async def upload_extraction_files(files: List[UploadFile] = File(...)):
             
     return {"status": "success", "uploaded": uploaded_files}
 
+@app.delete("/api/extractions/files/{filename}")
+async def delete_extraction_file(filename: str):
+    filename = os.path.basename(filename)
+    filepath = os.path.join(EXTRACTIONS_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    try:
+        os.remove(filepath)
+        add_log("success", f"Archivo de extracción eliminado: {filename}")
+        return {"status": "success", "message": f"Archivo {filename} eliminado"}
+    except Exception as e:
+        add_log("error", f"Error al eliminar el archivo {filename}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al eliminar el archivo: {str(e)}")
+
 @app.get("/api/extractions/download/{provider_id}")
 async def download_provider_extraction(provider_id: str):
     from fastapi.responses import FileResponse

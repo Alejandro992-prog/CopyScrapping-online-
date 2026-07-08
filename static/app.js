@@ -804,13 +804,44 @@ document.addEventListener("DOMContentLoaded", () => {
                 info.className = "file-info-sub";
                 info.textContent = `(${formatBytes(f.size)} - modificado: ${f.last_modified})`;
                 
+                const deleteBtn = document.createElement("button");
+                deleteBtn.type = "button";
+                deleteBtn.className = "btn-delete-file";
+                deleteBtn.innerHTML = "🗑️";
+                deleteBtn.title = "Eliminar este archivo";
+                deleteBtn.addEventListener("click", async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (confirm(`¿Estás seguro de que deseas eliminar permanentemente el archivo ${f.filename}?`)) {
+                        await deleteExtractionFile(f.filename);
+                    }
+                });
+                
                 label.appendChild(checkbox);
                 label.appendChild(span);
                 label.appendChild(info);
+                label.appendChild(deleteBtn);
                 filesChecklist.appendChild(label);
             });
         } catch (err) {
             console.error("Error al cargar archivos:", err);
+        }
+    }
+
+    async function deleteExtractionFile(filename) {
+        try {
+            const res = await fetch(`/api/extractions/files/${encodeURIComponent(filename)}`, {
+                method: "DELETE"
+            });
+            if (res.ok) {
+                loadExtractionFiles();
+            } else {
+                const errData = await res.json();
+                alert(`Error al eliminar el archivo: ${errData.detail || "Error interno"}`);
+            }
+        } catch (err) {
+            console.error("Error al eliminar el archivo:", err);
+            alert("Error de conexión al eliminar el archivo.");
         }
     }
 
