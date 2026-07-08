@@ -15,6 +15,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 def get_resource_path(relative_path: str) -> str:
     """Obtiene la ruta absoluta para un recurso, funciona en desarrollo y con PyInstaller."""
@@ -204,6 +206,119 @@ def save_config(config: Dict[str, Any]):
             json.dump(config, f, indent=2, ensure_ascii=False)
     except Exception as e:
         add_log("error", f"Error guardando config.json: {str(e)}")
+
+def normalize_model_key(val: str) -> str:
+    if not val:
+        return ""
+    # Convertir a minúsculas, quitar caracteres especiales y espacios
+    return re.sub(r'[^a-zA-Z0-9]', '', str(val)).lower().strip()
+
+def format_excel_file(filepath: str):
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(filepath)
+        ws = wb.active
+        
+        # Fonts and Fills
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid") # Dark Slate
+        header_font = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+        
+        body_font = Font(name="Segoe UI", size=10)
+        cheap_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid") # Soft green
+        cheap_font = Font(name="Segoe UI", size=10, bold=True, color="155724")
+        
+        thin_border = Border(
+            left=Side(style='thin', color='E2E8F0'),
+            right=Side(style='thin', color='E2E8F0'),
+            top=Side(style='thin', color='E2E8F0'),
+            bottom=Side(style='thin', color='E2E8F0')
+        )
+        
+        # Headers
+        headers = [cell.value for cell in ws[1]]
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+            
+        # Classify price columns by suffix
+        price_cols_by_cat = {
+            'general': [],
+            'no_vat': [],
+            'vat': [],
+            'pvp': []
+        }
+        
+        for idx, header in enumerate(headers):
+            if header and header.startswith("Precio "):
+                col_letter = get_column_letter(idx + 1)
+                if header.endswith(" Sin IVA (€)"):
+                    price_cols_by_cat['no_vat'].append((col_letter, idx + 1))
+                elif header.endswith(" Con IVA (€)"):
+                    price_cols_by_cat['vat'].append((col_letter, idx + 1))
+                elif header.endswith(" PVP (€)"):
+                    price_cols_by_cat['pvp'].append((col_letter, idx + 1))
+                elif header.endswith(" (€)"):
+                    price_cols_by_cat['general'].append((col_letter, idx + 1))
+                    
+        # Style rows
+        num_rows = ws.max_row
+        for row_idx in range(2, num_rows + 1):
+            # Format body cells with font and border
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = body_font
+                cell.border = thin_border
+                
+                # Align center for non-text columns
+                if col_idx > 2:
+                    cell.alignment = Alignment(horizontal="center")
+                else:
+                    cell.alignment = Alignment(horizontal="left")
+                    
+            # Highlight minimum price cell for each category
+            for cat, cols in price_cols_by_cat.items():
+                if len(cols) <= 1:
+                    continue # No competition, no need to highlight
+                    
+                min_val = float('inf')
+                min_cell = None
+                
+                for col_letter, col_idx in cols:
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    val = cell.value
+                    if val is not None:
+                        try:
+                            f_val = float(val)
+                            if f_val > 0 and f_val < min_val:
+                                min_val = f_val
+                                min_cell = cell
+                        except (ValueError, TypeError):
+                            pass
+                            
+                if min_cell is not None and min_val != float('inf'):
+                    min_cell.fill = cheap_fill
+                    min_cell.font = cheap_font
+                    
+        # Auto-adjust column widths
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                val_str = str(cell.value or '')
+                lines = val_str.split('\n')
+                for line in lines:
+                    if len(line) > max_len:
+                        max_len = len(line)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            
+        wb.save(filepath)
+        wb.close()
+        add_log("success", f"Archivo Excel formateado y coloreado correctamente: {filepath}")
+    except Exception as e:
+        add_log("error", f"Error formateando el archivo Excel {filepath}: {str(e)}")
 
 def clean_price(price_str: str) -> float:
     if not price_str:
@@ -1165,9 +1280,9 @@ async def merge_extractions(req: MergeRequest):
                 else:
                     general_price_col = col
                     
-        # Limpieza de clave
+        # Limpieza de clave con normalización difusa (remueve espacios, guiones y barras)
         df = df.dropna(subset=[key_col])
-        df['_merge_key_clean'] = df[key_col].astype(str).str.strip().str.lower()
+        df['_merge_key_clean'] = df[key_col].astype(str).apply(normalize_model_key)
         df = df[~df['_merge_key_clean'].isin(['', 'nan', 'none'])]
         
         # Limpieza de precios si existen
@@ -1306,6 +1421,7 @@ async def merge_extractions(req: MergeRequest):
     
     if out_filepath.endswith('.xlsx'):
         merged_df.to_excel(out_filepath, index=False)
+        format_excel_file(out_filepath)
     else:
         merged_df.to_csv(out_filepath, index=False, encoding='utf-8-sig')
         
