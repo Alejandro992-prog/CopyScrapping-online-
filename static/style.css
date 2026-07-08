@@ -29,6 +29,12 @@
     --tag-model-bg: rgba(14, 165, 233, 0.2);
     --tag-price: #10b981;
     --tag-price-bg: rgba(16, 185, 129, 0.2);
+    --tag-price-no-vat: #06b6d4;
+    --tag-price-no-vat-bg: rgba(6, 182, 212, 0.2);
+    --tag-price-vat: #facc15;
+    --tag-price-vat-bg: rgba(250, 204, 21, 0.2);
+    --tag-pvp: #f43f5e;
+    --tag-pvp-bg: rgba(244, 63, 94, 0.2);
     --tag-attributes: #f97316;
     --tag-attributes-bg: rgba(249, 115, 22, 0.2);
 }
@@ -655,6 +661,15 @@ tr:hover td {
 .tag-price { border-color: var(--tag-price); color: var(--tag-price); }
 .tag-price:hover { background-color: var(--tag-price-bg); }
 
+.tag-price-no-vat { border-color: var(--tag-price-no-vat); color: var(--tag-price-no-vat); }
+.tag-price-no-vat:hover { background-color: var(--tag-price-no-vat-bg); }
+
+.tag-price-vat { border-color: var(--tag-price-vat); color: var(--tag-price-vat); }
+.tag-price-vat:hover { background-color: var(--tag-price-vat-bg); }
+
+.tag-pvp { border-color: var(--tag-pvp); color: var(--tag-pvp); }
+.tag-pvp:hover { background-color: var(--tag-pvp-bg); }
+
 .tag-attributes { border-color: var(--tag-attributes); color: var(--tag-attributes); }
 .tag-attributes:hover { background-color: var(--tag-attributes-bg); }
 
@@ -694,6 +709,21 @@ tr:hover td {
     border-bottom: 2px solid var(--tag-price);
 }
 
+.tagged-price_no_vat {
+    background-color: var(--tag-price-no-vat-bg);
+    border-bottom: 2px solid var(--tag-price-no-vat);
+}
+
+.tagged-price_vat {
+    background-color: var(--tag-price-vat-bg);
+    border-bottom: 2px solid var(--tag-price-vat);
+}
+
+.tagged-pvp {
+    background-color: var(--tag-pvp-bg);
+    border-bottom: 2px solid var(--tag-pvp);
+}
+
 .tagged-attributes {
     background-color: var(--tag-attributes-bg);
     border-bottom: 2px solid var(--tag-attributes);
@@ -723,6 +753,9 @@ tr:hover td {
 .badge-product { background-color: var(--tag-product); }
 .badge-model { background-color: var(--tag-model); }
 .badge-price { background-color: var(--tag-price); }
+.badge-price_no_vat { background-color: var(--tag-price-no-vat); }
+.badge-price_vat { background-color: var(--tag-price-vat); }
+.badge-pvp { background-color: var(--tag-pvp); }
 .badge-attributes { background-color: var(--tag-attributes); }
 
 .btn-remove-tag {

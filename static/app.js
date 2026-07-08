@@ -277,6 +277,12 @@ document.addEventListener("DOMContentLoaded", () => {
             "modelo": "Modelo / SKU",
             "price": "Precio",
             "precio": "Precio",
+            "price_no_vat": "Precio Sin IVA",
+            "precio_sin_iva": "Precio Sin IVA",
+            "price_vat": "Precio Con IVA",
+            "precio_con_iva": "Precio Con IVA",
+            "pvp": "PVP",
+            "precio_pvp": "PVP",
             "attributes": "Atributos Técnicos",
             "atributos": "Atributos Técnicos"
         };
@@ -312,6 +318,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render headers
                 recentCapturesHeaders.innerHTML = "";
                 data.columns.forEach(col => {
+                    if (col.toLowerCase() === 'pvp' || col.toLowerCase() === 'precio_pvp') return;
                     const th = document.createElement("th");
                     th.textContent = translateKey(col);
                     recentCapturesHeaders.appendChild(th);
@@ -335,6 +342,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     displayData.forEach(row => {
                         const tr = document.createElement("tr");
                         data.columns.forEach(col => {
+                            if (col.toLowerCase() === 'pvp' || col.toLowerCase() === 'precio_pvp') return;
                             const td = document.createElement("td");
                             td.textContent = row[col] !== null ? row[col] : "";
                             tr.appendChild(td);
@@ -554,12 +562,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
     tagButtons.forEach(btn => {
         btn.addEventListener("click", () => {
+            const tagName = btn.dataset.tag;
+            const existingIndex = labels.findIndex(l => l.name === tagName);
+            
             if (!currentSelection) {
-                alert("Primero selecciona/sombrea un fragmento de texto en la caja.");
+                if (existingIndex !== -1) {
+                    // Si ya existe la etiqueta y le volvemos a dar al botón, se borra lo señalado
+                    labels.splice(existingIndex, 1);
+                    renderInteractiveText();
+                    window.getSelection().removeAllRanges();
+                } else {
+                    alert("Primero selecciona/sombrea un fragmento de texto en la caja.");
+                }
                 return;
             }
             
-            const tagName = btn.dataset.tag;
+            // Si hay una selección activa y ya existía esta etiqueta, la removemos primero para reemplazarla
+            if (existingIndex !== -1) {
+                labels.splice(existingIndex, 1);
+            }
             
             // Validar que no se solape
             const overlap = labels.some(l => 
@@ -849,6 +870,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Render headers
         mergedResultsHeaders.innerHTML = "";
         result.columns.forEach(col => {
+            if (col.toLowerCase().includes('pvp')) return;
             const th = document.createElement("th");
             th.textContent = col;
             mergedResultsHeaders.appendChild(th);
@@ -864,36 +886,53 @@ document.addEventListener("DOMContentLoaded", () => {
         result.data.forEach(row => {
             const tr = document.createElement("tr");
             
-            // Determinar cuál es el precio mínimo en esta fila
-            let minPrice = Infinity;
-            let priceColsInRow = [];
+            // Determinar los precios mínimos independientes por cada categoría de precio
+            let minGeneral = Infinity;
+            let generalCols = [];
+            let minNoVat = Infinity;
+            let noVatCols = [];
+            let minVat = Infinity;
+            let vatCols = [];
             
             result.columns.forEach(col => {
-                if (col.startsWith("Precio ") && col.endsWith(" (€)")) {
+                if (col.startsWith("Precio ")) {
                     const val = parseFloat(row[col]);
                     if (!isNaN(val) && val > 0) {
-                        priceColsInRow.push({ col: col, val: val });
-                        if (val < minPrice) {
-                            minPrice = val;
+                        if (col.endsWith(" Sin IVA (€)")) {
+                            noVatCols.push(col);
+                            if (val < minNoVat) minNoVat = val;
+                        } else if (col.endsWith(" Con IVA (€)")) {
+                            vatCols.push(col);
+                            if (val < minVat) minVat = val;
+                        } else if (col.endsWith(" (€)")) {
+                            generalCols.push(col);
+                            if (val < minGeneral) minGeneral = val;
                         }
                     }
                 }
             });
             
             result.columns.forEach(col => {
+                if (col.toLowerCase().includes('pvp')) return;
                 const td = document.createElement("td");
                 const val = row[col];
                 td.textContent = val !== null ? val : "";
                 
-                // Si es el precio más barato de esta fila, destacarlo
-                if (col.startsWith("Precio ") && col.endsWith(" (€)")) {
+                // Destacar precio mínimo en base a su grupo
+                if (col.startsWith("Precio ")) {
                     const priceVal = parseFloat(val);
-                    if (!isNaN(priceVal) && priceVal === minPrice && priceColsInRow.length > 1) {
-                        td.className = "highlight-cheap";
+                    if (!isNaN(priceVal) && priceVal > 0) {
+                        if (col.endsWith(" Sin IVA (€)") && priceVal === minNoVat && noVatCols.length > 1) {
+                            td.className = "highlight-cheap";
+                        } else if (col.endsWith(" Con IVA (€)") && priceVal === minVat && vatCols.length > 1) {
+                            td.className = "highlight-cheap";
+                        } else if (col.endsWith(" (€)") && !col.endsWith(" Sin IVA (€)") && !col.endsWith(" Con IVA (€)") && priceVal === minGeneral && generalCols.length > 1) {
+                            td.className = "highlight-cheap";
+                        }
                     }
                 }
                 
-                if (col === "Diferencia / Oportunidad") {
+                if (col.startsWith("Diferencia / Oportunidad")) {
                     td.className = "opportunity-cell";
                 }
                 
