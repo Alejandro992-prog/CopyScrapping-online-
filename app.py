@@ -9,7 +9,7 @@ import webbrowser
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1320,6 +1320,28 @@ async def merge_extractions(req: MergeRequest):
         "columns": list(merged_df.columns),
         "data": records
     }
+
+@app.post("/api/extractions/upload")
+async def upload_extraction_files(files: List[UploadFile] = File(...)):
+    os.makedirs(EXTRACTIONS_DIR, exist_ok=True)
+    uploaded_files = []
+    for file in files:
+        filename = os.path.basename(file.filename)
+        if not (filename.endswith('.csv') or filename.endswith('.xlsx')):
+            raise HTTPException(status_code=400, detail=f"Formato no válido: {filename}. Sólo se admiten archivos .csv y .xlsx")
+            
+        filepath = os.path.join(EXTRACTIONS_DIR, filename)
+        try:
+            with open(filepath, "wb") as f:
+                content = await file.read()
+                f.write(content)
+            uploaded_files.append(filename)
+            add_log("success", f"Archivo subido correctamente: {filename}")
+        except Exception as e:
+            add_log("error", f"Error al subir el archivo {filename}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error escribiendo el archivo {filename}: {str(e)}")
+            
+    return {"status": "success", "uploaded": uploaded_files}
 
 @app.get("/api/extractions/download/{provider_id}")
 async def download_provider_extraction(provider_id: str):

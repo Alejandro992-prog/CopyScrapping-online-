@@ -227,6 +227,13 @@
                         <h2 class="card-title">Consolidación de Archivos de Precios</h2>
                         <p class="card-subtitle">Selecciona los archivos recolectados para unificarlos en una Matriz Única de Comparativa.</p>
                         
+                        <!-- Zona de Subida de Archivos -->
+                        <div class="upload-zone" id="upload-zone">
+                            <span class="upload-icon">📤</span>
+                            <p>Arrastra archivos o haz clic aquí para subir tus extracciones anteriores (.csv, .xlsx)</p>
+                            <input type="file" id="upload-input" multiple accept=".csv,.xlsx" style="display: none;">
+                        </div>
+                        
                         <div class="form-group mt-20">
                             <label>Seleccionar Archivos de Proveedores:</label>
                             <div class="files-checklist-container" id="files-checklist">

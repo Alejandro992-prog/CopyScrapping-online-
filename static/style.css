@@ -941,3 +941,32 @@ tr:hover td {
     opacity: 1;
     transform: scale(1.15);
 }
+
+/* Estilos de la Zona de Carga */
+.upload-zone {
+    border: 2px dashed var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    background-color: rgba(255, 255, 255, 0.01);
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+    margin-top: 15px;
+    margin-bottom: 5px;
+}
+
+.upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--primary);
+    background-color: rgba(108, 92, 231, 0.05);
+}
+
+.upload-icon {
+    font-size: 24px;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.upload-zone p {
+    font-size: 13px;
+    color: var(--text-muted);
+}

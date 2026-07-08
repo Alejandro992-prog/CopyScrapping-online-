@@ -59,6 +59,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const mergedResultsBody = document.getElementById("merged-results-body");
     const btnDownloadConsolidated = document.getElementById("btn-download-consolidated");
     const btnClearMerged = document.getElementById("btn-clear-merged");
+    const uploadZone = document.getElementById("upload-zone");
+    const uploadInput = document.getElementById("upload-input");
 
     // Tab 4 Elements (Root Only)
     const tabUsersBtn = document.getElementById("tab-users-btn");
@@ -951,6 +953,72 @@ document.addEventListener("DOMContentLoaded", () => {
         mergedResultsHeaders.innerHTML = "";
         mergedResultsCard.style.display = "none";
     });
+
+    // Controladores de eventos para carga de archivos
+    if (uploadZone && uploadInput) {
+        uploadZone.addEventListener("click", () => {
+            uploadInput.click();
+        });
+
+        uploadInput.addEventListener("change", () => {
+            if (uploadInput.files.length > 0) {
+                uploadFiles(uploadInput.files);
+            }
+        });
+
+        uploadZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            uploadZone.classList.add("dragover");
+        });
+
+        uploadZone.addEventListener("dragleave", () => {
+            uploadZone.classList.remove("dragover");
+        });
+
+        uploadZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length > 0) {
+                uploadFiles(e.dataTransfer.files);
+            }
+        });
+    }
+
+    async function uploadFiles(fileList) {
+        const formData = new FormData();
+        for (let i = 0; i < fileList.length; i++) {
+            formData.append("files", fileList[i]);
+        }
+        
+        try {
+            const pText = uploadZone.querySelector("p");
+            const originalText = pText.textContent;
+            pText.textContent = "📤 Subiendo archivos...";
+            
+            const res = await fetch("/api/extractions/upload", {
+                method: "POST",
+                body: formData
+            });
+            
+            if (res.ok) {
+                pText.textContent = "¡Archivos subidos con éxito! Arrastra más o haz clic para subir.";
+                setTimeout(() => {
+                    pText.textContent = originalText;
+                }, 4000);
+                loadExtractionFiles(); // Refrescar lista de archivos
+            } else {
+                const errData = await res.json();
+                alert(`Error al subir archivos: ${errData.detail || "Error interno"}`);
+                pText.textContent = "Error al subir. Haz clic o arrastra para intentar de nuevo.";
+            }
+        } catch (err) {
+            console.error("Error subiendo archivos:", err);
+            alert("Error de conexión al subir archivos.");
+            if (uploadZone) {
+                uploadZone.querySelector("p").textContent = "Error de conexión. Haz clic o arrastra para intentar de nuevo.";
+            }
+        }
+    }
 
     async function sendTextToProcess(text) {
         if (!activeProviderId) {
