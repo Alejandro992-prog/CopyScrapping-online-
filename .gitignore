@@ -1,5 +1,6 @@
 __pycache__/
 data/
+!data/dictionary.json
 *.pyc
 .DS_Store
 config.json
