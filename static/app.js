@@ -1374,11 +1374,57 @@ document.addEventListener("DOMContentLoaded", () => {
             stockCellDetailsCard.style.display = "none";
             stockMarketCompCard.style.display = "none";
 
+            const stockBrandList = document.getElementById("stock-brand-breakdown-list");
+
             // 4. Renderizar Matriz (Tabla)
             if (!data.capacities || data.capacities.length === 0) {
                 matrixHeaders.innerHTML = "";
                 matrixBody.innerHTML = `<tr><td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td></tr>`;
+                if (stockBrandList) {
+                    stockBrandList.innerHTML = `<p style="font-size: 11px; color: var(--text-muted);">Sube el stock para ver la distribución.</p>`;
+                }
                 return;
+            }
+
+            // 3.5 Pintar Distribución por Marca
+            if (stockBrandList) {
+                stockBrandList.innerHTML = "";
+                if (data.brands && data.brands.length > 0) {
+                    const maxStock = Math.max(...data.brands.map(b => b.stock), 1);
+                    data.brands.forEach(b => {
+                        const brandRow = document.createElement("div");
+                        brandRow.style.display = "flex";
+                        brandRow.style.flexDirection = "column";
+                        brandRow.style.gap = "4px";
+                        
+                        const textInfo = document.createElement("div");
+                        textInfo.style.display = "flex";
+                        textInfo.style.justifyContent = "space-between";
+                        textInfo.style.fontSize = "11px";
+                        textInfo.innerHTML = `<span style="font-weight: 500;">${b.brand}</span> <span style="color: var(--text-muted);">${b.stock} uds</span>`;
+                        
+                        const barContainer = document.createElement("div");
+                        barContainer.style.width = "100%";
+                        barContainer.style.height = "6px";
+                        barContainer.style.background = "rgba(255,255,255,0.05)";
+                        barContainer.style.borderRadius = "3px";
+                        barContainer.style.overflow = "hidden";
+                        
+                        const pct = (b.stock / maxStock) * 100;
+                        const fillBar = document.createElement("div");
+                        fillBar.style.width = `${pct}%`;
+                        fillBar.style.height = "100%";
+                        fillBar.style.background = "var(--primary)";
+                        fillBar.style.borderRadius = "3px";
+                        
+                        barContainer.appendChild(fillBar);
+                        brandRow.appendChild(textInfo);
+                        brandRow.appendChild(barContainer);
+                        stockBrandList.appendChild(brandRow);
+                    });
+                } else {
+                    stockBrandList.innerHTML = `<p style="font-size: 11px; color: var(--text-muted);">Sin datos de marcas.</p>`;
+                }
             }
 
             // Render Headers (Capacidades)

@@ -365,20 +365,30 @@
                             </div>
                         </div>
 
-                        <!-- Matrix Container -->
-                        <div class="matrix-scroll-container mt-20" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.15);">
-                            <table id="stock-matrix-table" class="matrix-table" style="width: 100%; border-collapse: collapse;">
-                                <thead>
-                                    <tr id="matrix-headers">
-                                        <!-- Header labels generated dynamically -->
-                                    </tr>
-                                </thead>
-                                <tbody id="matrix-body">
-                                    <tr>
-                                        <td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
+                        <!-- Layout: Matrix and Brands Side-by-Side -->
+                        <div class="stock-dashboard-row mt-20" style="display: grid; grid-template-columns: 1.2fr 3fr; gap: 20px;">
+                            <!-- Brand Breakdown panel -->
+                            <div class="card" style="padding: 15px; background: rgba(0,0,0,0.15); border: 1px solid var(--border-color); border-radius: 8px; max-height: 400px; overflow-y: auto;">
+                                <h3 style="font-size: 13px; font-weight: bold; margin-bottom: 12px; color: var(--text-color);">Distribución por Marca</h3>
+                                <div id="stock-brand-breakdown-list" style="display: flex; flex-direction: column; gap: 12px;">
+                                    <p style="font-size: 11px; color: var(--text-muted);">Sube el stock para ver la distribución.</p>
+                                </div>
+                            </div>
+                            <!-- Matrix Container -->
+                            <div class="matrix-scroll-container" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.15); padding: 15px;">
+                                <table id="stock-matrix-table" class="matrix-table" style="width: 100%; border-collapse: collapse;">
+                                    <thead>
+                                        <tr id="matrix-headers">
+                                            <!-- Header labels generated dynamically -->
+                                        </tr>
+                                    </thead>
+                                    <tbody id="matrix-body">
+                                        <tr>
+                                            <td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>

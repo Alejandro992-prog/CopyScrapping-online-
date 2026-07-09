@@ -1932,6 +1932,16 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
     alerts = alerts[:8]
     
+    # Calcular distribución por marcas
+    brands_dist = {}
+    for p in cat_products:
+        br = p.get("brand", "Genérico")
+        stk = p.get("stock", 0)
+        brands_dist[br] = brands_dist.get(br, 0) + stk
+        
+    brands_list = [{"brand": k, "stock": v} for k, v in brands_dist.items()]
+    brands_list.sort(key=lambda x: x["stock"], reverse=True)
+    
     return {
         "categories": categories,
         "selected_category": category,
@@ -1939,7 +1949,8 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         "capacities": capacities,
         "cells": cells,
         "kpis": kpis,
-        "alerts": alerts
+        "alerts": alerts,
+        "brands": brands_list
     }
 
 @app.post("/api/stock/upload")
