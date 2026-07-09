@@ -48,3 +48,12 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
     *   **Migración Automática**: El backend detecta si existía un archivo `config.json` heredado en la raíz y lo migra automáticamente a `/app/data/config.json` al iniciar, garantizando la retrocompatibilidad.
 *   **Empaquetado Local (PyInstaller):**
     *   Si se requiere una versión ejecutable de escritorio local, se puede usar `python build_exe.py` (requiere instalar `pyinstaller`). Genera el archivo autónomo `dist/GardeClipboardParser.exe`.
+
+---
+
+## 5. Correcciones Recientes y Mejoras
+
+*   **Corrección de Extracción Parcial (Solo un producto)**:
+    *   **Problema**: Al copiar bloques con múltiples productos, si la expresión regular entrenada era muy estricta (por ejemplo, con atributos técnicos no etiquetados como "9kg"), el motor de procesamiento extraía únicamente el producto que coincidía exactamente y omitía el resto, debido a que el extractor adaptativo solo servía como alternativa si no había ninguna coincidencia exacta en absoluto.
+    *   **Solución**: Se optimizó la función `process_text` en [app.py](file:///c:/Users/aleja/OneDrive/Escritorio/Programacion%20programas%20etc/ideas%20Nuevos%20Proyectos/CopyScrapping%20%28online%29/app.py) para dividir el texto copiado. Ahora, las partes exactas se extraen usando la expresión regular, y todas las secciones de texto no coincidentes se envían automáticamente al extractor adaptativo inteligente. Esto garantiza que todos los productos del bloque copiado sean procesados y guardados de forma consolidada.
+

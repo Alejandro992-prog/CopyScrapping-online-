@@ -646,22 +646,43 @@ def process_text(text: str, provider: Dict[str, Any]):
         # Limitar longitud máxima de coincidencia para evitar falsos positivos dispersos
         max_match_len = max(350, len(sample_text) * 3)
         valid_matches = []
+        matched_intervals = []
         
         if matches:
             for match in matches:
                 match_len = match.end() - match.start()
                 if match_len <= max_match_len:
                     valid_matches.append(match.groupdict())
+                    matched_intervals.append((match.start(), match.end()))
                 else:
                     add_log("info", f"Coincidencia de expresión regular descartada por tamaño excesivo ({match_len} caracteres).")
                     
+        # Obtener fragmentos de texto no coincidentes
+        unmatched_segments = []
+        last_idx = 0
+        matched_intervals.sort(key=lambda x: x[0])
+        for start, end in matched_intervals:
+            if start > last_idx:
+                segment = text[last_idx:start].strip()
+                if segment:
+                    unmatched_segments.append(segment)
+            last_idx = end
+        if last_idx < len(text):
+            segment = text[last_idx:].strip()
+            if segment:
+                unmatched_segments.append(segment)
+
+        # Si no hubo ninguna coincidencia válida con regex, el texto completo es un segmento no coincidente
+        if not valid_matches and text.strip():
+            unmatched_segments = [text.strip()]
+
         if valid_matches:
             extracted_data_list.extend(valid_matches)
-        elif text.strip():
-            # Fallback inteligente: si no hay coincidencias con la regex principal,
-            # intentamos el extractor adaptativo para capturar de forma robusta la información.
-            add_log("info", "Regex exacta sin coincidencias o tamaño excedido. Iniciando extracción adaptativa inteligente...")
-            adaptive_matches = extract_products_adaptively(text, provider)
+            
+        # Ejecutar extractor adaptativo para procesar todos los fragmentos que no coincidieron con la regex principal
+        adaptive_extracted = []
+        for segment in unmatched_segments:
+            adaptive_matches = extract_products_adaptively(segment, provider)
             if adaptive_matches:
                 expected_fields = provider.get("fields", [])
                 for item in adaptive_matches:
@@ -686,7 +707,14 @@ def process_text(text: str, provider: Dict[str, Any]):
                             
                     if not data:
                         data = item
-                    extracted_data_list.append(data)
+                    adaptive_extracted.append(data)
+                    
+        if adaptive_extracted:
+            if valid_matches:
+                add_log("info", f"Se encontraron {len(valid_matches)} coincidencias exactas por plantilla y {len(adaptive_extracted)} adicionales usando extracción adaptativa inteligente.")
+            else:
+                add_log("info", "Iniciando extracción adaptativa inteligente en textos no coincidentes...")
+            extracted_data_list.extend(adaptive_extracted)
         
         if extracted_data_list:
             added_count = 0
