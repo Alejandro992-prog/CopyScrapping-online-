@@ -1389,9 +1389,9 @@ document.addEventListener("DOMContentLoaded", () => {
             // 3.5 Pintar Distribución por Marca
             if (stockBrandList) {
                 stockBrandList.innerHTML = "";
-                if (data.brands && data.brands.length > 0) {
-                    const maxStock = Math.max(...data.brands.map(b => b.stock), 1);
-                    data.brands.forEach(b => {
+                if (data.brands_dist && data.brands_dist.length > 0) {
+                    const maxStock = Math.max(...data.brands_dist.map(b => b.stock), 1);
+                    data.brands_dist.forEach(b => {
                         const brandRow = document.createElement("div");
                         brandRow.style.display = "flex";
                         brandRow.style.flexDirection = "column";
@@ -1428,27 +1428,27 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             // Render Headers (Capacidades)
-            matrixHeaders.innerHTML = "<th>Gama / Capacidad</th>";
+            matrixHeaders.innerHTML = "<th>Marca / Capacidad</th>";
             data.capacities.forEach(cap => {
                 const th = document.createElement("th");
                 th.textContent = cap;
                 matrixHeaders.appendChild(th);
             });
 
-            // Render Rows (Rangos de precio)
+            // Render Rows (Marcas)
             matrixBody.innerHTML = "";
-            data.price_ranges.forEach(pr => {
+            data.brands.forEach(br => {
                 const tr = document.createElement("tr");
                 
                 // Celda de etiqueta de la fila
                 const tdLabel = document.createElement("td");
                 tdLabel.className = "matrix-row-label";
-                tdLabel.textContent = pr.label;
+                tdLabel.textContent = br;
                 tr.appendChild(tdLabel);
                 
                 // Celdas de cruce (capacidad)
                 data.capacities.forEach(cap => {
-                    const cellData = data.cells.find(c => c.capacity === cap && c.price_range === pr.label);
+                    const cellData = data.cells.find(c => c.capacity === cap && c.brand === br);
                     const td = document.createElement("td");
                     td.className = `matrix-cell-interactive matrix-cell-${cellData.status}`;
                     
@@ -1476,7 +1476,7 @@ document.addEventListener("DOMContentLoaded", () => {
         stockCellDetailsCard.style.display = "block";
         stockMarketCompCard.style.display = "none";
         
-        stockDetailsTitle.textContent = `Referencias en '${cellData.capacity} - ${cellData.price_range}'`;
+        stockDetailsTitle.textContent = `Referencias de '${cellData.brand}' en ${cellData.capacity}`;
         
         stockDetailsBody.innerHTML = "";
         if (!cellData.products || cellData.products.length === 0) {

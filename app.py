@@ -1790,7 +1790,8 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         return {
             "categories": [],
             "selected_category": category,
-            "price_ranges": [],
+            "brands": [],
+            "brands_dist": [],
             "capacities": [],
             "cells": [],
             "kpis": {"total_value": 0.0, "total_references": 0, "total_stock": 0, "coverage_pct": 0.0},
@@ -1807,7 +1808,8 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         return {
             "categories": [],
             "selected_category": category,
-            "price_ranges": [],
+            "brands": [],
+            "brands_dist": [],
             "capacities": [],
             "cells": [],
             "kpis": {"total_value": 0.0, "total_references": 0, "total_stock": 0, "coverage_pct": 0.0},
@@ -1820,31 +1822,11 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         
     cat_products = [p for p in all_products if p.get("category") == category]
     
-    price_ranges = []
-    if category in ["Lavadoras", "Secadoras"]:
-        price_ranges = [
-            {"label": "Gama Económica (<350€)", "min": 0, "max": 350},
-            {"label": "Gama Media (350€-550€)", "min": 350, "max": 550},
-            {"label": "Gama Premium (>550€)", "min": 550, "max": 999999}
-        ]
-    elif category == "Lavavajillas":
-        price_ranges = [
-            {"label": "Gama Económica (<300€)", "min": 0, "max": 300},
-            {"label": "Gama Media (300€-450€)", "min": 300, "max": 450},
-            {"label": "Gama Premium (>450€)", "min": 450, "max": 999999}
-        ]
-    elif category == "Frigoríficos":
-        price_ranges = [
-            {"label": "Gama Económica (<400€)", "min": 0, "max": 400},
-            {"label": "Gama Media (400€-700€)", "min": 400, "max": 700},
-            {"label": "Gama Premium (>700€)", "min": 700, "max": 999999}
-        ]
-    else:
-        price_ranges = [
-            {"label": "Gama Económica (<200€)", "min": 0, "max": 200},
-            {"label": "Gama Media (200€-400€)", "min": 200, "max": 400},
-            {"label": "Gama Premium (>400€)", "min": 400, "max": 999999}
-        ]
+    # Obtener todas las marcas presentes en la categoría
+    brands_in_cat = sorted(list(set(p.get("brand", "Genérico") for p in cat_products)))
+    if "Genérico" in brands_in_cat:
+        brands_in_cat.remove("Genérico")
+        brands_in_cat.append("Genérico")
         
     capacities_set = set(p.get("capacity", "N/D") for p in cat_products)
     
@@ -1863,13 +1845,13 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     
     cells = []
     covered_cells_count = 0
-    total_cells_count = len(price_ranges) * len(capacities) if capacities else 0
+    total_cells_count = len(brands_in_cat) * len(capacities) if capacities else 0
     
     for cap in capacities:
-        for pr in price_ranges:
+        for brand_name in brands_in_cat:
             cell_products = [
                 p for p in cat_products 
-                if p.get("capacity") == cap and pr["min"] <= p.get("cost", 0.0) < pr["max"]
+                if p.get("capacity") == cap and p.get("brand", "Genérico") == brand_name
             ]
             
             total_stock = sum(p.get("stock", 0) for p in cell_products)
@@ -1887,7 +1869,7 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
                 
             cells.append({
                 "capacity": cap,
-                "price_range": pr["label"],
+                "brand": brand_name,
                 "products": cell_products,
                 "count": count,
                 "total_stock": total_stock,
@@ -1908,31 +1890,31 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     
     alerts = []
     for cap in capacities:
-        for pr in price_ranges:
+        for br in brands_in_cat:
             cell_products = [
                 p for p in cat_products 
-                if p.get("capacity") == cap and pr["min"] <= p.get("cost", 0.0) < pr["max"]
+                if p.get("capacity") == cap and p.get("brand", "Genérico") == br
             ]
             if not cell_products:
                 alerts.append({
                     "type": "danger",
-                    "message": f"Falta cobertura: No tienes ningún producto en '{cap}' ({pr['label']})."
+                    "message": f"Falta cobertura: No tienes referencias de '{br}' en {cap}."
                 })
             elif sum(p.get("stock", 0) for p in cell_products) == 0:
                 alerts.append({
                     "type": "warning",
-                    "message": f"Sin stock: Tienes referencias pero no hay unidades disponibles en '{cap}' ({pr['label']})."
+                    "message": f"Sin stock: Tienes '{br}' en {cap} pero sin unidades físicas."
                 })
             elif len(cell_products) == 1:
                 alerts.append({
                     "type": "info",
-                    "message": f"Baja variedad: Solo tienes 1 referencia en '{cap}' ({pr['label']})."
+                    "message": f"Baja variedad: Solo tienes 1 referencia de '{br}' en {cap}."
                 })
                 
     alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
     alerts = alerts[:8]
     
-    # Calcular distribución por marcas
+    # Calcular distribución por marcas para el panel lateral
     brands_dist = {}
     for p in cat_products:
         br = p.get("brand", "Genérico")
@@ -1945,12 +1927,12 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     return {
         "categories": categories,
         "selected_category": category,
-        "price_ranges": price_ranges,
+        "brands": brands_in_cat,
+        "brands_dist": brands_list,
         "capacities": capacities,
         "cells": cells,
         "kpis": kpis,
-        "alerts": alerts,
-        "brands": brands_list
+        "alerts": alerts
     }
 
 @app.post("/api/stock/upload")
