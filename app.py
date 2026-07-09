@@ -1894,16 +1894,19 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
             
             segments_data = {
                 "E": {
+                    "products": eco_prods,
                     "count": len(eco_prods),
                     "stock": sum(p.get("stock", 0) for p in eco_prods),
                     "status": "danger" if len(eco_prods) == 0 else ("warning" if len(eco_prods) == 1 else "success")
                 },
                 "M": {
+                    "products": med_prods,
                     "count": len(med_prods),
                     "stock": sum(p.get("stock", 0) for p in med_prods),
                     "status": "danger" if len(med_prods) == 0 else ("warning" if len(med_prods) == 1 else "success")
                 },
                 "P": {
+                    "products": pre_prods,
                     "count": len(pre_prods),
                     "stock": sum(p.get("stock", 0) for p in pre_prods),
                     "status": "danger" if len(pre_prods) == 0 else ("warning" if len(pre_prods) == 1 else "success")

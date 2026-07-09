@@ -1111,20 +1111,24 @@ tr:hover td {
 
 .segment-badge {
     display: inline-block;
-    width: 20px;
-    height: 20px;
-    line-height: 18px;
+    padding: 2px 8px;
     font-size: 10px;
     font-weight: bold;
     text-align: center;
-    border-radius: 50%;
-    cursor: help;
-    transition: transform 0.1s;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
     border: 1px solid transparent;
 }
 
 .segment-badge:hover {
     transform: scale(1.15);
+}
+
+.selected-badge {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 8px var(--primary);
+    transform: scale(1.1);
 }
 
 .segment-badge-danger {

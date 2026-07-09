@@ -1471,8 +1471,17 @@ document.addEventListener("DOMContentLoaded", () => {
                         const seg = cellData.segments[key];
                         const badge = document.createElement("span");
                         badge.className = `segment-badge segment-badge-${seg.status}`;
-                        badge.textContent = key;
+                        badge.textContent = `${key}: ${seg.stock}`;
                         badge.title = `${segmentLabels[key]}: ${seg.count} referencias (${seg.stock} uds en stock)`;
+                        
+                        badge.addEventListener("click", (event) => {
+                            event.stopPropagation(); // Evitar disparar el click de la celda completa
+                            document.querySelectorAll(".segment-badge").forEach(b => b.classList.remove("selected-badge"));
+                            document.querySelectorAll(".matrix-cell-interactive").forEach(c => c.classList.remove("selected-cell"));
+                            badge.classList.add("selected-badge");
+                            showSegmentCellDetails(cellData, key, segmentLabels[key]);
+                        });
+                        
                         dotsContainer.appendChild(badge);
                     });
                     
@@ -1487,8 +1496,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     td.appendChild(totalText);
                     
                     td.addEventListener("click", () => {
-                        // Resaltar celda seleccionada
+                        // Resaltar celda seleccionada y limpiar badges
                         document.querySelectorAll(".matrix-cell-interactive").forEach(c => c.classList.remove("selected-cell"));
+                        document.querySelectorAll(".segment-badge").forEach(b => b.classList.remove("selected-badge"));
                         td.classList.add("selected-cell");
                         showCellDetails(cellData);
                     });
@@ -1517,6 +1527,65 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         cellData.products.forEach(p => {
+            const tr = document.createElement("tr");
+            
+            const tdSku = document.createElement("td");
+            tdSku.style.fontWeight = "bold";
+            tdSku.textContent = p.sku;
+            
+            const tdBrand = document.createElement("td");
+            tdBrand.textContent = p.brand;
+            
+            const tdDesc = document.createElement("td");
+            tdDesc.textContent = p.description;
+            
+            const tdStock = document.createElement("td");
+            tdStock.style.textAlign = "center";
+            tdStock.textContent = p.stock;
+            
+            const tdCost = document.createElement("td");
+            tdCost.style.textAlign = "center";
+            tdCost.textContent = `${p.cost.toFixed(2)} €`;
+            
+            const tdAction = document.createElement("td");
+            tdAction.style.textAlign = "center";
+            const btnSearch = document.createElement("button");
+            btnSearch.className = "btn btn-secondary btn-sm";
+            btnSearch.style.padding = "3px 8px";
+            btnSearch.style.fontSize = "11px";
+            btnSearch.textContent = "🔍 Mercado";
+            btnSearch.title = "Buscar precios de proveedores para este modelo";
+            btnSearch.onclick = () => searchMarketPrices(p.sku);
+            
+            tdAction.appendChild(btnSearch);
+            
+            tr.appendChild(tdSku);
+            tr.appendChild(tdBrand);
+            tr.appendChild(tdDesc);
+            tr.appendChild(tdStock);
+            tr.appendChild(tdCost);
+            tr.appendChild(tdAction);
+            
+            stockDetailsBody.appendChild(tr);
+        });
+        
+        stockCellDetailsCard.scrollIntoView({ behavior: "smooth" });
+    }
+
+    function showSegmentCellDetails(cellData, segmentKey, labelName) {
+        stockCellDetailsCard.style.display = "block";
+        stockMarketCompCard.style.display = "none";
+        
+        stockDetailsTitle.textContent = `Referencias de '${cellData.brand}' en ${cellData.capacity} (${labelName})`;
+        
+        stockDetailsBody.innerHTML = "";
+        const segProducts = cellData.segments[segmentKey].products || [];
+        if (segProducts.length === 0) {
+            stockDetailsBody.innerHTML = `<tr><td colspan="100%" class="table-empty">No hay productos en esta gama para este cruce.</td></tr>`;
+            return;
+        }
+
+        segProducts.forEach(p => {
             const tr = document.createElement("tr");
             
             const tdSku = document.createElement("td");
