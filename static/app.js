@@ -1450,9 +1450,41 @@ document.addEventListener("DOMContentLoaded", () => {
                 data.capacities.forEach(cap => {
                     const cellData = data.cells.find(c => c.capacity === cap && c.brand === br);
                     const td = document.createElement("td");
-                    td.className = `matrix-cell-interactive matrix-cell-${cellData.status}`;
+                    td.className = `matrix-cell-interactive`;
                     
-                    td.innerHTML = `${cellData.count} <span class="matrix-stock-count">(${cellData.total_stock} uds)</span>`;
+                    if (cellData.count === 0) {
+                        td.style.background = "rgba(255,255,255,0.01)";
+                    }
+                    
+                    // Crear contenedor para los 3 badges de segmento (E, M, P)
+                    const dotsContainer = document.createElement("div");
+                    dotsContainer.className = "segment-dots-container";
+                    
+                    const segmentsKeys = ["E", "M", "P"];
+                    const segmentLabels = {
+                        "E": "Gama Económica",
+                        "M": "Gama Media",
+                        "P": "Gama Premium"
+                    };
+                    
+                    segmentsKeys.forEach(key => {
+                        const seg = cellData.segments[key];
+                        const badge = document.createElement("span");
+                        badge.className = `segment-badge segment-badge-${seg.status}`;
+                        badge.textContent = key;
+                        badge.title = `${segmentLabels[key]}: ${seg.count} referencias (${seg.stock} uds en stock)`;
+                        dotsContainer.appendChild(badge);
+                    });
+                    
+                    td.appendChild(dotsContainer);
+                    
+                    // Texto pequeño con el stock total del cruce
+                    const totalText = document.createElement("span");
+                    totalText.className = "matrix-stock-count";
+                    totalText.style.display = "block";
+                    totalText.style.textAlign = "center";
+                    totalText.textContent = cellData.count > 0 ? `${cellData.count} ref (${cellData.total_stock} uds)` : "—";
+                    td.appendChild(totalText);
                     
                     td.addEventListener("click", () => {
                         // Resaltar celda seleccionada

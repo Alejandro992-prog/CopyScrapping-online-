@@ -1822,6 +1822,33 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         
     cat_products = [p for p in all_products if p.get("category") == category]
     
+    # Determinar límites de precio para gamas (Económica, Media, Premium)
+    pr_limits = []
+    if category in ["Lavadoras", "Secadoras"]:
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 350},
+            {"label": "Media", "min": 350, "max": 550},
+            {"label": "Premium", "min": 550, "max": 999999}
+        ]
+    elif category == "Lavavajillas":
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 300},
+            {"label": "Media", "min": 300, "max": 450},
+            {"label": "Premium", "min": 450, "max": 999999}
+        ]
+    elif category == "Frigoríficos":
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 400},
+            {"label": "Media", "min": 400, "max": 700},
+            {"label": "Premium", "min": 700, "max": 999999}
+        ]
+    else:
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 200},
+            {"label": "Media", "min": 200, "max": 400},
+            {"label": "Premium", "min": 400, "max": 999999}
+        ]
+    
     # Obtener todas las marcas presentes en la categoría
     brands_in_cat = sorted(list(set(p.get("brand", "Genérico") for p in cat_products)))
     if "Genérico" in brands_in_cat:
@@ -1845,7 +1872,9 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     
     cells = []
     covered_cells_count = 0
-    total_cells_count = len(brands_in_cat) * len(capacities) if capacities else 0
+    # Cada combinación marca-capacidad tiene 3 segmentos a cubrir (Eco, Media, Premium)
+    total_segments_count = len(brands_in_cat) * len(capacities) * 3 if capacities else 0
+    covered_segments_count = 0
     
     for cap in capacities:
         for brand_name in brands_in_cat:
@@ -1854,23 +1883,42 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
                 if p.get("capacity") == cap and p.get("brand", "Genérico") == brand_name
             ]
             
+            # Dividir en segmentos de precio
+            eco_prods = [p for p in cell_products if pr_limits[0]["min"] <= p.get("cost", 0.0) < pr_limits[0]["max"]]
+            med_prods = [p for p in cell_products if pr_limits[1]["min"] <= p.get("cost", 0.0) < pr_limits[1]["max"]]
+            pre_prods = [p for p in cell_products if pr_limits[2]["min"] <= p.get("cost", 0.0) < pr_limits[2]["max"]]
+            
+            if len(eco_prods) > 0: covered_segments_count += 1
+            if len(med_prods) > 0: covered_segments_count += 1
+            if len(pre_prods) > 0: covered_segments_count += 1
+            
+            segments_data = {
+                "E": {
+                    "count": len(eco_prods),
+                    "stock": sum(p.get("stock", 0) for p in eco_prods),
+                    "status": "danger" if len(eco_prods) == 0 else ("warning" if len(eco_prods) == 1 else "success")
+                },
+                "M": {
+                    "count": len(med_prods),
+                    "stock": sum(p.get("stock", 0) for p in med_prods),
+                    "status": "danger" if len(med_prods) == 0 else ("warning" if len(med_prods) == 1 else "success")
+                },
+                "P": {
+                    "count": len(pre_prods),
+                    "stock": sum(p.get("stock", 0) for p in pre_prods),
+                    "status": "danger" if len(pre_prods) == 0 else ("warning" if len(pre_prods) == 1 else "success")
+                }
+            }
+            
             total_stock = sum(p.get("stock", 0) for p in cell_products)
             count = len(cell_products)
+            status = "success" if count > 0 else "danger"
             
-            if count == 0:
-                status = "danger"
-            elif count == 1:
-                status = "warning"
-            else:
-                status = "success"
-                
-            if count > 0:
-                covered_cells_count += 1
-                
             cells.append({
                 "capacity": cap,
                 "brand": brand_name,
                 "products": cell_products,
+                "segments": segments_data,
                 "count": count,
                 "total_stock": total_stock,
                 "status": status
@@ -1879,7 +1927,7 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     total_value = sum(p.get("cost", 0.0) * p.get("stock", 0) for p in cat_products)
     total_references = len(cat_products)
     total_stock = sum(p.get("stock", 0) for p in cat_products)
-    coverage_pct = (covered_cells_count / total_cells_count * 100) if total_cells_count > 0 else 0.0
+    coverage_pct = (covered_segments_count / total_segments_count * 100) if total_segments_count > 0 else 0.0
     
     kpis = {
         "total_value": round(total_value, 2),
@@ -1895,24 +1943,29 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
                 p for p in cat_products 
                 if p.get("capacity") == cap and p.get("brand", "Genérico") == br
             ]
-            if not cell_products:
-                alerts.append({
-                    "type": "danger",
-                    "message": f"Falta cobertura: No tienes referencias de '{br}' en {cap}."
-                })
-            elif sum(p.get("stock", 0) for p in cell_products) == 0:
-                alerts.append({
-                    "type": "warning",
-                    "message": f"Sin stock: Tienes '{br}' en {cap} pero sin unidades físicas."
-                })
-            elif len(cell_products) == 1:
-                alerts.append({
-                    "type": "info",
-                    "message": f"Baja variedad: Solo tienes 1 referencia de '{br}' en {cap}."
-                })
+            eco_prods = [p for p in cell_products if pr_limits[0]["min"] <= p.get("cost", 0.0) < pr_limits[0]["max"]]
+            med_prods = [p for p in cell_products if pr_limits[1]["min"] <= p.get("cost", 0.0) < pr_limits[1]["max"]]
+            pre_prods = [p for p in cell_products if pr_limits[2]["min"] <= p.get("cost", 0.0) < pr_limits[2]["max"]]
+            
+            for label, prods in [("Económica", eco_prods), ("Media", med_prods), ("Premium", pre_prods)]:
+                if not prods:
+                    alerts.append({
+                        "type": "danger",
+                        "message": f"Falta gama: '{br}' en {cap} de gama {label}."
+                    })
+                elif sum(p.get("stock", 0) for p in prods) == 0:
+                    alerts.append({
+                        "type": "warning",
+                        "message": f"Sin stock: '{br}' en {cap} de gama {label} sin unidades físicas."
+                    })
+                elif len(prods) == 1:
+                    alerts.append({
+                        "type": "info",
+                        "message": f"Baja variedad: Solo tienes 1 opción de '{br}' en {cap} gama {label}."
+                    })
                 
     alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
-    alerts = alerts[:8]
+    alerts = alerts[:10]
     
     # Calcular distribución por marcas para el panel lateral
     brands_dist = {}

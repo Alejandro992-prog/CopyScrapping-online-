@@ -1101,3 +1101,47 @@ tr:hover td {
     }
 }
 
+/* Segment Indicators inside Stock Matrix cells */
+.segment-dots-container {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.segment-badge {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 18px;
+    font-size: 10px;
+    font-weight: bold;
+    text-align: center;
+    border-radius: 50%;
+    cursor: help;
+    transition: transform 0.1s;
+    border: 1px solid transparent;
+}
+
+.segment-badge:hover {
+    transform: scale(1.15);
+}
+
+.segment-badge-danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.segment-badge-warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.4);
+}
+
+.segment-badge-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.4);
+}
+
