@@ -40,6 +40,17 @@ EXTRACTIONS_DIR = os.path.join(DATA_DIR, "extractions")
 CONSOLIDATED_DIR = os.path.join(DATA_DIR, "consolidated")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
+DICTIONARY_FILE = os.path.join(DATA_DIR, "dictionary.json")
+
+def load_dictionary() -> Dict[str, Any]:
+    if not os.path.exists(DICTIONARY_FILE):
+        return {"categorias": {}, "marcas": {}}
+    try:
+        with open(DICTIONARY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        add_log("error", f"Error cargando dictionary.json: {str(e)}")
+        return {"categorias": {}, "marcas": {}}
 
 def get_provider_filepath(provider: Dict[str, Any]) -> str:
     """Obtiene la ruta absoluta para el archivo de salida de un proveedor."""
@@ -1562,7 +1573,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     import re
     products = []
     
-    marcas_comunes = ["balay", "bosch", "siemens", "beko", "candy", "aeg", "zanussi", "electrolux", "lg", "samsung", "whirlpool", "indesit", "miele", "teka", "fagor"]
+    # Cargar diccionario semántico
+    dct = load_dictionary()
+    categorias_dict = dct.get("categorias", {})
+    marcas_dict = dct.get("marcas", {})
     
     try:
         reader = pypdf.PdfReader(pdf_path)
@@ -1588,21 +1602,14 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     
                 model = model_match.group(0)
                 
-                # Clasificación de categoría basada en la línea completa
+                # Clasificación de categoría basada en el diccionario
                 categoria = "Otros"
                 desc_lower = line_str.lower()
-                if any(w in desc_lower for w in ["lavadora", "washer"]):
-                    categoria = "Lavadoras"
-                elif any(w in desc_lower for w in ["secadora", "dryer"]):
-                    categoria = "Secadoras"
-                elif any(w in desc_lower for w in ["lavavajillas", "lavaplatos", "dishwasher"]):
-                    categoria = "Lavavajillas"
-                elif any(w in desc_lower for w in ["frigo", "refrigerador", "frigorifico", "frigorífico", "congelador", "freezer"]):
-                    categoria = "Frigoríficos"
-                elif any(w in desc_lower for w in ["horno", "oven"]):
-                    categoria = "Hornos"
-                elif any(w in desc_lower for w in ["placa", "vitro", "induccion", "inducción"]):
-                    categoria = "Vitrocerámicas"
+                for cat_key, cat_val in categorias_dict.items():
+                    sinonimos = cat_val.get("sinonimos", [])
+                    if any(s in desc_lower for s in sinonimos):
+                        categoria = cat_key
+                        break
                 
                 # Dividir la línea en tokens de texto limpios
                 tokens = line_str.split()
@@ -1613,11 +1620,19 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 candidate_numbers = []
                 desc_words = []
                 
-                # Detectar marca primero
-                for m in marcas_comunes:
-                    if m in desc_lower:
-                        brand = m.title()
+                # Detectar marca usando marcas_dict
+                for brand_key, brand_variants in marcas_dict.items():
+                    if any(v in desc_lower for v in brand_variants):
+                        brand = brand_key
                         break
+                
+                # Obtener unidades de capacidad/medida asociadas a esta categoría
+                cat_info = categorias_dict.get(categoria, {})
+                attrs_info = cat_info.get("atributos_clave", {})
+                size_units = []
+                for attr_name, units in attrs_info.items():
+                    if attr_name in ["capacidad", "servicios", "extraccion", "zonas"]:
+                        size_units.extend(units)
                 
                 # Procesar tokens de izquierda a derecha
                 i = 0
@@ -1630,42 +1645,31 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         i += 1
                         continue
                         
-                    # Comprobar si es un atributo técnico autoadyacente (ej: "8KG", "1200RPM")
-                    # o si es un número seguido de una unidad (ej: "13" "cubiertos", "8" "kg")
                     is_tech_spec = False
                     
                     # Caso 1: Unidad pegada (ej: "8KG", "1200RPM", "368L")
-                    unit_match = re.match(r'^(\d+[\.,]?\d*)(KG|RPM|L|W|V|HZ|DB)$', token_upper)
+                    unit_match = re.match(r'^(\d+[\.,]?\d*)([A-Z][A-Z0-9/]*)$', token_upper)
                     if unit_match:
                         val = unit_match.group(1)
-                        unit = unit_match.group(2)
-                        if unit == "KG" and categoria in ["Lavadoras", "Secadoras"]:
-                            capacidad = f"{val} kg"
-                        elif unit == "L" and categoria == "Frigoríficos":
-                            capacidad = f"{val} L"
-                        is_tech_spec = True
+                        unit = unit_match.group(2).lower()
+                        
+                        if unit in size_units:
+                            unit_label = "kg" if unit in ["kg", "kilogramos", "kilos"] else ("L" if unit in ["l", "litros", "lts"] else unit)
+                            capacidad = f"{val} {unit_label}"
+                            is_tech_spec = True
+                        elif any(unit in unit_list for unit_list in attrs_info.values()) or unit in ["w", "v", "hz", "db", "rpm"]:
+                            is_tech_spec = True
                         
                     # Caso 2: Unidad separada (ej: i es número, i+1 es unidad)
                     elif i + 1 < len(tokens):
                         next_token_lower = tokens[i+1].lower()
-                        # Si el token actual es un número
                         if re.match(r'^\d+[\.,]?\d*$', token):
-                            if next_token_lower in ["kg", "kgs"]:
-                                if categoria in ["Lavadoras", "Secadoras"]:
-                                    capacidad = f"{token} kg"
+                            if next_token_lower in size_units:
+                                unit_label = "kg" if next_token_lower in ["kg", "kilogramos", "kilos"] else ("L" if next_token_lower in ["l", "litros", "lts"] else next_token_lower)
+                                capacidad = f"{token} {unit_label}"
                                 is_tech_spec = True
                                 i += 1 # Consumir unidad
-                            elif next_token_lower in ["l", "litros"]:
-                                if categoria == "Frigoríficos":
-                                    capacidad = f"{token} L"
-                                is_tech_spec = True
-                                i += 1
-                            elif next_token_lower in ["cubiertos", "servicios"]:
-                                if categoria == "Lavavajillas":
-                                    capacidad = f"{token} cubiertos"
-                                is_tech_spec = True
-                                i += 1
-                            elif next_token_lower in ["rpm"]:
+                            elif any(next_token_lower in unit_list for unit_list in attrs_info.values()) or next_token_lower in ["w", "v", "hz", "db", "rpm"]:
                                 is_tech_spec = True
                                 i += 1
                                 
