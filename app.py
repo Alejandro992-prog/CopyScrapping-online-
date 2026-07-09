@@ -1577,6 +1577,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     dct = load_dictionary()
     categorias_dict = dct.get("categorias", {})
     marcas_dict = dct.get("marcas", {})
+    universal_units = ["kg", "l", "cubiertos", "servicios", "botellas", "zonas", "fuegos", "m3/h", "db", "w", "v", "rpm"]
     
     try:
         reader = pypdf.PdfReader(pdf_path)
@@ -1620,9 +1621,9 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 candidate_numbers = []
                 desc_words = []
                 
-                # Detectar marca usando marcas_dict
+                # Detectar marca usando marcas_dict (con límites de palabra para evitar colisiones)
                 for brand_key, brand_variants in marcas_dict.items():
-                    if any(v in desc_lower for v in brand_variants):
+                    if any(re.search(rf'\b{re.escape(v)}\b', desc_lower) for v in brand_variants):
                         brand = brand_key
                         break
                 
@@ -1633,6 +1634,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 for attr_name, units in attrs_info.items():
                     if attr_name in ["capacidad", "servicios", "extraccion", "zonas"]:
                         size_units.extend(units)
+                
+                # Si no hay unidades específicas en el diccionario, usar el listado universal como fallback
+                if not size_units:
+                    size_units = universal_units
                 
                 # Procesar tokens de izquierda a derecha
                 i = 0
@@ -1725,6 +1730,43 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                             
                 desc = " ".join(desc_words)
                 desc = re.sub(r'\s+', ' ', desc).strip()
+                
+                # Fallback adaptativo conjunto para marca y categoría si son genéricos/Otros
+                if brand == "Genérico" and categoria == "Otros":
+                    clean_words = []
+                    for word in desc_words:
+                        word_clean = word.strip().strip(",.-/()").title()
+                        if len(word_clean) >= 3:
+                            clean_words.append(word_clean)
+                    if len(clean_words) >= 2:
+                        categoria = clean_words[0]
+                        brand = clean_words[1]
+                    elif len(clean_words) == 1:
+                        categoria = clean_words[0]
+                        brand = "Genérico"
+                else:
+                    # Fallback individual para marca si sigue siendo genérica
+                    if brand == "Genérico":
+                        for word in desc_words:
+                            word_clean = word.strip().strip(",.-/()").title()
+                            if len(word_clean) >= 3:
+                                is_cat_synonym = False
+                                for cat_val in categorias_dict.values():
+                                    if word_clean.lower() in cat_val.get("sinonimos", []):
+                                        is_cat_synonym = True
+                                        break
+                                if not is_cat_synonym:
+                                    brand = word_clean
+                                    break
+                                    
+                    # Fallback adaptativo para categoría si sigue siendo Otros
+                    if categoria == "Otros":
+                        for word in desc_words:
+                            word_clean = word.strip().strip(",.-/()").title()
+                            if len(word_clean) >= 3 and word_clean.lower() != brand.lower():
+                                categoria = word_clean
+                                break
+
                 if not desc:
                     desc = f"Electrodoméstico {brand}"
                     
