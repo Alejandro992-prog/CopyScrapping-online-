@@ -43,6 +43,9 @@
             <button class="nav-tab" data-tab="tab-merge" id="tab-btn-merge">
                 <span class="tab-icon">📊</span> Fusión & Comparador
             </button>
+            <button class="nav-tab" data-tab="tab-stock" id="tab-btn-stock">
+                <span class="tab-icon">📦</span> Matriz de Stock
+            </button>
             <button class="nav-tab" data-tab="tab-users" id="tab-users-btn" style="display: none;">
                 <span class="tab-icon">👥</span> Usuarios
             </button>
@@ -309,6 +312,133 @@
                             </thead>
                             <tbody id="merged-results-body">
                                 <!-- Dynamic body -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: STOCK MATRIX & COVERAGE -->
+            <section id="tab-stock" class="tab-content">
+                <div class="grid-2col" style="grid-template-columns: 1fr 3fr; gap: 20px;">
+                    <!-- Left Column: Load PDF and Category list -->
+                    <div class="card" style="display: flex; flex-direction: column; gap: 15px;">
+                        <h2 class="card-title">Carga de Inventario ERP</h2>
+                        <p class="card-subtitle">Sube el PDF valorado de stock de tu programa de gestión.</p>
+                        
+                        <div class="upload-zone" id="stock-upload-zone" style="padding: 20px 10px;">
+                            <span class="upload-icon">📄</span>
+                            <p style="font-size: 12px; margin: 5px 0;">Arrastra o haz clic para subir PDF de Stock</p>
+                            <input type="file" id="stock-upload-input" accept=".pdf" style="display: none;">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="stock-category-select">Categoría de Producto:</label>
+                            <select id="stock-category-select" class="form-select">
+                                <option value="">-- Sin datos --</option>
+                            </select>
+                        </div>
+                        
+                        <button id="btn-clear-stock" class="btn btn-danger btn-sm btn-block mt-10" style="width: 100%;">🗑️ Limpiar Inventario</button>
+                    </div>
+
+                    <!-- Right Column: KPIs & Visual Matrix -->
+                    <div class="card" style="min-height: 380px;">
+                        <div class="card-header-flex">
+                            <h2 class="card-title">Matriz de Cobertura y Segmentación</h2>
+                            <span class="badge" id="stock-coverage-pct-badge" style="background-color: var(--primary); padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px;">Cobertura: 0%</span>
+                        </div>
+                        
+                        <!-- KPIs -->
+                        <div class="grid-kpis mt-20" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                            <div class="kpi-card" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 12px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 500;">Valoración de Stock</div>
+                                <div id="kpi-stock-value" style="font-size: 20px; font-weight: bold; color: var(--success); margin-top: 4px;">0.00 €</div>
+                            </div>
+                            <div class="kpi-card" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 12px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 500;">Referencias Únicas</div>
+                                <div id="kpi-stock-refs" style="font-size: 20px; font-weight: bold; color: var(--primary); margin-top: 4px;">0</div>
+                            </div>
+                            <div class="kpi-card" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); padding: 12px; border-radius: 8px; text-align: center;">
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 500;">Total de Unidades</div>
+                                <div id="kpi-stock-qty" style="font-size: 20px; font-weight: bold; color: #f39c12; margin-top: 4px;">0</div>
+                            </div>
+                        </div>
+
+                        <!-- Matrix Container -->
+                        <div class="matrix-scroll-container mt-20" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.15);">
+                            <table id="stock-matrix-table" class="matrix-table" style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr id="matrix-headers">
+                                        <!-- Header labels generated dynamically -->
+                                    </tr>
+                                </thead>
+                                <tbody id="matrix-body">
+                                    <tr>
+                                        <td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-2col mt-20" style="grid-template-columns: 2fr 1fr; gap: 20px;">
+                    <!-- Details Card (Visible on clicking cell) -->
+                    <div class="card" id="stock-cell-details-card" style="display:none;">
+                        <h2 class="card-title" id="stock-details-title">Referencias en el Segmento</h2>
+                        <p class="card-subtitle">Productos en stock clasificados en este cruce de catálogo.</p>
+                        
+                        <div class="table-container mt-15" style="max-height: 250px; overflow-y: auto;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>SKU / Modelo</th>
+                                        <th>Marca</th>
+                                        <th>Descripción</th>
+                                        <th>Stock</th>
+                                        <th>Coste Unit.</th>
+                                        <th>Acción</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="stock-details-body">
+                                    <!-- Dynamic product list -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Supply/Purchase Recommendations -->
+                    <div class="card card-accent" id="stock-alerts-card">
+                        <h2 class="card-title">Huecos y Oportunidades de Compra</h2>
+                        <p class="card-subtitle">Alertas automáticas de falta de variedad o stock.</p>
+                        <div class="guide-steps mt-15" id="stock-alerts-list" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;">
+                            <div class="alert-box-info" style="margin: 0; padding: 15px;">
+                                Sube el PDF valorado de stock para calcular las oportunidades de compra.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Provider comparison popup/panel (integrated search) -->
+                <div class="card mt-20" id="stock-market-comp-card" style="display:none;">
+                    <div class="card-header-flex">
+                        <h2 class="card-title" id="stock-market-comp-title">Ofertas Disponibles en Proveedores (Mercado)</h2>
+                        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('stock-market-comp-card').style.display='none'">Cerrar</button>
+                    </div>
+                    <div class="table-container mt-15">
+                        <table id="stock-market-comp-table">
+                            <thead>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th>Modelo / SKU</th>
+                                    <th>Proveedor</th>
+                                    <th>Precio</th>
+                                    <th>Atributos</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stock-market-comp-body">
+                                <!-- Cross-referenced scraper results -->
                             </tbody>
                         </table>
                     </div>

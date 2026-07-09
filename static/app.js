@@ -89,6 +89,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadProviders();
             } else if (tab.dataset.tab === "tab-users") {
                 loadRegisteredUsers();
+            } else if (tab.dataset.tab === "tab-stock") {
+                loadStockMatrix();
             }
         });
     });
@@ -1236,7 +1238,372 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // ----------------------------------------------------
+    // 7. MATRIZ DE STOCK E INVENTARIO ERP
+    // ----------------------------------------------------
+    const stockUploadZone = document.getElementById("stock-upload-zone");
+    const stockUploadInput = document.getElementById("stock-upload-input");
+    const stockCategorySelect = document.getElementById("stock-category-select");
+    const btnClearStock = document.getElementById("btn-clear-stock");
+    const stockCoveragePctBadge = document.getElementById("stock-coverage-pct-badge");
+    
+    const kpiStockValue = document.getElementById("kpi-stock-value");
+    const kpiStockRefs = document.getElementById("kpi-stock-refs");
+    const kpiStockQty = document.getElementById("kpi-stock-qty");
+    
+    const stockMatrixTable = document.getElementById("stock-matrix-table");
+    const matrixHeaders = document.getElementById("matrix-headers");
+    const matrixBody = document.getElementById("matrix-body");
+    
+    const stockCellDetailsCard = document.getElementById("stock-cell-details-card");
+    const stockDetailsTitle = document.getElementById("stock-details-title");
+    const stockDetailsBody = document.getElementById("stock-details-body");
+    
+    const stockAlertsList = document.getElementById("stock-alerts-list");
+    const stockMarketCompCard = document.getElementById("stock-market-comp-card");
+    const stockMarketCompTitle = document.getElementById("stock-market-comp-title");
+    const stockMarketCompBody = document.getElementById("stock-market-comp-body");
+
+    let currentStockData = null;
+
+    if (stockUploadZone && stockUploadInput) {
+        stockUploadZone.addEventListener("click", () => {
+            stockUploadInput.click();
+        });
+
+        stockUploadInput.addEventListener("change", () => {
+            if (stockUploadInput.files.length > 0) {
+                uploadStockPdfFile(stockUploadInput.files[0]);
+            }
+        });
+
+        stockUploadZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            stockUploadZone.classList.add("dragover");
+        });
+
+        stockUploadZone.addEventListener("dragleave", () => {
+            stockUploadZone.classList.remove("dragover");
+        });
+
+        stockUploadZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            stockUploadZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length > 0) {
+                uploadStockPdfFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    async function uploadStockPdfFile(file) {
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        try {
+            const pText = stockUploadZone.querySelector("p");
+            const originalText = pText.textContent;
+            pText.textContent = "📄 Procesando inventario PDF...";
+            
+            const res = await fetch("/api/stock/upload", {
+                method: "POST",
+                body: formData
+            });
+            
+            if (res.ok) {
+                pText.textContent = "¡Inventario importado con éxito!";
+                setTimeout(() => {
+                    pText.textContent = originalText;
+                }, 4000);
+                loadStockMatrix();
+            } else {
+                const errData = await res.json();
+                alert(`Error al procesar PDF de Stock: ${errData.detail || "Formato no válido"}`);
+                pText.textContent = "Error al subir. Intenta de nuevo.";
+            }
+        } catch (err) {
+            console.error("Error subiendo PDF:", err);
+            alert("Error de conexión al cargar inventario.");
+        }
+    }
+
+    async function loadStockMatrix(selectedCategory = "") {
+        try {
+            const url = selectedCategory ? `/api/stock/matrix?category=${encodeURIComponent(selectedCategory)}` : "/api/stock/matrix";
+            const res = await fetch(url);
+            const data = await res.json();
+            currentStockData = data;
+            
+            // 1. Rellenar selector de categorías
+            stockCategorySelect.innerHTML = "";
+            if (data.categories && data.categories.length > 0) {
+                data.categories.forEach(cat => {
+                    const opt = document.createElement("option");
+                    opt.value = cat;
+                    opt.textContent = cat;
+                    if (cat === data.selected_category) {
+                        opt.selected = true;
+                    }
+                    stockCategorySelect.appendChild(opt);
+                });
+            } else {
+                stockCategorySelect.innerHTML = `<option value="">-- Sin datos --</option>`;
+            }
+
+            // 2. Pintar KPIs
+            kpiStockValue.textContent = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(data.kpis.total_value);
+            kpiStockRefs.textContent = data.kpis.total_references;
+            kpiStockQty.textContent = data.kpis.total_stock;
+            stockCoveragePctBadge.textContent = `Cobertura: ${data.kpis.coverage_pct}%`;
+
+            // 3. Pintar Alertas / Huecos de catálogo
+            stockAlertsList.innerHTML = "";
+            if (data.alerts && data.alerts.length > 0) {
+                data.alerts.forEach(alert => {
+                    const box = document.createElement("div");
+                    box.className = `alert-box-${alert.type === 'danger' ? 'error' : (alert.type === 'warning' ? 'warning' : 'info')}`;
+                    box.style.margin = "0";
+                    box.style.fontSize = "12px";
+                    box.textContent = alert.message;
+                    stockAlertsList.appendChild(box);
+                });
+            } else {
+                stockAlertsList.innerHTML = `<div class="alert-box-success" style="margin:0; font-size:12px;">¡Felicidades! Tienes cobertura del 100% en todos los segmentos.</div>`;
+            }
+
+            // Ocultar detalles previos
+            stockCellDetailsCard.style.display = "none";
+            stockMarketCompCard.style.display = "none";
+
+            // 4. Renderizar Matriz (Tabla)
+            if (!data.capacities || data.capacities.length === 0) {
+                matrixHeaders.innerHTML = "";
+                matrixBody.innerHTML = `<tr><td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td></tr>`;
+                return;
+            }
+
+            // Render Headers (Capacidades)
+            matrixHeaders.innerHTML = "<th>Gama / Capacidad</th>";
+            data.capacities.forEach(cap => {
+                const th = document.createElement("th");
+                th.textContent = cap;
+                matrixHeaders.appendChild(th);
+            });
+
+            // Render Rows (Rangos de precio)
+            matrixBody.innerHTML = "";
+            data.price_ranges.forEach(pr => {
+                const tr = document.createElement("tr");
+                
+                // Celda de etiqueta de la fila
+                const tdLabel = document.createElement("td");
+                tdLabel.className = "matrix-row-label";
+                tdLabel.textContent = pr.label;
+                tr.appendChild(tdLabel);
+                
+                // Celdas de cruce (capacidad)
+                data.capacities.forEach(cap => {
+                    const cellData = data.cells.find(c => c.capacity === cap && c.price_range === pr.label);
+                    const td = document.createElement("td");
+                    td.className = `matrix-cell-interactive matrix-cell-${cellData.status}`;
+                    
+                    td.innerHTML = `${cellData.count} <span class="matrix-stock-count">(${cellData.total_stock} uds)</span>`;
+                    
+                    td.addEventListener("click", () => {
+                        // Resaltar celda seleccionada
+                        document.querySelectorAll(".matrix-cell-interactive").forEach(c => c.classList.remove("selected-cell"));
+                        td.classList.add("selected-cell");
+                        showCellDetails(cellData);
+                    });
+                    
+                    tr.appendChild(td);
+                });
+                
+                matrixBody.appendChild(tr);
+            });
+
+        } catch (err) {
+            console.error("Error cargando matriz:", err);
+        }
+    }
+
+    function showCellDetails(cellData) {
+        stockCellDetailsCard.style.display = "block";
+        stockMarketCompCard.style.display = "none";
+        
+        stockDetailsTitle.textContent = `Referencias en '${cellData.capacity} - ${cellData.price_range}'`;
+        
+        stockDetailsBody.innerHTML = "";
+        if (!cellData.products || cellData.products.length === 0) {
+            stockDetailsBody.innerHTML = `<tr><td colspan="100%" class="table-empty">No hay productos en este segmento.</td></tr>`;
+            return;
+        }
+
+        cellData.products.forEach(p => {
+            const tr = document.createElement("tr");
+            
+            const tdSku = document.createElement("td");
+            tdSku.style.fontWeight = "bold";
+            tdSku.textContent = p.sku;
+            
+            const tdBrand = document.createElement("td");
+            tdBrand.textContent = p.brand;
+            
+            const tdDesc = document.createElement("td");
+            tdDesc.textContent = p.description;
+            
+            const tdStock = document.createElement("td");
+            tdStock.style.textAlign = "center";
+            tdStock.textContent = p.stock;
+            
+            const tdCost = document.createElement("td");
+            tdCost.style.textAlign = "center";
+            tdCost.textContent = `${p.cost.toFixed(2)} €`;
+            
+            const tdAction = document.createElement("td");
+            tdAction.style.textAlign = "center";
+            const btnSearch = document.createElement("button");
+            btnSearch.className = "btn btn-secondary btn-sm";
+            btnSearch.style.padding = "3px 8px";
+            btnSearch.style.fontSize = "11px";
+            btnSearch.textContent = "🔍 Mercado";
+            btnSearch.title = "Buscar precios de proveedores para este modelo";
+            btnSearch.onclick = () => searchMarketPrices(p.sku);
+            
+            tdAction.appendChild(btnSearch);
+            
+            tr.appendChild(tdSku);
+            tr.appendChild(tdBrand);
+            tr.appendChild(tdDesc);
+            tr.appendChild(tdStock);
+            tr.appendChild(tdCost);
+            tr.appendChild(tdAction);
+            
+            stockDetailsBody.appendChild(tr);
+        });
+        
+        stockCellDetailsCard.scrollIntoView({ behavior: "smooth" });
+    }
+
+    async function searchMarketPrices(sku) {
+        try {
+            const response = await fetch("/api/providers");
+            const config = await response.json();
+            const providers = config.providers || [];
+            
+            stockMarketCompCard.style.display = "block";
+            stockMarketCompTitle.textContent = `Ofertas del Mercado para el Modelo: ${sku}`;
+            stockMarketCompBody.innerHTML = `<tr><td colspan="5" class="table-empty">Buscando ofertas de proveedores en ficheros locales...</td></tr>`;
+            
+            let allOffers = [];
+            
+            for (const prov of providers) {
+                try {
+                    const res = await fetch(`/api/providers/${prov.id}/data`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        const matchedRecords = data.records.filter(r => {
+                            const modelVal = r.model || r.modelo || "";
+                            return normalizeModelKey(modelVal) === normalizeModelKey(sku);
+                        });
+                        
+                        matchedRecords.forEach(r => {
+                            let priceVal = "N/D";
+                            for (const [k, v] of Object.entries(r)) {
+                                if (k.toLowerCase().includes("price") || k.toLowerCase().includes("precio") || k.toLowerCase() === "pvp") {
+                                    if (v && v !== "No disponible") {
+                                        priceVal = v;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            allOffers.push({
+                                product: r.product || r.producto || "Electrodoméstico",
+                                model: r.model || r.modelo || sku,
+                                provider: prov.name,
+                                price: priceVal,
+                                attributes: r.attributes || r.atributos || ""
+                            });
+                        });
+                    }
+                } catch (e) {
+                    console.error(`Error buscando en proveedor ${prov.id}:`, e);
+                }
+            }
+            
+            stockMarketCompBody.innerHTML = "";
+            if (allOffers.length === 0) {
+                stockMarketCompBody.innerHTML = `<tr><td colspan="5" class="table-empty">No se encontraron ofertas de ningún proveedor para este modelo.</td></tr>`;
+                return;
+            }
+            
+            allOffers.forEach(o => {
+                const tr = document.createElement("tr");
+                
+                const tdProd = document.createElement("td");
+                tdProd.textContent = o.product;
+                
+                const tdModel = document.createElement("td");
+                tdModel.style.fontWeight = "bold";
+                tdModel.textContent = o.model;
+                
+                const tdProv = document.createElement("td");
+                tdProv.textContent = o.provider;
+                
+                const tdPrice = document.createElement("td");
+                tdPrice.style.fontWeight = "bold";
+                tdPrice.style.color = "var(--success)";
+                tdPrice.textContent = typeof o.price === 'number' ? `${o.price.toFixed(2)} €` : o.price;
+                
+                const tdAttrs = document.createElement("td");
+                tdAttrs.textContent = o.attributes;
+                
+                tr.appendChild(tdProd);
+                tr.appendChild(tdModel);
+                tr.appendChild(tdProv);
+                tr.appendChild(tdPrice);
+                tr.appendChild(tdAttrs);
+                
+                tr.style.cursor = "pointer";
+                tr.title = "Copia rápida de este modelo de competidor";
+                tr.addEventListener("click", () => {
+                    navigator.clipboard.writeText(`${o.product} ${o.model} ${o.price}`);
+                    alert(`Modelo copiado al portapapeles: ${o.model}`);
+                });
+
+                stockMarketCompBody.appendChild(tr);
+            });
+            
+            stockMarketCompCard.scrollIntoView({ behavior: "smooth" });
+        } catch (err) {
+            console.error("Error buscando precios de mercado:", err);
+        }
+    }
+
+    function normalizeModelKey(val) {
+        if (!val) return "";
+        return String(val).toLowerCase().replace(/[^a-z0-9]/g, "").trim();
+    }
+
+    stockCategorySelect.addEventListener("change", () => {
+        loadStockMatrix(stockCategorySelect.value);
+    });
+
+    btnClearStock.addEventListener("click", async () => {
+        if (confirm("¿Estás seguro de que deseas eliminar permanentemente el inventario de stock importado?")) {
+            try {
+                const res = await fetch("/api/stock/clear", { method: "POST" });
+                if (res.ok) {
+                    loadStockMatrix();
+                }
+            } catch (err) {
+                console.error("Error limpiando stock:", err);
+            }
+        }
+    });
+
     // Initialize Page
     initSSEConnection();
     loadStatus();
 });
+

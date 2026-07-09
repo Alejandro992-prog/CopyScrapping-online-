@@ -1555,6 +1555,404 @@ async def sse_stream():
                 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+# --- MÓDULO DE MATRIZ DE STOCK E INVENTARIO ERP ---
+
+def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
+    import pypdf
+    import re
+    products = []
+    
+    marcas_comunes = ["balay", "bosch", "siemens", "beko", "candy", "aeg", "zanussi", "electrolux", "lg", "samsung", "whirlpool", "indesit", "miele", "teka", "fagor"]
+    
+    try:
+        reader = pypdf.PdfReader(pdf_path)
+        for page in reader.pages:
+            text = page.extract_text()
+            if not text:
+                continue
+            
+            lines = text.split('\n')
+            for line in lines:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                    
+                # Saltar líneas de encabezados o metadatos de página
+                if any(t in line_str.lower() for t in ["total general", "subtotal", "valoracion", "valoración", "pagina", "página", "listado de stock"]):
+                    continue
+                
+                # 1. Buscar Modelo/SKU de electrodoméstico
+                model_match = re.search(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,15}\b', line_str.upper())
+                if not model_match:
+                    continue
+                    
+                model = model_match.group(0)
+                
+                # Clasificación de categoría basada en la línea completa
+                categoria = "Otros"
+                desc_lower = line_str.lower()
+                if any(w in desc_lower for w in ["lavadora", "washer"]):
+                    categoria = "Lavadoras"
+                elif any(w in desc_lower for w in ["secadora", "dryer"]):
+                    categoria = "Secadoras"
+                elif any(w in desc_lower for w in ["lavavajillas", "lavaplatos", "dishwasher"]):
+                    categoria = "Lavavajillas"
+                elif any(w in desc_lower for w in ["frigo", "refrigerador", "frigorifico", "frigorífico", "congelador", "freezer"]):
+                    categoria = "Frigoríficos"
+                elif any(w in desc_lower for w in ["horno", "oven"]):
+                    categoria = "Hornos"
+                elif any(w in desc_lower for w in ["placa", "vitro", "induccion", "inducción"]):
+                    categoria = "Vitrocerámicas"
+                
+                # Dividir la línea en tokens de texto limpios
+                tokens = line_str.split()
+                
+                # Variables para extraer
+                capacidad = "N/D"
+                brand = "Genérico"
+                candidate_numbers = []
+                desc_words = []
+                
+                # Detectar marca primero
+                for m in marcas_comunes:
+                    if m in desc_lower:
+                        brand = m.title()
+                        break
+                
+                # Procesar tokens de izquierda a derecha
+                i = 0
+                while i < len(tokens):
+                    token = tokens[i]
+                    token_upper = token.upper()
+                    
+                    # Si es el SKU, lo saltamos
+                    if token_upper == model:
+                        i += 1
+                        continue
+                        
+                    # Comprobar si es un atributo técnico autoadyacente (ej: "8KG", "1200RPM")
+                    # o si es un número seguido de una unidad (ej: "13" "cubiertos", "8" "kg")
+                    is_tech_spec = False
+                    
+                    # Caso 1: Unidad pegada (ej: "8KG", "1200RPM", "368L")
+                    unit_match = re.match(r'^(\d+[\.,]?\d*)(KG|RPM|L|W|V|HZ|DB)$', token_upper)
+                    if unit_match:
+                        val = unit_match.group(1)
+                        unit = unit_match.group(2)
+                        if unit == "KG" and categoria in ["Lavadoras", "Secadoras"]:
+                            capacidad = f"{val} kg"
+                        elif unit == "L" and categoria == "Frigoríficos":
+                            capacidad = f"{val} L"
+                        is_tech_spec = True
+                        
+                    # Caso 2: Unidad separada (ej: i es número, i+1 es unidad)
+                    elif i + 1 < len(tokens):
+                        next_token_lower = tokens[i+1].lower()
+                        # Si el token actual es un número
+                        if re.match(r'^\d+[\.,]?\d*$', token):
+                            if next_token_lower in ["kg", "kgs"]:
+                                if categoria in ["Lavadoras", "Secadoras"]:
+                                    capacidad = f"{token} kg"
+                                is_tech_spec = True
+                                i += 1 # Consumir unidad
+                            elif next_token_lower in ["l", "litros"]:
+                                if categoria == "Frigoríficos":
+                                    capacidad = f"{token} L"
+                                is_tech_spec = True
+                                i += 1
+                            elif next_token_lower in ["cubiertos", "servicios"]:
+                                if categoria == "Lavavajillas":
+                                    capacidad = f"{token} cubiertos"
+                                is_tech_spec = True
+                                i += 1
+                            elif next_token_lower in ["rpm"]:
+                                is_tech_spec = True
+                                i += 1
+                                
+                    if is_tech_spec:
+                        i += 1
+                        continue
+                        
+                    # Si no es atributo técnico, comprobar si es un número puro candidato a stock/coste
+                    number_match = re.match(r'^\d+(?:[\.,]\d+)?$', token)
+                    if number_match:
+                        try:
+                            val = float(token.replace(",", "."))
+                            candidate_numbers.append((token, val))
+                        except ValueError:
+                            pass
+                    else:
+                        # Si es palabra de descripción
+                        if token.lower() not in ["de", "con", "el", "la", "en", "para"]:
+                            desc_words.append(token)
+                            
+                    i += 1
+                
+                # Determinar stock y costo basados en los números candidatos encontrados
+                stock = 0
+                cost = 0.0
+                
+                if len(candidate_numbers) == 1:
+                    token, val = candidate_numbers[0]
+                    if val > 100:
+                        cost = val
+                        stock = 1
+                    else:
+                        stock = int(val)
+                elif len(candidate_numbers) >= 2:
+                    # En los listados de ERP, el stock y el coste suelen ser los últimos números
+                    c1_token, c1_val = candidate_numbers[-2]
+                    c2_token, c2_val = candidate_numbers[-1]
+                    
+                    # Heurística: el coste suele tener decimales o ser el valor mayor
+                    if "." in c2_token or "," in c2_token:
+                        cost = c2_val
+                        stock = int(c1_val)
+                    elif "." in c1_token or "," in c1_token:
+                        cost = c1_val
+                        stock = int(c2_val)
+                    else:
+                        if c1_val > c2_val:
+                            cost = c1_val
+                            stock = int(c2_val)
+                        else:
+                            cost = c2_val
+                            stock = int(c1_val)
+                            
+                desc = " ".join(desc_words)
+                desc = re.sub(r'\s+', ' ', desc).strip()
+                if not desc:
+                    desc = f"Electrodoméstico {brand}"
+                    
+                products.append({
+                    "sku": model,
+                    "brand": brand,
+                    "category": categoria,
+                    "description": desc,
+                    "capacity": capacidad,
+                    "stock": stock,
+                    "cost": cost
+                })
+    except Exception as e:
+        add_log("error", f"Error parseando PDF: {str(e)}")
+        
+    return products
+
+def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
+    inventory_file = os.path.join(DATA_DIR, "stock", "inventory.json")
+    if not os.path.exists(inventory_file):
+        return {
+            "categories": [],
+            "selected_category": category,
+            "price_ranges": [],
+            "capacities": [],
+            "cells": [],
+            "kpis": {"total_value": 0.0, "total_references": 0, "total_stock": 0, "coverage_pct": 0.0},
+            "alerts": []
+        }
+        
+    try:
+        with open(inventory_file, "r", encoding="utf-8") as f:
+            all_products = json.load(f)
+    except Exception:
+        all_products = []
+        
+    if not all_products:
+        return {
+            "categories": [],
+            "selected_category": category,
+            "price_ranges": [],
+            "capacities": [],
+            "cells": [],
+            "kpis": {"total_value": 0.0, "total_references": 0, "total_stock": 0, "coverage_pct": 0.0},
+            "alerts": []
+        }
+        
+    categories = sorted(list(set(p.get("category", "Otros") for p in all_products)))
+    if not category and categories:
+        category = categories[0]
+        
+    cat_products = [p for p in all_products if p.get("category") == category]
+    
+    price_ranges = []
+    if category in ["Lavadoras", "Secadoras"]:
+        price_ranges = [
+            {"label": "Gama Económica (<350€)", "min": 0, "max": 350},
+            {"label": "Gama Media (350€-550€)", "min": 350, "max": 550},
+            {"label": "Gama Premium (>550€)", "min": 550, "max": 999999}
+        ]
+    elif category == "Lavavajillas":
+        price_ranges = [
+            {"label": "Gama Económica (<300€)", "min": 0, "max": 300},
+            {"label": "Gama Media (300€-450€)", "min": 300, "max": 450},
+            {"label": "Gama Premium (>450€)", "min": 450, "max": 999999}
+        ]
+    elif category == "Frigoríficos":
+        price_ranges = [
+            {"label": "Gama Económica (<400€)", "min": 0, "max": 400},
+            {"label": "Gama Media (400€-700€)", "min": 400, "max": 700},
+            {"label": "Gama Premium (>700€)", "min": 700, "max": 999999}
+        ]
+    else:
+        price_ranges = [
+            {"label": "Gama Económica (<200€)", "min": 0, "max": 200},
+            {"label": "Gama Media (200€-400€)", "min": 200, "max": 400},
+            {"label": "Gama Premium (>400€)", "min": 400, "max": 999999}
+        ]
+        
+    capacities_set = set(p.get("capacity", "N/D") for p in cat_products)
+    
+    def sort_capacity(cap):
+        if cap == "N/D":
+            return (999, "")
+        match = re.search(r'(\d+[\.,]?\d*)', cap)
+        if match:
+            try:
+                return (0, float(match.group(1).replace(",", ".")))
+            except ValueError:
+                pass
+        return (100, cap)
+        
+    capacities = sorted(list(capacities_set), key=sort_capacity)
+    
+    cells = []
+    covered_cells_count = 0
+    total_cells_count = len(price_ranges) * len(capacities) if capacities else 0
+    
+    for cap in capacities:
+        for pr in price_ranges:
+            cell_products = [
+                p for p in cat_products 
+                if p.get("capacity") == cap and pr["min"] <= p.get("cost", 0.0) < pr["max"]
+            ]
+            
+            total_stock = sum(p.get("stock", 0) for p in cell_products)
+            count = len(cell_products)
+            
+            if count == 0:
+                status = "danger"
+            elif count == 1:
+                status = "warning"
+            else:
+                status = "success"
+                
+            if count > 0:
+                covered_cells_count += 1
+                
+            cells.append({
+                "capacity": cap,
+                "price_range": pr["label"],
+                "products": cell_products,
+                "count": count,
+                "total_stock": total_stock,
+                "status": status
+            })
+            
+    total_value = sum(p.get("cost", 0.0) * p.get("stock", 0) for p in cat_products)
+    total_references = len(cat_products)
+    total_stock = sum(p.get("stock", 0) for p in cat_products)
+    coverage_pct = (covered_cells_count / total_cells_count * 100) if total_cells_count > 0 else 0.0
+    
+    kpis = {
+        "total_value": round(total_value, 2),
+        "total_references": total_references,
+        "total_stock": total_stock,
+        "coverage_pct": round(coverage_pct, 1)
+    }
+    
+    alerts = []
+    for cap in capacities:
+        for pr in price_ranges:
+            cell_products = [
+                p for p in cat_products 
+                if p.get("capacity") == cap and pr["min"] <= p.get("cost", 0.0) < pr["max"]
+            ]
+            if not cell_products:
+                alerts.append({
+                    "type": "danger",
+                    "message": f"Falta cobertura: No tienes ningún producto en '{cap}' ({pr['label']})."
+                })
+            elif sum(p.get("stock", 0) for p in cell_products) == 0:
+                alerts.append({
+                    "type": "warning",
+                    "message": f"Sin stock: Tienes referencias pero no hay unidades disponibles en '{cap}' ({pr['label']})."
+                })
+            elif len(cell_products) == 1:
+                alerts.append({
+                    "type": "info",
+                    "message": f"Baja variedad: Solo tienes 1 referencia en '{cap}' ({pr['label']})."
+                })
+                
+    alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
+    alerts = alerts[:8]
+    
+    return {
+        "categories": categories,
+        "selected_category": category,
+        "price_ranges": price_ranges,
+        "capacities": capacities,
+        "cells": cells,
+        "kpis": kpis,
+        "alerts": alerts
+    }
+
+@app.post("/api/stock/upload")
+async def upload_stock_pdf(file: UploadFile = File(...)):
+    stock_dir = os.path.join(DATA_DIR, "stock")
+    os.makedirs(stock_dir, exist_ok=True)
+    
+    temp_pdf_path = os.path.join(stock_dir, "temp_inventory.pdf")
+    inventory_file = os.path.join(stock_dir, "inventory.json")
+    
+    try:
+        with open(temp_pdf_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+            
+        add_log("info", "PDF de stock subido. Iniciando extracción automática...")
+        extracted_products = parse_erp_pdf(temp_pdf_path)
+        
+        if not extracted_products:
+            raise HTTPException(status_code=400, detail="No se pudo extraer ningún producto del PDF. Comprueba el formato.")
+            
+        with open(inventory_file, "w", encoding="utf-8") as f:
+            json.dump(extracted_products, f, indent=2, ensure_ascii=False)
+            
+        # Eliminar archivo temporal
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+            
+        add_log("success", f"Inventario ERP importado con éxito: {len(extracted_products)} referencias encontradas.")
+        return {"status": "success", "count": len(extracted_products)}
+    except Exception as e:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        add_log("error", f"Error al procesar el PDF de inventario: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stock/matrix")
+async def get_stock_matrix(category: Optional[str] = None):
+    return get_stock_matrix_data(category)
+
+@app.get("/api/stock/raw")
+async def get_stock_raw():
+    inventory_file = os.path.join(DATA_DIR, "stock", "inventory.json")
+    if not os.path.exists(inventory_file):
+        return []
+    try:
+        with open(inventory_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+@app.post("/api/stock/clear")
+async def clear_stock_data():
+    inventory_file = os.path.join(DATA_DIR, "stock", "inventory.json")
+    if os.path.exists(inventory_file):
+        os.remove(inventory_file)
+        add_log("info", "Datos de inventario eliminados correctamente.")
+    return {"status": "success"}
+
 if __name__ == "__main__":
     import uvicorn
     import os

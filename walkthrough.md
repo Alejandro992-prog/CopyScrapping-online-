@@ -57,3 +57,8 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
     *   **Problema**: Al copiar bloques con múltiples productos, si la expresión regular entrenada era muy estricta (por ejemplo, con atributos técnicos no etiquetados como "9kg"), el motor de procesamiento extraía únicamente el producto que coincidía exactamente y omitía el resto, debido a que el extractor adaptativo solo servía como alternativa si no había ninguna coincidencia exacta en absoluto.
     *   **Solución**: Se optimizó la función `process_text` en [app.py](file:///c:/Users/aleja/OneDrive/Escritorio/Programacion%20programas%20etc/ideas%20Nuevos%20Proyectos/CopyScrapping%20%28online%29/app.py) para dividir el texto copiado. Ahora, las partes exactas se extraen usando la expresión regular, y todas las secciones de texto no coincidentes se envían automáticamente al extractor adaptativo inteligente. Esto garantiza que todos los productos del bloque copiado sean procesados y guardados de forma consolidada.
 
+*   **Matriz de Stock y Cobertura (ERP PDF)**:
+    *   **Funcionalidad**: Se creó una pestaña para que los compradores suban informes de stock en PDF de su ERP. El sistema analiza el texto del PDF, identifica los productos usando heurísticas basadas en tokens (aislando modelos, marcas, cantidades y precios), y calcula una matriz bidimensional (Capacidad vs Rango de Precios).
+    *   **Integración**: Al pulsar en cualquier celda de la matriz de inventario, se muestran las referencias internas. Se puede hacer clic en un botón "🔍 Mercado" en cada artículo para buscar en paralelo en todas las extracciones de competidores y ver qué proveedores tienen ofertas activas para ese mismo modelo, facilitando la toma de decisiones de compras.
+
+

@@ -987,3 +987,110 @@ tr:hover td {
     opacity: 1;
     transform: scale(1.2);
 }
+
+/* --- ESTILOS MATRIZ DE STOCK --- */
+.matrix-table {
+    width: 100%;
+    margin-top: 10px;
+    border-collapse: collapse;
+}
+
+.matrix-table th, .matrix-table td {
+    padding: 14px 12px;
+    text-align: center;
+    border: 1px solid var(--border-color);
+    font-size: 13px;
+    color: var(--text-main);
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+.matrix-table th {
+    background-color: #1e293b;
+    font-weight: 600;
+    color: #fff;
+}
+
+.matrix-table td.matrix-row-label {
+    background-color: #151c2c;
+    font-weight: 500;
+    text-align: left;
+    color: var(--text-muted);
+}
+
+.matrix-cell-interactive {
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 15px;
+    position: relative;
+}
+
+.matrix-cell-interactive:hover {
+    transform: scale(1.02);
+    filter: brightness(1.2);
+    z-index: 2;
+}
+
+.matrix-cell-interactive.selected-cell {
+    outline: 2px solid var(--primary);
+    box-shadow: 0 0 10px rgba(108, 92, 231, 0.4);
+    z-index: 3;
+}
+
+/* Colores de celda basados en cobertura */
+.matrix-cell-danger {
+    background-color: rgba(239, 68, 68, 0.12);
+    color: #f87171;
+}
+.matrix-cell-danger::after {
+    content: "🔴 Sin catálogo";
+    display: block;
+    font-size: 10px;
+    font-weight: normal;
+    color: #ef4444;
+    margin-top: 4px;
+}
+
+.matrix-cell-warning {
+    background-color: rgba(245, 158, 11, 0.12);
+    color: #fbbf24;
+}
+.matrix-cell-warning::after {
+    content: "🟡 1 opción";
+    display: block;
+    font-size: 10px;
+    font-weight: normal;
+    color: #f59e0b;
+    margin-top: 4px;
+}
+
+.matrix-cell-success {
+    background-color: rgba(16, 185, 129, 0.12);
+    color: #34d399;
+}
+.matrix-cell-success::after {
+    content: "🟢 Cubierto";
+    display: block;
+    font-size: 10px;
+    font-weight: normal;
+    color: #10b981;
+    margin-top: 4px;
+}
+
+/* Detalle de unidades en celda */
+.matrix-stock-count {
+    font-size: 10px;
+    font-weight: normal;
+    opacity: 0.8;
+    display: block;
+    margin-top: 2px;
+}
+
+/* KPIs de stock */
+.kpi-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.kpi-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
