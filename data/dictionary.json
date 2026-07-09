@@ -1,0 +1,80 @@
+{
+  "categorias": {
+    "Lavadoras": {
+      "sinonimos": ["lavadora", "washer", "lavar", "lavarropa", "lavadoras", "frontal", "superior"],
+      "atributos_clave": {
+        "capacidad": ["kg", "kilogramos", "kilos"],
+        "centrifugado": ["rpm", "revoluciones"]
+      }
+    },
+    "Secadoras": {
+      "sinonimos": ["secadora", "dryer", "secar", "secadoras", "condensacion", "bomba de calor"],
+      "atributos_clave": {
+        "capacidad": ["kg", "kilogramos", "kilos"]
+      }
+    },
+    "Lavavajillas": {
+      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "integrable"],
+      "atributos_clave": {
+        "servicios": ["cubiertos", "servicios", "cub"]
+      }
+    },
+    "Frigoríficos": {
+      "sinonimos": ["frigo", "frigorífico", "frigorifico", "refrigerador", "combi", "americano", "congelador", "cooler", "side by side", "freezer", "2 puertas", "monopuerta"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
+    "Hornos": {
+      "sinonimos": ["horno", "oven", "multifuncion", "pirolitico", "pirolítico"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros"],
+        "limpieza": ["pirolisis", "hidrolisis", "aquaclise"]
+      }
+    },
+    "Vitrocerámicas": {
+      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "placa", "induccion", "inducción", "encimera", "fuego", "fuegos"],
+      "atributos_clave": {
+        "zonas": ["zonas", "fuegos", "areas"]
+      }
+    },
+    "Campanas": {
+      "sinonimos": ["campana", "extractor", "extractora", "grupo filtrante", "decorativa"],
+      "atributos_clave": {
+        "extraccion": ["m3/h", "m3"]
+      }
+    },
+    "Microondas": {
+      "sinonimos": ["microondas", "micro", "grill"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"]
+      }
+    }
+  },
+  "marcas": {
+    "Balay": ["balay", "balai"],
+    "Bosch": ["bosch", "bosh"],
+    "Siemens": ["siemens", "siemen"],
+    "Beko": ["beko"],
+    "Candy": ["candy", "candi"],
+    "Samsung": ["samsung", "samsg"],
+    "LG": ["lg", "l.g."],
+    "Whirlpool": ["whirlpool", "whirpol", "whirlpol"],
+    "Miele": ["miele"],
+    "AEG": ["aeg"],
+    "Electrolux": ["electrolux", "electrolus"],
+    "Zanussi": ["zanussi", "zanusi"],
+    "Teka": ["teka", "teca"],
+    "Indesit": ["indesit"],
+    "Fagor": ["fagor"],
+    "Aspes": ["aspes"],
+    "Haier": ["haier"],
+    "Hisense": ["hisense", "hisen"],
+    "Svan": ["svan"],
+    "Corbero": ["corbero", "corberó"],
+    "Edesa": ["edesa"],
+    "Cecotec": ["cecotec"],
+    "Infiniton": ["infiniton", "infinito"]
+  }
+}
