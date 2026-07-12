@@ -1819,6 +1819,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
         elif '.' in s:
             if s.count('.') > 1:
                 s = s.replace('.', '')
+            else:
+                parts = s.split('.')
+                if len(parts) == 2 and len(parts[1]) == 3:
+                    s = s.replace('.', '')
         try:
             return float(s)
         except ValueError:

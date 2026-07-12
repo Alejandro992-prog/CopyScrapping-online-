@@ -1491,13 +1491,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 const c = cap.toLowerCase();
                 return activeFilters.some(filter => {
                     if (filter === "medidas") {
-                        return c.includes("x");
+                        return /\d+\s*[Xx]\s*\d+/.test(c);
                     } else if (filter === "kilos") {
-                        return c.includes("kg") || c.includes("kilos") || c.includes("k");
+                        return /(?:\b\d+\s*|\b)(?:kg|kilos|k)\b/.test(c);
                     } else if (filter === "litros") {
-                        return (c.includes("l") || c.includes("litros") || c.includes("lts")) && !c.includes("kg") && !c.includes("kilos") && !c.includes("x");
+                        return /(?:\b\d+\s*|\b)(?:l|litros|lts)\b/.test(c) && !/(?:\b\d+\s*|\b)(?:kg|kilos|k)\b/.test(c) && !/\d+\s*[Xx]\s*\d+/.test(c);
                     } else if (filter === "caracteristicas") {
-                        return !c.includes("x") && !c.includes("kg") && !c.includes("kilos") && !c.includes("l") && !c.includes("litros") && !c.includes("lts") && c !== "n/d";
+                        return !/\d+\s*[Xx]\s*\d+/.test(c) && !/(?:\b\d+\s*|\b)(?:kg|kilos|k)\b/.test(c) && !/(?:\b\d+\s*|\b)(?:l|litros|lts)\b/.test(c) && c !== "n/d";
                     }
                     return false;
                 });
