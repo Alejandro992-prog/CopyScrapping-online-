@@ -1640,6 +1640,9 @@ def check_category_prefix_rules(category_key: str, desc_lower: str) -> bool:
     first_word = first_word_match.group(1)
     
     # Mapeo de categorías con prefijos restrictivos obligatorios
+    # Prefijos válidos para la primera palabra de la descripción de cada categoría
+    _placa_prefixes = {"placa", "vitro", "vitroceramica", "vitrocerámica", "induccion", "inducción", "encimera", "fuego", "fuegos", "encastrable"}
+    _frigo_prefixes = {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"}
     category_to_prefixes = {
         "Lavadoras-Secadoras": {"lavasecadora", "lavasecadoras", "lavadora"},
         "Lavadoras": {"lavadora", "lavadoras"},
@@ -1649,17 +1652,23 @@ def check_category_prefix_rules(category_key: str, desc_lower: str) -> bool:
         "Lavavajillas 45cm": {"lavavajillas", "lavaplatos"},
         "Lavavajillas 60cm": {"lavavajillas", "lavaplatos"},
         "Campanas": {"campana", "extractor", "extractora"},
-        "Vitrocerámicas": {"placa", "vitro", "vitroceramica", "vitrocerámica", "induccion", "inducción", "encimera", "fuego", "fuegos"},
+        # Categoría genérica usada en el diccionario (entrada raíz antes de subclasificar)
+        "Vitrocerámicas": _placa_prefixes,
+        # Subcategorías de placa (ya subclasificadas)
+        "Inducción": _placa_prefixes,
+        "Vitrocerámica": _placa_prefixes,
+        "Placa de Gas": _placa_prefixes,
+        "Cristal Gas": _placa_prefixes,
         "Calentadores": {"termo", "calentador", "calentadores"},
         "Ventiladores": {"ventilador", "ventiladores"},
         "Fregaderos": {"fregadero", "fregaderos"},
         "Climatizadores": {"climatizador", "aire"},
-        "Frigoríficos": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
-        "Frigo Combi": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
-        "Frigo 2 puertas": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
-        "Frigo 1 puerta": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
-        "Frigos integrables": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
-        "Frigos americanos": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"}
+        "Frigoríficos": _frigo_prefixes,
+        "Frigo Combi": _frigo_prefixes,
+        "Frigo 2 puertas": _frigo_prefixes,
+        "Frigo 1 puerta": _frigo_prefixes,
+        "Frigos integrables": _frigo_prefixes,
+        "Frigos americanos": _frigo_prefixes
     }
     
     if category_key in category_to_prefixes:
@@ -1696,13 +1705,20 @@ def classify_refrigerator(description: str) -> str:
 def extract_product_color(desc: str) -> str:
     """Extrae el color de un producto a partir de su descripción."""
     d = desc.lower()
-    if any(k in d for k in ["inox", "inoxidable", "acero inoxidable", "stainless", "inox."]):
+    # Inox tiene prioridad máxima (puede convivir con otros materiales)
+    if any(k in d for k in ["inox", "inoxidable", "acero inoxidable", "stainless", "inox.", "acero"]):
         return "Inox"
+    # Blanco
     if any(k in d for k in ["blanco", "white", "blanc"]):
         return "Blanco"
-    if any(k in d for k in ["negro", "black", "noir"]):
+    # Negro: incluye terminaciones de cristal típicas en placas de inducción
+    if any(k in d for k in ["negro", "black", "noir", "terminacion cristal", "terminación cristal", "acabado cristal"]):
         return "Negro"
-    if any(k in d for k in ["titanio", "graphite", "grafito", "titanium"]):
+    # Negro por cristal en placa si viene sin otro color (común en inducción Balay/Bosch/Siemens)
+    if "cristal" in d and not any(k in d for k in ["gas", "blanco", "white", "inox", "titanio"]):
+        return "Negro"
+    # Titanio / Grafito
+    if any(k in d for k in ["titanio", "graphite", "grafito", "titanium", "gris", "silver", "plata"]):
         return "Titanio"
     return ""
 
@@ -1714,6 +1730,30 @@ def classify_lavavajillas(desc: str) -> str:
     if re.search(r'\b45\s*cm\b', d) or re.search(r'\b45\b', d):
         return "Lavavajillas 45cm"
     return "Lavavajillas 60cm"
+
+
+def classify_placa(desc: str) -> str:
+    """Clasifica una placa/encimera en: Inducción, Vitrocerámica, Cristal Gas o Placa de Gas."""
+    d = desc.lower()
+    # Prioridad 1: Inducción (keywords muy específicas)
+    if any(k in d for k in ["induccion", "inducción", "inducció", "inducc", "flex induction", "full induction",
+                             "flex induct", "vario induct", "powerinduct"]):
+        return "Inducción"
+    # Prioridad 2: Cristal Gas (gas con superficie de cristal/vidrio)
+    if any(k in d for k in ["cristal gas", "cristalgaz", "cristal gaz", "vidrio gas", "cristal-gas",
+                             "cristal y gas", "rci", "encimera cristal"]):
+        return "Cristal Gas"
+    # Prioridad 3: Gas genérico (butano, propano, gas natural, encimeras de gas)
+    if any(k in d for k in [" gas", "gas ", "butano", "propano", "natural gas", "gas natural",
+                             "encimera gas", "hornillo"]):
+        return "Placa de Gas"
+    # Prioridad 4: Vitrocerámica explícita
+    if any(k in d for k in ["vitro", "vitroceramica", "vitrocerámica", "ceramica", "cerámica",
+                             "halogen", "halogeno", "halógeno", "vitroelectrica"]):
+        return "Vitrocerámica"
+    # Default: si es una placa sin indicación de gas, asumimos vitrocerámica
+    return "Vitrocerámica"
+
 
 
 def map_to_known_width(w_val: float) -> float:
@@ -1971,6 +2011,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                     # Subcategoría Lavavajillas por ancho
                                     if categoria == "Lavavajillas":
                                         categoria = classify_lavavajillas(raw_description)
+                                    # Subcategoría Vitrocerámicas por tipo de tecnología
+                                    # También aplica si ya viene con categoría genérica o variantes ortográficas
+                                    if categoria in ("Vitrocerámicas", "Vitrocerámica", "Inducción", "Placa de Gas", "Cristal Gas"):
+                                        categoria = classify_placa(raw_description)
                                         
                                 # Unidades para capacidad
                                 cat_info = categorias_dict.get(categoria, {})
@@ -2140,6 +2184,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     # Subcategoría Lavavajillas por ancho
                     if categoria == "Lavavajillas":
                         categoria = classify_lavavajillas(line_str)
+                    # Subcategoría Vitrocerámicas por tipo de tecnología
+                    # También aplica si ya viene con categoría genérica o variantes ortográficas
+                    if categoria in ("Vitrocerámicas", "Vitrocerámica", "Inducción", "Placa de Gas", "Cristal Gas"):
+                        categoria = classify_placa(line_str)
                 
                 # Dividir la línea en tokens de texto limpios
                 tokens = line_str.split()
@@ -2534,17 +2582,35 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
     
     # Determinar límites de precio para gamas (Económica, Media, Premium)
     pr_limits = []
-    if category in ["Lavadoras", "Secadoras"]:
+    if category in ["Lavadoras", "Secadoras", "Lavadoras-Secadoras"]:
         pr_limits = [
             {"label": "Económica", "min": 0, "max": 350},
             {"label": "Media", "min": 350, "max": 550},
             {"label": "Premium", "min": 550, "max": 999999}
         ]
-    elif category == "Lavavajillas":
+    elif category in ["Lavavajillas", "Lavavajillas 60cm"]:
         pr_limits = [
             {"label": "Económica", "min": 0, "max": 300},
             {"label": "Media", "min": 300, "max": 450},
             {"label": "Premium", "min": 450, "max": 999999}
+        ]
+    elif category == "Lavavajillas 45cm":
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 250},
+            {"label": "Media", "min": 250, "max": 400},
+            {"label": "Premium", "min": 400, "max": 999999}
+        ]
+    elif category in ["Inducción", "Vitrocerámica", "Vitrocerámicas"]:
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 200},
+            {"label": "Media", "min": 200, "max": 400},
+            {"label": "Premium", "min": 400, "max": 999999}
+        ]
+    elif category in ["Placa de Gas", "Cristal Gas"]:
+        pr_limits = [
+            {"label": "Económica", "min": 0, "max": 150},
+            {"label": "Media", "min": 150, "max": 300},
+            {"label": "Premium", "min": 300, "max": 999999}
         ]
     elif category == "Frigoríficos" or (category and ("frigo" in category.lower() or "frigorific" in category.lower())):
         pr_limits = [
@@ -2900,7 +2966,7 @@ async def export_stock_xlsx(category: Optional[str] = None, color: Optional[str]
                 count = cell_data.get("count", 0)
                 cell_text = f"{count} ref / {total_stock} uds"
                 bg = SUCCESS_CLR if all_ok else (WARN_CLR if not none_ok else DANGER_CLR)
-                c = data_style(cell_text, row, col, bold=False, bg=row_bg, fg="111827", align='center')
+                c = data_style(cell_text, row, col, bold=False, bg=bg, fg="FFFFFF", align='center')
             else:
                 c = data_style("—", row, col, bg=row_bg, fg="9CA3AF", align='center')
     

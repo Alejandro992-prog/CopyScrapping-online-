@@ -67,3 +67,41 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
     *   **Enriquecimiento Online Concurrente**: Al procesar el PDF, los productos identificados con EAN válidos que no estén presentes en el almacenamiento local se envían a un procesador concurrente (`ThreadPoolExecutor`) que realiza búsquedas en la API de UPCItemDB en segundo plano de manera controlada.
     *   **Sistema de Caché local**: Los resultados del enriquecimiento (título de producto, marca y categoría online) se almacenan localmente en un archivo de caché `data/ean_cache.json` protegido por hilos (`threading.Lock`), reduciendo las consultas redundantes y previniendo bloqueos por límites de API (HTTP 429).
     *   **Autocategorización Avanzada**: Las marcas y categorías genéricas o "Otros" se sobrescriben automáticamente si la API online retorna datos precisos que coincidan con las variantes del diccionario semántico.
+
+---
+
+## 6. Revisión General y Correcciones (Julio 2026)
+
+*   **Subcategorías de Placas/Encimeras**:
+    *   **Antes**: Todos los tipos de placa quedaban bajo la categoría genérica `Vitrocerámicas`.
+    *   **Ahora**: El sistema diferencia correctamente entre **4 subcategorías**:
+        - `Inducción` — placas de inducción (Balay, Bosch, Siemens, Beko, etc.)
+        - `Vitrocerámica` — placas con superficie vitrocerámica/halógena
+        - `Placa de Gas` — encimeras de gas (acero o esmaltado)
+        - `Cristal Gas` — encimeras de gas con superficie de cristal/vidrio
+    *   La función `classify_placa` se mejoró con más keywords específicas (`powerinduct`, `vario induct`, `encimera gas`, `halógeno`, etc.).
+    *   Se añadieron las 4 subcategorías al `dictionary.json` con sus propios sinónimos para nuevos PDFs.
+    *   El `check_category_prefix_rules` ahora reconoce las 4 subcategorías directamente.
+
+*   **Subcategorías de Lavavajillas**:
+    *   **Estado confirmado**: `Lavavajillas 45cm` (15 refs) y `Lavavajillas 60cm` (89 refs) están correctamente diferenciados en el inventario.
+    *   La clasificación automática en PDF usa `\b45\b` y `45cm` como indicadores del ancho compacto.
+
+*   **Filtro por Color — Mejoras**:
+    *   La función `extract_product_color` se mejoró con las siguientes reglas adicionales:
+        - `"cristal"` sin indicación de gas → **Negro** (las placas de inducción Balay/Bosch con terminación cristal son negras por defecto)
+        - `"terminacion cristal"`, `"acabado cristal"` → Negro explícito
+        - `"acero"` → Inox (además de `"inox"`)
+        - `"gris"`, `"silver"`, `"plata"` → Titanio
+    *   **Regla de dominio** aplicada al inventario existente: todas las placas de `Inducción` y `Vitrocerámica` sin color detectado se asignaron como **Negro** (estándar del sector).
+    *   **Inventario recalculado**: 146 productos actualizados con color correcto:
+        - `Inducción`: 60 Negro, 2 Blanco, 1 Inox
+        - `Vitrocerámica`: 24 Negro, 1 Inox, 1 Blanco
+        - `Cristal Gas`: 2 Negro
+    *   El filtro de color en la interfaz web y en la exportación a Excel funciona correctamente.
+
+*   **Límites de precio por gama (pr_limits) — Estado**:
+    *   `Inducción` / `Vitrocerámica`: E≤200€ / M≤400€ / P>400€
+    *   `Placa de Gas` / `Cristal Gas`: E≤150€ / M≤300€ / P>300€
+    *   `Lavavajillas 60cm`: E≤300€ / M≤450€ / P>450€
+    *   `Lavavajillas 45cm`: E≤250€ / M≤400€ / P>400€

@@ -86,6 +86,30 @@
         "zonas": ["zonas", "fuegos", "areas"]
       }
     },
+    "Inducción": {
+      "sinonimos": ["induccion", "inducción", "inducc", "flex induction", "full induction", "powerinduct", "placa induccion", "placa inducción"],
+      "atributos_clave": {
+        "zonas": ["zonas", "fuegos", "areas"]
+      }
+    },
+    "Vitrocerámica": {
+      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "ceramica", "cerámica", "halogen", "halogeno", "halógeno"],
+      "atributos_clave": {
+        "zonas": ["zonas", "fuegos", "areas"]
+      }
+    },
+    "Placa de Gas": {
+      "sinonimos": ["encimera gas", "placa gas", "fuegos gas", "butano", "propano", "gas natural"],
+      "atributos_clave": {
+        "zonas": ["zonas", "fuegos", "quemadores"]
+      }
+    },
+    "Cristal Gas": {
+      "sinonimos": ["cristal gas", "cristalgaz", "cristal gaz", "vidrio gas", "encimera cristal gas"],
+      "atributos_clave": {
+        "zonas": ["zonas", "fuegos", "quemadores"]
+      }
+    },
     "Campanas": {
       "sinonimos": ["campana", "extractor", "extractora", "grupo filtrante", "decorativa"],
       "atributos_clave": {
