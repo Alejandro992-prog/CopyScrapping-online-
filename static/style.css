@@ -992,13 +992,15 @@ tr:hover td {
 .matrix-table {
     width: 100%;
     margin-top: 10px;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
 }
 
 .matrix-table th, .matrix-table td {
     padding: 14px 12px;
     text-align: center;
-    border: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
     font-size: 13px;
     color: var(--text-main);
     transition: background-color 0.2s, transform 0.1s;
@@ -1008,10 +1010,28 @@ tr:hover td {
     background-color: #1e293b;
     font-weight: 600;
     color: #fff;
+    border-top: 1px solid var(--border-color);
+}
+
+.matrix-table th:first-child {
+    border-left: 1px solid var(--border-color);
+    position: sticky;
+    left: 0;
+    z-index: 10;
+    background-color: #1e293b;
+    box-shadow: 2px 0 5px rgba(0, 0, 0, 0.3);
+}
+
+.matrix-table td:first-child {
+    border-left: 1px solid var(--border-color);
 }
 
 .matrix-table td.matrix-row-label {
+    position: sticky;
+    left: 0;
+    z-index: 9;
     background-color: #151c2c;
+    box-shadow: 2px 0 5px rgba(0, 0, 0, 0.3);
     font-weight: 500;
     text-align: left;
     color: var(--text-muted);

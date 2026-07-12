@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeProviderId = null;
     let savedProviders = [];
     let lastProcessedClipboard = "";
+    let currentStockData = null;
 
     // Cached DOM Elements
     const statusDot = document.getElementById("status-dot");
@@ -1244,7 +1245,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const stockUploadZone = document.getElementById("stock-upload-zone");
     const stockUploadInput = document.getElementById("stock-upload-input");
     const stockCategorySelect = document.getElementById("stock-category-select");
+    const stockColorSelect = document.getElementById("stock-color-select");
     const btnClearStock = document.getElementById("btn-clear-stock");
+    const btnExportStockXlsx = document.getElementById("btn-export-stock-xlsx");
     const stockCoveragePctBadge = document.getElementById("stock-coverage-pct-badge");
     
     const kpiStockValue = document.getElementById("kpi-stock-value");
@@ -1264,7 +1267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const stockMarketCompTitle = document.getElementById("stock-market-comp-title");
     const stockMarketCompBody = document.getElementById("stock-market-comp-body");
 
-    let currentStockData = null;
+    // currentStockData is declared at the top scope
 
     if (stockUploadZone && stockUploadInput) {
         stockUploadZone.addEventListener("click", () => {
@@ -1326,9 +1329,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function loadStockMatrix(selectedCategory = "") {
+    async function loadStockMatrix(selectedCategory = "", selectedColor = "") {
         try {
-            const url = selectedCategory ? `/api/stock/matrix?category=${encodeURIComponent(selectedCategory)}` : "/api/stock/matrix";
+            let url = "/api/stock/matrix";
+            const params = [];
+            if (selectedCategory) params.push(`category=${encodeURIComponent(selectedCategory)}`);
+            if (selectedColor) params.push(`color=${encodeURIComponent(selectedColor)}`);
+            if (params.length > 0) {
+                url += "?" + params.join("&");
+            }
             const res = await fetch(url);
             const data = await res.json();
             currentStockData = data;
@@ -1348,6 +1357,9 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 stockCategorySelect.innerHTML = `<option value="">-- Sin datos --</option>`;
             }
+
+            // 1.5 Rellenar selector de colores
+            populateColorSelect(data.colors_available || [], data.selected_color || "");
 
             // 2. Pintar KPIs
             kpiStockValue.textContent = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(data.kpis.total_value);
@@ -1375,16 +1387,6 @@ document.addEventListener("DOMContentLoaded", () => {
             stockMarketCompCard.style.display = "none";
 
             const stockBrandList = document.getElementById("stock-brand-breakdown-list");
-
-            // 4. Renderizar Matriz (Tabla)
-            if (!data.capacities || data.capacities.length === 0) {
-                matrixHeaders.innerHTML = "";
-                matrixBody.innerHTML = `<tr><td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td></tr>`;
-                if (stockBrandList) {
-                    stockBrandList.innerHTML = `<p style="font-size: 11px; color: var(--text-muted);">Sube el stock para ver la distribución.</p>`;
-                }
-                return;
-            }
 
             // 3.5 Pintar Distribución por Marca
             if (stockBrandList) {
@@ -1427,35 +1429,122 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
 
-            // Render Headers (Capacidades)
-            matrixHeaders.innerHTML = "<th>Marca / Capacidad</th>";
-            data.capacities.forEach(cap => {
-                const th = document.createElement("th");
-                th.textContent = cap;
-                matrixHeaders.appendChild(th);
-            });
+            // Llamar al renderizador de la matriz
+            renderStockMatrixTable();
 
-            // Render Rows (Marcas)
-            matrixBody.innerHTML = "";
-            data.brands.forEach(br => {
-                const tr = document.createElement("tr");
-                
-                // Celda de etiqueta de la fila
-                const tdLabel = document.createElement("td");
-                tdLabel.className = "matrix-row-label";
-                tdLabel.textContent = br;
-                tr.appendChild(tdLabel);
-                
-                // Celdas de cruce (capacidad)
-                data.capacities.forEach(cap => {
-                    const cellData = data.cells.find(c => c.capacity === cap && c.brand === br);
-                    const td = document.createElement("td");
-                    td.className = `matrix-cell-interactive`;
-                    
-                    if (cellData.count === 0) {
-                        td.style.background = "rgba(255,255,255,0.01)";
+        } catch (err) {
+            console.error("Error cargando matriz:", err);
+        }
+    }
+
+    function populateColorSelect(colors, selectedColor) {
+        if (!stockColorSelect) return;
+        const activeColor = selectedColor || stockColorSelect.value || "";
+        
+        stockColorSelect.innerHTML = "";
+        
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "-- Todos los colores --";
+        if (activeColor === "") {
+            defaultOpt.selected = true;
+        }
+        stockColorSelect.appendChild(defaultOpt);
+        
+        colors.forEach(col => {
+            if (!col) return;
+            const opt = document.createElement("option");
+            opt.value = col;
+            opt.textContent = col;
+            if (col === activeColor) {
+                opt.selected = true;
+            }
+            stockColorSelect.appendChild(opt);
+        });
+    }
+
+    function renderStockMatrixTable() {
+        const matrixHeaders = document.getElementById("matrix-headers");
+        const matrixBody = document.getElementById("matrix-body");
+        const stockBrandList = document.getElementById("stock-brand-breakdown-list");
+
+        if (!currentStockData || !currentStockData.capacities || currentStockData.capacities.length === 0) {
+            matrixHeaders.innerHTML = "";
+            matrixBody.innerHTML = `<tr><td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td></tr>`;
+            if (stockBrandList) {
+                stockBrandList.innerHTML = `<p style="font-size: 11px; color: var(--text-muted);">Sube el stock para ver la distribución.</p>`;
+            }
+            return;
+        }
+
+        // Obtener filtros
+        const filterInput = document.getElementById("matrix-col-filter");
+        const filterText = filterInput ? filterInput.value.trim().toLowerCase() : "";
+        const activeBtns = document.querySelectorAll(".matrix-quick-filter.active");
+        const activeFilters = Array.from(activeBtns).map(btn => btn.dataset.filter);
+
+        let filteredCapacities = [...currentStockData.capacities];
+
+        // Aplicar filtros rápidos acumulativos (si no está seleccionado 'all')
+        if (activeFilters.length > 0 && !activeFilters.includes("all")) {
+            filteredCapacities = filteredCapacities.filter(cap => {
+                const c = cap.toLowerCase();
+                return activeFilters.some(filter => {
+                    if (filter === "medidas") {
+                        return c.includes("x");
+                    } else if (filter === "kilos") {
+                        return c.includes("kg") || c.includes("kilos") || c.includes("k");
+                    } else if (filter === "litros") {
+                        return (c.includes("l") || c.includes("litros") || c.includes("lts")) && !c.includes("kg") && !c.includes("kilos") && !c.includes("x");
+                    } else if (filter === "caracteristicas") {
+                        return !c.includes("x") && !c.includes("kg") && !c.includes("kilos") && !c.includes("l") && !c.includes("litros") && !c.includes("lts") && c !== "n/d";
                     }
-                    
+                    return false;
+                });
+            });
+        }
+
+        // Aplicar filtro de texto
+        if (filterText) {
+            filteredCapacities = filteredCapacities.filter(cap => cap.toLowerCase().includes(filterText));
+        }
+
+        if (filteredCapacities.length === 0) {
+            matrixHeaders.innerHTML = "<th>Marca / Capacidad</th>";
+            matrixBody.innerHTML = `<tr><td colspan="100%" class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Ninguna columna coincide con los filtros aplicados.</td></tr>`;
+            return;
+        }
+
+        // Render Headers (Capacidades)
+        matrixHeaders.innerHTML = "<th>Marca / Capacidad</th>";
+        filteredCapacities.forEach(cap => {
+            const th = document.createElement("th");
+            th.textContent = cap;
+            matrixHeaders.appendChild(th);
+        });
+
+        // Render Rows (Marcas)
+        matrixBody.innerHTML = "";
+        currentStockData.brands.forEach(br => {
+            const tr = document.createElement("tr");
+            
+            // Celda de etiqueta de la fila (Marca)
+            const tdLabel = document.createElement("td");
+            tdLabel.className = "matrix-row-label";
+            tdLabel.textContent = br;
+            tr.appendChild(tdLabel);
+            
+            // Celdas de cruce (capacidad)
+            filteredCapacities.forEach(cap => {
+                const cellData = currentStockData.cells.find(c => c.capacity === cap && c.brand === br);
+                const td = document.createElement("td");
+                td.className = `matrix-cell-interactive`;
+                
+                if (!cellData || cellData.count === 0) {
+                    td.style.background = "rgba(255,255,255,0.01)";
+                }
+                
+                if (cellData) {
                     // Crear contenedor para los 3 badges de segmento (E, M, P)
                     const dotsContainer = document.createElement("div");
                     dotsContainer.className = "segment-dots-container";
@@ -1502,16 +1591,15 @@ document.addEventListener("DOMContentLoaded", () => {
                         td.classList.add("selected-cell");
                         showCellDetails(cellData);
                     });
-                    
-                    tr.appendChild(td);
-                });
+                } else {
+                    td.textContent = "—";
+                }
                 
-                matrixBody.appendChild(tr);
+                tr.appendChild(td);
             });
-
-        } catch (err) {
-            console.error("Error cargando matriz:", err);
-        }
+            
+            matrixBody.appendChild(tr);
+        });
     }
 
     function showCellDetails(cellData) {
@@ -1733,8 +1821,73 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     stockCategorySelect.addEventListener("change", () => {
-        loadStockMatrix(stockCategorySelect.value);
+        // Al cambiar de categoría, limpiar los filtros de la interfaz
+        const filterInput = document.getElementById("matrix-col-filter");
+        if (filterInput) filterInput.value = "";
+        document.querySelectorAll(".matrix-quick-filter").forEach(b => b.classList.remove("active"));
+        const allBtn = document.querySelector(".matrix-quick-filter[data-filter='all']");
+        if (allBtn) allBtn.classList.add("active");
+        
+        // Resetear selector de color
+        if (stockColorSelect) stockColorSelect.value = "";
+        
+        loadStockMatrix(stockCategorySelect.value, "");
     });
+
+    if (stockColorSelect) {
+        stockColorSelect.addEventListener("change", () => {
+            loadStockMatrix(stockCategorySelect.value, stockColorSelect.value);
+        });
+    }
+
+    if (btnExportStockXlsx) {
+        btnExportStockXlsx.addEventListener("click", () => {
+            const cat = stockCategorySelect.value || "";
+            const color = stockColorSelect ? stockColorSelect.value : "";
+            let url = `/api/stock/export/xlsx`;
+            const params = [];
+            if (cat) params.push(`category=${encodeURIComponent(cat)}`);
+            if (color) params.push(`color=${encodeURIComponent(color)}`);
+            if (params.length > 0) {
+                url += "?" + params.join("&");
+            }
+            window.open(url, "_blank");
+        });
+    }
+
+    // Filtros de columnas de la matriz
+    const matrixColFilterInput = document.getElementById("matrix-col-filter");
+    if (matrixColFilterInput) {
+        matrixColFilterInput.addEventListener("input", () => {
+            renderStockMatrixTable();
+        });
+    }
+
+    const quickFiltersContainer = document.getElementById("matrix-quick-filters");
+    if (quickFiltersContainer) {
+        quickFiltersContainer.addEventListener("click", (e) => {
+            const btn = e.target.closest(".matrix-quick-filter");
+            if (btn) {
+                const filterType = btn.dataset.filter;
+                if (filterType === "all") {
+                    document.querySelectorAll(".matrix-quick-filter").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                } else {
+                    const allBtn = document.querySelector(".matrix-quick-filter[data-filter='all']");
+                    if (allBtn) allBtn.classList.remove("active");
+                    
+                    btn.classList.toggle("active");
+                    
+                    // Si no queda ninguno activo, activar 'all'
+                    const activeFilters = document.querySelectorAll(".matrix-quick-filter.active");
+                    if (activeFilters.length === 0 && allBtn) {
+                        allBtn.classList.add("active");
+                    }
+                }
+                renderStockMatrixTable();
+            }
+        });
+    }
 
     btnClearStock.addEventListener("click", async () => {
         if (confirm("¿Estás seguro de que deseas eliminar permanentemente el inventario de stock importado?")) {

@@ -338,8 +338,16 @@
                                 <option value="">-- Sin datos --</option>
                             </select>
                         </div>
+
+                        <div class="form-group mt-10">
+                            <label for="stock-color-select">Filtrar por Color:</label>
+                            <select id="stock-color-select" class="form-select">
+                                <option value="">-- Todos los colores --</option>
+                            </select>
+                        </div>
                         
                         <button id="btn-clear-stock" class="btn btn-danger btn-sm btn-block mt-10" style="width: 100%;">🗑️ Limpiar Inventario</button>
+                        <button id="btn-export-stock-xlsx" class="btn btn-secondary btn-sm btn-block mt-10" style="width: 100%;">📥 Exportar a Excel</button>
                     </div>
 
                     <!-- Right Column: KPIs & Visual Matrix -->
@@ -374,20 +382,35 @@
                                     <p style="font-size: 11px; color: var(--text-muted);">Sube el stock para ver la distribución.</p>
                                 </div>
                             </div>
-                            <!-- Matrix Container -->
-                            <div class="matrix-scroll-container" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.15); padding: 15px;">
-                                <table id="stock-matrix-table" class="matrix-table" style="width: 100%; border-collapse: collapse;">
-                                    <thead>
-                                        <tr id="matrix-headers">
-                                            <!-- Header labels generated dynamically -->
-                                        </tr>
-                                    </thead>
-                                    <tbody id="matrix-body">
-                                        <tr>
-                                            <td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+                            <!-- Matrix Container with filter -->
+                            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+                                <div class="matrix-filter-container" style="display: flex; gap: 15px; align-items: center; justify-content: space-between; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span style="font-size: 12px; color: var(--text-muted); font-weight: 500;">Filtrar columnas:</span>
+                                        <input type="text" id="matrix-col-filter" placeholder="Buscar medida, kg... (ej. 60, kg)" style="padding: 6px 12px; background: #0f172a; border: 1px solid var(--border-color); border-radius: 4px; color: #fff; font-size: 12px; width: 220px;">
+                                    </div>
+                                    <div style="display: flex; gap: 6px;" id="matrix-quick-filters">
+                                        <button class="matrix-quick-filter btn btn-sm active" data-filter="all" style="padding: 4px 10px; font-size: 11px; min-width: 60px;">Todos</button>
+                                        <button class="matrix-quick-filter btn btn-sm" data-filter="medidas" style="padding: 4px 10px; font-size: 11px; min-width: 90px;">Medidas (X)</button>
+                                        <button class="matrix-quick-filter btn btn-sm" data-filter="kilos" style="padding: 4px 10px; font-size: 11px; min-width: 80px;">Kilos (kg)</button>
+                                        <button class="matrix-quick-filter btn btn-sm" data-filter="litros" style="padding: 4px 10px; font-size: 11px; min-width: 80px;">Litros (L)</button>
+                                        <button class="matrix-quick-filter btn btn-sm" data-filter="caracteristicas" style="padding: 4px 10px; font-size: 11px; min-width: 100px;">Características</button>
+                                    </div>
+                                </div>
+                                <div class="matrix-scroll-container" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.15); padding: 15px;">
+                                    <table id="stock-matrix-table" class="matrix-table" style="width: 100%; border-collapse: separate; border-spacing: 0;">
+                                        <thead>
+                                            <tr id="matrix-headers">
+                                                <!-- Header labels generated dynamically -->
+                                            </tr>
+                                        </thead>
+                                        <tbody id="matrix-body">
+                                            <tr>
+                                                <td class="table-empty" style="padding: 40px; text-align: center; color: var(--text-muted);">Sube el PDF valorado de tu almacén para generar la matriz de stock.</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     </div>

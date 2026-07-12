@@ -1568,10 +1568,261 @@ async def sse_stream():
 
 # --- MÓDULO DE MATRIZ DE STOCK E INVENTARIO ERP ---
 
+EAN_CACHE_FILE = os.path.join(DATA_DIR, "ean_cache.json")
+ean_cache_lock = threading.Lock()
+
+def load_ean_cache() -> Dict[str, Any]:
+    if not os.path.exists(EAN_CACHE_FILE):
+        return {}
+    try:
+        with open(EAN_CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_ean_cache(cache: Dict[str, Any]):
+    try:
+        with open(EAN_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        add_log("error", f"Error guardando cache EAN: {str(e)}")
+
+def query_ean_online(ean: str) -> Optional[Dict[str, Any]]:
+    if not ean or ean == "N/D" or len(ean) < 8:
+        return None
+        
+    with ean_cache_lock:
+        cache = load_ean_cache()
+        if ean in cache:
+            return cache[ean]
+        
+    import urllib.request
+    import urllib.error
+    import json
+    
+    url = f"https://api.upcitemdb.com/prod/trial/lookup?upc={ean}"
+    req = urllib.request.Request(
+        url, 
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data.get("code") == "OK" and data.get("items"):
+                item = data["items"][0]
+                result = {
+                    "title": item.get("title") or "",
+                    "brand": item.get("brand") or "",
+                    "category": item.get("category") or ""
+                }
+                with ean_cache_lock:
+                    cache = load_ean_cache()
+                    cache[ean] = result
+                    save_ean_cache(cache)
+                return result
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            add_log("warning", f"Límite de API de EAN alcanzado (HTTP 429) al buscar {ean}")
+        else:
+            add_log("warning", f"Error HTTP {e.code} buscando EAN {ean}")
+    except Exception as e:
+        add_log("warning", f"Error de red/timeout buscando EAN {ean}: {str(e)}")
+        
+    return None
+
+def check_category_prefix_rules(category_key: str, desc_lower: str) -> bool:
+    clean_desc = re.sub(r'^[0-9\s\.,\-/()]+', '', desc_lower).strip()
+    
+    # Obtener la primera palabra (delimitada por espacios o puntuación/guiones)
+    first_word_match = re.match(r'^([a-záéíóúñü]+)', clean_desc)
+    if not first_word_match:
+        return True
+    first_word = first_word_match.group(1)
+    
+    # Mapeo de categorías con prefijos restrictivos obligatorios
+    category_to_prefixes = {
+        "Lavadoras-Secadoras": {"lavasecadora", "lavasecadoras", "lavadora"},
+        "Lavadoras": {"lavadora", "lavadoras"},
+        "Microondas": {"microondas", "micro"},
+        "Hornos": {"horno", "hornos"},
+        "Secadoras": {"secadora", "secadoras"},
+        "Lavavajillas 45cm": {"lavavajillas", "lavaplatos"},
+        "Lavavajillas 60cm": {"lavavajillas", "lavaplatos"},
+        "Campanas": {"campana", "extractor", "extractora"},
+        "Vitrocerámicas": {"placa", "vitro", "vitroceramica", "vitrocerámica", "induccion", "inducción", "encimera", "fuego", "fuegos"},
+        "Calentadores": {"termo", "calentador", "calentadores"},
+        "Ventiladores": {"ventilador", "ventiladores"},
+        "Fregaderos": {"fregadero", "fregaderos"},
+        "Climatizadores": {"climatizador", "aire"},
+        "Frigoríficos": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
+        "Frigo Combi": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
+        "Frigo 2 puertas": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
+        "Frigo 1 puerta": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
+        "Frigos integrables": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"},
+        "Frigos americanos": {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"}
+    }
+    
+    if category_key in category_to_prefixes:
+        return first_word in category_to_prefixes[category_key]
+        
+    return True
+
+def classify_refrigerator(description: str) -> str:
+    desc_lower = description.lower()
+    
+    # 1. Integrables
+    if any(k in desc_lower for k in ["integrable", "integrables", "encastrable", "encastrables", "panelable", "panelables", "integrado", "integrados"]):
+        return "Frigos integrables"
+        
+    # 2. Americanos
+    if any(k in desc_lower for k in ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "multi-puerta", "french door"]):
+        return "Frigos americanos"
+        
+    # 3. 2 puertas
+    if any(k in desc_lower for k in ["2 puertas", "dos puertas", "2 ptas", "2-puertas", "2ptas"]):
+        return "Frigo 2 puertas"
+        
+    # 4. 1 puerta (incluye congeladores verticales y minibares)
+    if any(k in desc_lower for k in ["1 puerta", "una puerta", "monopuerta", "1 pta", "1-puerta", "1pta", "cooler", "table top", "table-top", "congelador", "congeladores", "freezer", "freezers", "minibar", "mini bar", "mini-bar"]):
+        return "Frigo 1 puerta"
+        
+    # 5. Combi
+    if any(k in desc_lower for k in ["combi", "combis"]):
+        return "Frigo Combi"
+        
+    return "Frigo Combi"
+
+
+def extract_product_color(desc: str) -> str:
+    """Extrae el color de un producto a partir de su descripción."""
+    d = desc.lower()
+    if any(k in d for k in ["inox", "inoxidable", "acero inoxidable", "stainless", "inox."]):
+        return "Inox"
+    if any(k in d for k in ["blanco", "white", "blanc"]):
+        return "Blanco"
+    if any(k in d for k in ["negro", "black", "noir"]):
+        return "Negro"
+    if any(k in d for k in ["titanio", "graphite", "grafito", "titanium"]):
+        return "Titanio"
+    return ""
+
+
+def classify_lavavajillas(desc: str) -> str:
+    """Clasifica un lavavajillas como 45cm o 60cm según su descripción."""
+    d = desc.lower()
+    # Patrones que indican 45cm
+    if re.search(r'\b45\s*cm\b', d) or re.search(r'\b45\b', d):
+        return "Lavavajillas 45cm"
+    return "Lavavajillas 60cm"
+
+
+def map_to_known_width(w_val: float) -> float:
+    known_widths = [55.0, 59.5, 60.0, 70.0]
+    best_w = known_widths[0]
+    min_diff = float('inf')
+    for kw in known_widths:
+        diff = abs(w_val - kw)
+        if diff < min_diff:
+            min_diff = diff
+            best_w = kw
+    return best_w
+
+def extract_frigo_medida(dim_text: str, is_americano: bool = False) -> str:
+    # Buscar tres números de dimensiones separados por X o x (ej: 177,5X56X55)
+    match = re.search(r'(?<![\d\.,])(\d+(?:[\.,]\d+)?)\s*[Xx]\s*(\d+(?:[\.,]\d+)?)\s*[Xx]\s*(\d+(?:[\.,]\d+)?)\b', dim_text)
+    if not match:
+        # Intentar también buscar dos números (por si acaso viene como 177,5x56)
+        match_2 = re.search(r'(?<![\d\.,])(\d+(?:[\.,]\d+)?)\s*[Xx]\s*(\d+(?:[\.,]\d+)?)\b', dim_text)
+        if match_2:
+            g1 = match_2.group(1)
+            g2 = match_2.group(2)
+            
+            # Reconstrucción de decimales si se cortó por un espacio antes del decimal (ej: '183, 5x59,5')
+            start_idx = match_2.start(1)
+            preceding_text = dim_text[:start_idx]
+            prec_match = re.search(r'(\d+)[\.,]\s*$', preceding_text)
+            if prec_match:
+                g1 = f"{prec_match.group(1)}.{g1}"
+                
+            alto = float(g1.replace(',', '.'))
+            ancho_val = float(g2.replace(',', '.'))
+            
+            if alto < 3.0:
+                alto *= 100
+            if alto >= 250.0:
+                alto /= 10
+            if ancho_val < 3.0:
+                ancho_val *= 100
+            if ancho_val >= 250.0:
+                ancho_val /= 10
+                
+            if is_americano:
+                ancho = ancho_val
+            else:
+                ancho = map_to_known_width(ancho_val)
+            alto_str = str(alto).replace('.0', '').replace('.', ',')
+            ancho_str = str(ancho).replace('.0', '').replace('.', ',')
+            return f"{alto_str}x{ancho_str}"
+        return "N/D"
+        
+    vals = [float(x.replace(',', '.')) for x in match.groups()]
+    # Escalar si vienen en metros (ej. 1.86 -> 186)
+    vals = [v * 100 if v < 3.0 else v for v in vals]
+    # Escalar si vienen en milímetros (ej. 1860 -> 186, 682 -> 68.2)
+    vals = [v / 10 if v >= 250.0 else v for v in vals]
+    
+    alto = max(vals)
+    remaining = vals.copy()
+    remaining.remove(alto)
+    
+    if is_americano:
+        ancho = max(remaining)
+    else:
+        known_widths = [55.0, 59.5, 60.0, 70.0]
+        best_val = remaining[0]
+        min_diff = float('inf')
+        best_mapped = known_widths[0]
+        for r_val in remaining:
+            for kw in known_widths:
+                diff = abs(r_val - kw)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_val = r_val
+                    best_mapped = kw
+        ancho = best_mapped
+        
+    alto_str = str(alto).replace('.0', '').replace('.', ',')
+    ancho_str = str(ancho).replace('.0', '').replace('.', ',')
+    return f"{alto_str}x{ancho_str}"
+
+
 def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     import pypdf
     import re
     products = []
+    
+    def clean_numeric_token(token: str) -> Optional[float]:
+        # Verificar que solo contiene dígitos, puntos, comas y opcionalmente signo
+        if not re.match(r'^\d[\d\.,]*$', token):
+            return None
+        s = token
+        if '.' in s and ',' in s:
+            if s.find('.') < s.find(','): # Formato europeo: 11.908,59
+                s = s.replace('.', '').replace(',', '.')
+            else: # Formato americano: 11,908.59
+                s = s.replace(',', '')
+        elif ',' in s:
+            if s.count(',') > 1:
+                s = s.replace(',', '')
+            else:
+                s = s.replace(',', '.')
+        elif '.' in s:
+            if s.count('.') > 1:
+                s = s.replace('.', '')
+        try:
+            return float(s)
+        except ValueError:
+            return None
     
     # Cargar diccionario semántico
     dct = load_dictionary()
@@ -1592,6 +1843,270 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 if not line_str:
                     continue
                     
+                # --- NUEVA LÓGICA PARA FORMATO TABULAR CON EURO (€) ---
+                if '\u20ac' in line_str or '€' in line_str:
+                    # Dividir la línea ignorando los caracteres de euro
+                    clean_line = line_str.replace('\u20ac', '').replace('€', '')
+                    tokens = clean_line.split()
+                    if len(tokens) >= 2:
+                        # 1. Identificar EAN/Código (token con >= 8 dígitos escaneando de derecha a izquierda)
+                        code_ean = ""
+                        ean_idx = -1
+                        for idx in range(len(tokens) - 1, -1, -1):
+                            tok = tokens[idx]
+                            digits_only = re.sub(r'\D', '', tok)
+                            if len(digits_only) >= 8:
+                                code_ean = tok
+                                ean_idx = idx
+                                break
+                                
+                        # Extraer código y ean
+                        if code_ean:
+                            code_ean_digits = re.sub(r'\D', '', code_ean)
+                            if len(code_ean_digits) >= 18:
+                                code = code_ean_digits[:5]
+                                ean = code_ean_digits[5:18]
+                            elif len(code_ean_digits) >= 13:
+                                ean = code_ean_digits[-13:]
+                                code = code_ean_digits[:-13]
+                            else:
+                                ean = "N/D"
+                                code = code_ean_digits
+                        else:
+                            ean = "N/D"
+                            code = "N/D"
+                            
+                        # Crear lista de tokens sin el token EAN/código
+                        remaining_tokens = tokens.copy()
+                        if ean_idx != -1:
+                            remaining_tokens.pop(ean_idx)
+                            
+                        if len(remaining_tokens) >= 1:
+                            # 2. Identificar Coste y Stock
+                            cost_val = None
+                            stock_val = 1
+                            desc_end_idx = len(remaining_tokens)
+                            
+                            last_token = remaining_tokens[-1]
+                            last_num = clean_numeric_token(last_token)
+                            
+                            if last_num is not None:
+                                if len(remaining_tokens) >= 2:
+                                    prev_token = remaining_tokens[-2]
+                                    prev_num = clean_numeric_token(prev_token)
+                                    
+                                    if prev_num is not None:
+                                        if len(remaining_tokens) >= 3:
+                                            third_token = remaining_tokens[-3]
+                                            third_digits = re.sub(r'\D', '', third_token)
+                                            if third_digits and len(third_digits) < 5:
+                                                stock_val = int(third_digits)
+                                                cost_val = prev_num
+                                                desc_end_idx = -3
+                                            else:
+                                                cost_val = prev_num
+                                                desc_end_idx = -2
+                                        else:
+                                            if last_num > prev_num:
+                                                cost_val = last_num
+                                                stock_val = int(prev_num) if prev_num > 0 else 1
+                                            else:
+                                                cost_val = prev_num
+                                                stock_val = int(last_num) if last_num > 0 else 1
+                                            desc_end_idx = -2
+                                    else:
+                                        cost_val = last_num
+                                        stock_digits = re.sub(r'\D', '', prev_token)
+                                        if stock_digits:
+                                            stock_val = int(stock_digits)
+                                            desc_end_idx = -2
+                                        else:
+                                            stock_val = 1
+                                            desc_end_idx = -1
+                                else:
+                                    cost_val = last_num
+                                    desc_end_idx = -1
+                                    
+                            if cost_val is not None:
+                                # Extraer descripción (todos los tokens antes del bloque de stock/coste/ean)
+                                desc_tokens = []
+                                for idx, tok in enumerate(tokens):
+                                    if idx == ean_idx:
+                                        continue
+                                    rem_idx = idx if (ean_idx == -1 or idx < ean_idx) else idx - 1
+                                    if rem_idx >= len(remaining_tokens) + desc_end_idx:
+                                        continue
+                                    desc_tokens.append(tok)
+                                    
+                                raw_description = " ".join(desc_tokens).strip()
+                                
+                                # Buscar marca
+                                brand = "Genérico"
+                                desc_lower = raw_description.lower()
+                                for brand_key, brand_variants in marcas_dict.items():
+                                    if any(re.search(rf'\b{re.escape(v)}\b', desc_lower) for v in brand_variants):
+                                        brand = brand_key
+                                        break
+                                        
+                                # Buscar categoría — prioridad especial para Lavadoras-Secadoras
+                                categoria = "Otros"
+                                desc_lower_cat = raw_description.lower()
+                                # Detectar lavasecadoras ANTES del bucle general
+                                if ("lavadora" in desc_lower_cat and "secadora" in desc_lower_cat) or any(s in desc_lower_cat for s in ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer"]):
+                                    categoria = "Lavadoras-Secadoras"
+                                else:
+                                    for cat_key, cat_val in categorias_dict.items():
+                                        if cat_key in ("Lavadoras-Secadoras", "Lavavajillas 45cm", "Lavavajillas 60cm"):
+                                            continue
+                                        if not check_category_prefix_rules(cat_key, desc_lower):
+                                            continue
+                                        sinonimos = cat_val.get("sinonimos", [])
+                                        if any(s in desc_lower for s in sinonimos):
+                                            categoria = cat_key
+                                            break
+                                    # Subcategoría Lavavajillas por ancho
+                                    if categoria == "Lavavajillas":
+                                        categoria = classify_lavavajillas(raw_description)
+                                        
+                                # Unidades para capacidad
+                                cat_info = categorias_dict.get(categoria, {})
+                                attrs_info = cat_info.get("atributos_clave", {})
+                                size_units = []
+                                for attr_name, units in attrs_info.items():
+                                    if attr_name in ["capacidad", "servicios", "extraccion", "zonas"]:
+                                        size_units.extend(units)
+                                if not size_units:
+                                    size_units = universal_units
+                                    
+                                # Intentar extraer dimensiones físicas si es categoría de frigoríficos
+                                is_frigo_category = "frigo" in categoria.lower() or "frigorífico" in categoria.lower() or "frigorico" in categoria.lower()
+                                capacidad = "N/D"
+                                if is_frigo_category:
+                                    is_americano = "americano" in categoria.lower()
+                                    capacidad = extract_frigo_medida(raw_description, is_americano)
+                                    
+                                desc_words = []
+                                
+                                i = 0
+                                while i < len(desc_tokens):
+                                    token = desc_tokens[i]
+                                    token_upper = token.upper()
+                                    is_tech_spec = False
+                                    
+                                    # Caso 1: Unidad pegada
+                                    unit_match = re.match(r'^(\d+[\.,]?\d*)([A-Z][A-Z0-9/]*)$', token_upper)
+                                    if unit_match:
+                                        val = unit_match.group(1)
+                                        unit = unit_match.group(2).lower()
+                                        if unit in size_units:
+                                            unit_label = "kg" if unit in ["kg", "kilogramos", "kilos"] else ("L" if unit in ["l", "litros", "lts"] else unit)
+                                            if not (is_frigo_category and capacidad != "N/D"):
+                                                capacidad = f"{val} {unit_label}"
+                                            is_tech_spec = True
+                                        elif any(unit in unit_list for unit_list in attrs_info.values()) or unit in ["w", "v", "hz", "db", "rpm"]:
+                                                is_tech_spec = True
+                                                
+                                    # Caso 2: Unidad separada
+                                    elif i + 1 < len(desc_tokens):
+                                        next_token_lower = desc_tokens[i+1].lower()
+                                        if re.match(r'^\d+[\.,]?\d*$', token):
+                                            if next_token_lower in size_units:
+                                                unit_label = "kg" if next_token_lower in ["kg", "kilogramos", "kilos"] else ("L" if next_token_lower in ["l", "litros", "lts"] else next_token_lower)
+                                                if not (is_frigo_category and capacidad != "N/D"):
+                                                    capacidad = f"{token} {unit_label}"
+                                                is_tech_spec = True
+                                                i += 1
+                                            elif any(next_token_lower in unit_list for unit_list in attrs_info.values()) or next_token_lower in ["w", "v", "hz", "db", "rpm"]:
+                                                is_tech_spec = True
+                                                i += 1
+                                                
+                                    if is_tech_spec:
+                                        i += 1
+                                        continue
+                                        
+                                    if token.lower() not in ["de", "con", "el", "la", "en", "para"]:
+                                        desc_words.append(token)
+                                    i += 1
+                                    
+                                # Fallback adaptativo para marca/categoría si son Genéricos/Otros
+                                if brand == "Genérico" and categoria == "Otros":
+                                    clean_words = []
+                                    for word in desc_words:
+                                        word_clean = word.strip().strip(",.-/()").title()
+                                        if len(word_clean) >= 3:
+                                            clean_words.append(word_clean)
+                                    if len(clean_words) >= 2:
+                                        categoria = clean_words[0]
+                                        brand = clean_words[1]
+                                    elif len(clean_words) == 1:
+                                        categoria = clean_words[0]
+                                        brand = "Genérico"
+                                else:
+                                    if brand == "Genérico":
+                                        for word in desc_words:
+                                            word_clean = word.strip().strip(",.-/()").title()
+                                            if len(word_clean) >= 3:
+                                                is_cat_synonym = False
+                                                for cat_val in categorias_dict.values():
+                                                    if word_clean.lower() in cat_val.get("sinonimos", []):
+                                                        is_cat_synonym = True
+                                                        break
+                                                if not is_cat_synonym:
+                                                    brand = word_clean
+                                                    break
+                                                    
+                                    if categoria == "Otros":
+                                        for word in desc_words:
+                                            word_clean = word.strip().strip(",.-/()").title()
+                                            if len(word_clean) >= 3 and word_clean.lower() != brand.lower():
+                                                categoria = word_clean
+                                                break
+                                                
+                                desc = " ".join(desc_words)
+                                desc = re.sub(r'\s+', ' ', desc).strip()
+                                if not desc:
+                                    desc = f"Electrodoméstico {brand}"
+                                    
+                                # Buscar SKU/Modelo en la descripción limpia o en los tokens de la descripción
+                                model_match = re.search(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{4,15}\b', raw_description.upper())
+                                if model_match:
+                                    model = model_match.group(0)
+                                else:
+                                    model = code
+
+                                # Asegurar que los frigoríficos se subdividen y clasifican por medida
+                                is_frigo = (
+                                    categoria == "Frigoríficos" or 
+                                    "frigo" in categoria.lower() or 
+                                    "frigorífico" in categoria.lower() or 
+                                    "frigorico" in categoria.lower() or
+                                    any(w in desc.lower() for w in ["congelador", "freezer", "combi"])
+                                )
+                                if is_frigo:
+                                    is_americano = "americano" in categoria.lower() or any(w in desc.lower() for w in ["americano", "americanos", "side by side", "multipuerta"])
+                                    medida = extract_frigo_medida(desc, is_americano)
+                                    if medida == "N/D":
+                                        medida = extract_frigo_medida(raw_description, is_americano)
+                                    
+                                    categoria = classify_refrigerator(desc)
+                                    if medida != "N/D":
+                                        capacidad = medida
+                                    
+                                color = extract_product_color(raw_description)
+                                products.append({
+                                    "sku": model,
+                                    "ean": ean,
+                                    "code": code,
+                                    "brand": brand,
+                                    "category": categoria,
+                                    "description": desc,
+                                    "capacity": capacidad,
+                                    "color": color,
+                                    "stock": stock_val,
+                                    "cost": cost_val
+                                })
+                        continue
+                        
                 # Saltar líneas de encabezados o metadatos de página
                 if any(t in line_str.lower() for t in ["total general", "subtotal", "valoracion", "valoración", "pagina", "página", "listado de stock"]):
                     continue
@@ -1603,20 +2118,37 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     
                 model = model_match.group(0)
                 
-                # Clasificación de categoría basada en el diccionario
-                categoria = "Otros"
+                # Clasificación de categoría basada en el diccionario — prioridad para Lavadoras-Secadoras
                 desc_lower = line_str.lower()
-                for cat_key, cat_val in categorias_dict.items():
-                    sinonimos = cat_val.get("sinonimos", [])
-                    if any(s in desc_lower for s in sinonimos):
-                        categoria = cat_key
-                        break
+                categoria = "Otros"
+                if ("lavadora" in desc_lower and "secadora" in desc_lower) or any(s in desc_lower for s in ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer"]):
+                    categoria = "Lavadoras-Secadoras"
+                else:
+                    for cat_key, cat_val in categorias_dict.items():
+                        if cat_key in ("Lavadoras-Secadoras", "Lavavajillas 45cm", "Lavavajillas 60cm"):
+                            continue
+                        if not check_category_prefix_rules(cat_key, desc_lower):
+                            continue
+                        sinonimos = cat_val.get("sinonimos", [])
+                        if any(s in desc_lower for s in sinonimos):
+                            categoria = cat_key
+                            break
+                    # Subcategoría Lavavajillas por ancho
+                    if categoria == "Lavavajillas":
+                        categoria = classify_lavavajillas(line_str)
                 
                 # Dividir la línea en tokens de texto limpios
                 tokens = line_str.split()
                 
                 # Variables para extraer
                 capacidad = "N/D"
+                
+                # Intentar extraer dimensiones físicas si es categoría de frigoríficos
+                is_frigo_category = "frigo" in categoria.lower() or "frigorífico" in categoria.lower() or "frigorico" in categoria.lower()
+                if is_frigo_category:
+                    is_americano = "americano" in categoria.lower()
+                    capacidad = extract_frigo_medida(line_str, is_americano)
+                
                 brand = "Genérico"
                 candidate_numbers = []
                 desc_words = []
@@ -1660,7 +2192,8 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         
                         if unit in size_units:
                             unit_label = "kg" if unit in ["kg", "kilogramos", "kilos"] else ("L" if unit in ["l", "litros", "lts"] else unit)
-                            capacidad = f"{val} {unit_label}"
+                            if not (is_frigo_category and capacidad != "N/D"):
+                                capacidad = f"{val} {unit_label}"
                             is_tech_spec = True
                         elif any(unit in unit_list for unit_list in attrs_info.values()) or unit in ["w", "v", "hz", "db", "rpm"]:
                             is_tech_spec = True
@@ -1671,7 +2204,8 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         if re.match(r'^\d+[\.,]?\d*$', token):
                             if next_token_lower in size_units:
                                 unit_label = "kg" if next_token_lower in ["kg", "kilogramos", "kilos"] else ("L" if next_token_lower in ["l", "litros", "lts"] else next_token_lower)
-                                capacidad = f"{token} {unit_label}"
+                                if not (is_frigo_category and capacidad != "N/D"):
+                                    capacidad = f"{token} {unit_label}"
                                 is_tech_spec = True
                                 i += 1 # Consumir unidad
                             elif any(next_token_lower in unit_list for unit_list in attrs_info.values()) or next_token_lower in ["w", "v", "hz", "db", "rpm"]:
@@ -1698,36 +2232,112 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     i += 1
                 
                 # Determinar stock y costo basados en los números candidatos encontrados
+                # Filtrar candidatos: eliminar códigos/EANs (ej: con 8+ dígitos o >= 100,000)
+                clean_candidates = []
+                ean_val = "N/D"
+                for c_tok, c_val in candidate_numbers:
+                    digits_only = re.sub(r'\D', '', c_tok)
+                    if len(digits_only) >= 8 or c_val >= 100000:
+                        if ean_val == "N/D" and len(digits_only) >= 8:
+                            ean_val = digits_only
+                        continue
+                    clean_candidates.append((c_tok, c_val))
+                    
+                # Determinar stock y costo basados en los candidatos limpios
                 stock = 0
                 cost = 0.0
                 
-                if len(candidate_numbers) == 1:
-                    token, val = candidate_numbers[0]
+                if len(clean_candidates) == 1:
+                    token, val = clean_candidates[0]
                     if val > 100:
                         cost = val
                         stock = 1
                     else:
                         stock = int(val)
-                elif len(candidate_numbers) >= 2:
-                    # En los listados de ERP, el stock y el coste suelen ser los últimos números
-                    c1_token, c1_val = candidate_numbers[-2]
-                    c2_token, c2_val = candidate_numbers[-1]
+                elif len(clean_candidates) == 2:
+                    c1_token, val1 = clean_candidates[0]
+                    c2_token, val2 = clean_candidates[1]
                     
-                    # Heurística: el coste suele tener decimales o ser el valor mayor
-                    if "." in c2_token or "," in c2_token:
-                        cost = c2_val
-                        stock = int(c1_val)
-                    elif "." in c1_token or "," in c1_token:
-                        cost = c1_val
-                        stock = int(c2_val)
-                    else:
-                        if c1_val > c2_val:
-                            cost = c1_val
-                            stock = int(c2_val)
+                    has_decimal1 = ("," in c1_token) or ("." in c1_token)
+                    has_decimal2 = ("," in c2_token) or ("." in c2_token)
+                    
+                    if has_decimal1 and not has_decimal2:
+                        cost = val1
+                        stock = int(val2)
+                    elif not has_decimal1 and has_decimal2:
+                        stock = int(val1)
+                        cost = val2
+                    elif has_decimal1 and has_decimal2:
+                        # Ambos tienen decimales (ej: Coste y Total). Calcular stock = Total / Coste
+                        if val1 > 0 and val2 > val1:
+                            cost = val1
+                            stock = int(round(val2 / val1))
+                        elif val2 > 0 and val1 > val2:
+                            cost = val2
+                            stock = int(round(val1 / val2))
                         else:
-                            cost = c2_val
-                            stock = int(c1_val)
-                            
+                            cost = val1
+                            stock = 1
+                    else:
+                        # Ninguno tiene decimales
+                        if val1 > val2:
+                            if val1 > 100:
+                                cost = val1
+                                stock = int(val2)
+                            else:
+                                stock = int(val1)
+                                cost = val2
+                        else:
+                            if val2 > 100:
+                                cost = val2
+                                stock = int(val1)
+                            else:
+                                stock = int(val2)
+                                cost = val1
+                elif len(clean_candidates) >= 3:
+                    # Intentar buscar trío Stock, Coste, Total
+                    c1_token, c1_val = clean_candidates[-3]
+                    c2_token, c2_val = clean_candidates[-2]
+                    c3_token, c3_val = clean_candidates[-1]
+                    
+                    if c1_val > 0 and c2_val > 0 and abs(c1_val * c2_val - c3_val) < max(5.0, c3_val * 0.02):
+                        stock = int(c1_val)
+                        cost = c2_val
+                    elif c1_val > 0 and c2_val > 0 and abs(c2_val * c1_val - c3_val) < max(5.0, c3_val * 0.02):
+                        stock = int(c2_val)
+                        cost = c1_val
+                    else:
+                        # Fallback a los últimos 2 usando la lógica de 2 candidatos
+                        val1 = c2_val
+                        val2 = c3_val
+                        c1_token = c2_token
+                        c2_token = c3_token
+                        has_decimal1 = ("," in c1_token) or ("." in c1_token)
+                        has_decimal2 = ("," in c2_token) or ("." in c2_token)
+                        if has_decimal1 and not has_decimal2:
+                            cost = val1
+                            stock = int(val2)
+                        elif not has_decimal1 and has_decimal2:
+                            stock = int(val1)
+                            cost = val2
+                        elif has_decimal1 and has_decimal2:
+                            if val1 > 0 and val2 > val1:
+                                cost = val1
+                                stock = int(round(val2 / val1))
+                            elif val2 > 0 and val1 > val2:
+                                cost = val2
+                                stock = int(round(val1 / val2))
+                            else:
+                                cost = val1
+                                stock = 1
+                        else:
+                            if val1 > val2:
+                                cost = val1
+                                stock = int(val2)
+                            else:
+                                cost = val2
+                                stock = int(val1)
+                                
                 desc = " ".join(desc_words)
                 desc = re.sub(r'\s+', ' ', desc).strip()
                 
@@ -1770,21 +2380,109 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 if not desc:
                     desc = f"Electrodoméstico {brand}"
                     
+                # Asegurar que los frigoríficos se subdividen y clasifican por medida
+                is_frigo = (
+                    categoria == "Frigoríficos" or 
+                    "frigo" in categoria.lower() or 
+                    "frigorífico" in categoria.lower() or 
+                    "frigorico" in categoria.lower() or
+                    any(w in desc.lower() for w in ["congelador", "freezer", "combi"])
+                )
+                if is_frigo:
+                    is_americano = "americano" in categoria.lower() or any(w in desc.lower() for w in ["americano", "americanos", "side by side", "multipuerta"])
+                    medida = extract_frigo_medida(desc, is_americano)
+                    if medida == "N/D":
+                        medida = extract_frigo_medida(line_str, is_americano)
+                    
+                    categoria = classify_refrigerator(desc)
+                    if medida != "N/D":
+                        capacidad = medida
+
+                color = extract_product_color(line_str)
                 products.append({
                     "sku": model,
+                    "ean": ean_val,
                     "brand": brand,
                     "category": categoria,
                     "description": desc,
                     "capacity": capacidad,
+                    "color": color,
                     "stock": stock,
                     "cost": cost
                 })
     except Exception as e:
         add_log("error", f"Error parseando PDF: {str(e)}")
         
+    # Enriquecer productos usando los EANs online de forma asíncrona/concurrente
+    valid_products = [p for p in products if p.get("ean") and p["ean"] != "N/D" and len(p["ean"]) >= 8]
+    if valid_products:
+        from concurrent.futures import ThreadPoolExecutor
+        cache = load_ean_cache()
+        to_lookup = [p["ean"] for p in valid_products if p["ean"] not in cache]
+        
+        # Limitar número de peticiones por subida para no saturar la API
+        max_lookups = 40
+        to_lookup = to_lookup[:max_lookups]
+        
+        if to_lookup:
+            add_log("info", f"Buscando {len(to_lookup)} EANs nuevos online (límite: {max_lookups})...")
+            try:
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    executor.map(query_ean_online, to_lookup)
+            except Exception as ex:
+                add_log("warning", f"Error en ejecución concurrente de EAN: {str(ex)}")
+                
+        # Aplicar resultados de la caché
+        cache = load_ean_cache()
+        for p in valid_products:
+            ean = p["ean"]
+            if ean in cache:
+                online_info = cache[ean]
+                online_brand = online_info.get("brand")
+                online_title = online_info.get("title")
+                online_cat = online_info.get("category")
+                
+                # Enriquecer Marca si es genérica
+                if (p.get("brand") == "Genérico" or not p.get("brand")) and online_brand:
+                    matched_brand = None
+                    for b_key, b_variants in marcas_dict.items():
+                        if any(v == online_brand.lower() for v in b_variants):
+                            matched_brand = b_key
+                            break
+                    if matched_brand:
+                        p["brand"] = matched_brand
+                    else:
+                        p["brand"] = online_brand.strip().title()
+                        
+                # Enriquecer Categoría si es Otros
+                if p.get("category") == "Otros" or not p.get("category"):
+                    search_text = f"{online_title} {online_cat}".lower()
+                    for cat_key, cat_val in categorias_dict.items():
+                        sinonimos = cat_val.get("sinonimos", [])
+                        if any(s in search_text for s in sinonimos):
+                            p["category"] = cat_key
+                            break
+                            
+                # Si ahora es frigorífico, asegurar subdivisión y medida
+                cat_current = p.get("category", "")
+                desc_current = p.get("description", "")
+                is_frigo = (
+                    cat_current == "Frigoríficos" or 
+                    "frigo" in cat_current.lower() or 
+                    "frigorífico" in cat_current.lower() or 
+                    "frigorico" in cat_current.lower() or
+                    any(w in desc_current.lower() for w in ["congelador", "freezer", "combi"])
+                )
+                if is_frigo:
+                    is_americano = "americano" in cat_current.lower() or any(w in desc_current.lower() for w in ["americano", "americanos", "side by side", "multipuerta"])
+                    medida = extract_frigo_medida(desc_current, is_americano)
+                    p["category"] = classify_refrigerator(desc_current)
+                    if medida != "N/D":
+                        p["capacity"] = medida
+                            
     return products
 
-def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
+def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -> Dict[str, Any]:
     inventory_file = os.path.join(DATA_DIR, "stock", "inventory.json")
     if not os.path.exists(inventory_file):
         return {
@@ -1822,6 +2520,14 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
         
     cat_products = [p for p in all_products if p.get("category") == category]
     
+    # Aplicar filtro de color si se especifica
+    if color_filter:
+        cat_products = [p for p in cat_products if p.get("color", "") == color_filter]
+    
+    # Obtener colores disponibles en la categoría (antes de filtrar)
+    all_cat_products = [p for p in all_products if p.get("category") == category]
+    colors_available = sorted(list(set(p.get("color", "") for p in all_cat_products if p.get("color"))))
+    
     # Determinar límites de precio para gamas (Económica, Media, Premium)
     pr_limits = []
     if category in ["Lavadoras", "Secadoras"]:
@@ -1836,7 +2542,7 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
             {"label": "Media", "min": 300, "max": 450},
             {"label": "Premium", "min": 450, "max": 999999}
         ]
-    elif category == "Frigoríficos":
+    elif category == "Frigoríficos" or (category and ("frigo" in category.lower() or "frigorific" in category.lower())):
         pr_limits = [
             {"label": "Económica", "min": 0, "max": 400},
             {"label": "Media", "min": 400, "max": 700},
@@ -1859,14 +2565,38 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     
     def sort_capacity(cap):
         if cap == "N/D":
-            return (999, "")
+            return (999, 0.0, 0.0, 0.0, "")
+        
+        # Si es dimensión de frigorífico de 2 componentes (ej: 177,5x56)
+        dim_match_2 = re.match(r'^(\d+(?:[\.,]\d+)?)[Xx](\d+(?:[\.,]\d+)?)$', cap)
+        if dim_match_2:
+            try:
+                h = float(dim_match_2.group(1).replace(",", "."))
+                w = float(dim_match_2.group(2).replace(",", "."))
+                return (0, h, w, 0.0, "")
+            except ValueError:
+                pass
+        
+        # Si es dimensión de frigorífico completa HxWxD (ej: 203X60X65)
+        dim_match_3 = re.match(r'^(\d+(?:[\.,]\d+)?)[Xx](\d+(?:[\.,]\d+)?)[Xx](\d+(?:[\.,]\d+)?)$', cap)
+        if dim_match_3:
+            try:
+                h = float(dim_match_3.group(1).replace(",", "."))
+                w = float(dim_match_3.group(2).replace(",", "."))
+                d = float(dim_match_3.group(3).replace(",", "."))
+                return (0, h, w, d, "")
+            except ValueError:
+                pass
+                
+        # Fallback estándar para otros valores numéricos (ej: 8 kg)
         match = re.search(r'(\d+[\.,]?\d*)', cap)
         if match:
             try:
-                return (0, float(match.group(1).replace(",", ".")))
+                val = float(match.group(1).replace(",", "."))
+                return (1, val, 0.0, 0.0, "")
             except ValueError:
                 pass
-        return (100, cap)
+        return (100, 0.0, 0.0, 0.0, cap)
         
     capacities = sorted(list(capacities_set), key=sort_capacity)
     
@@ -1983,6 +2713,8 @@ def get_stock_matrix_data(category: str = "Lavadoras") -> Dict[str, Any]:
     return {
         "categories": categories,
         "selected_category": category,
+        "selected_color": color_filter,
+        "colors_available": colors_available,
         "brands": brands_in_cat,
         "brands_dist": brands_list,
         "capacities": capacities,
@@ -2026,8 +2758,214 @@ async def upload_stock_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/stock/matrix")
-async def get_stock_matrix(category: Optional[str] = None):
-    return get_stock_matrix_data(category)
+async def get_stock_matrix(category: Optional[str] = None, color: Optional[str] = None):
+    return get_stock_matrix_data(category, color_filter=color or "")
+
+
+@app.get("/api/stock/export/xlsx")
+async def export_stock_xlsx(category: Optional[str] = None, color: Optional[str] = None):
+    """Genera y devuelve un informe Excel profesional de la categoría de stock seleccionada."""
+    import io
+    import openpyxl
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side, GradientFill
+    from openpyxl.utils import get_column_letter
+    
+    data = get_stock_matrix_data(category or "Lavadoras", color_filter=color or "")
+    
+    wb = Workbook()
+    ws = wb.active
+    cat_label = data.get("selected_category", "Stock")
+    ws.title = cat_label[:31]
+    
+    # ── Estilos ──────────────────────────────────────────────────────────────
+    PURPLE      = "7C3AED"
+    PURPLE_SOFT = "EDE9FE"
+    DARK_ROW    = "1E1B4B"
+    ALT_ROW     = "F5F3FF"
+    WHITE       = "FFFFFF"
+    GRAY_BORDER = "D1D5DB"
+    SUCCESS_CLR = "059669"
+    WARN_CLR    = "D97706"
+    DANGER_CLR  = "DC2626"
+    
+    border_thin = Border(
+        left=Side(style='thin', color=GRAY_BORDER),
+        right=Side(style='thin', color=GRAY_BORDER),
+        top=Side(style='thin', color=GRAY_BORDER),
+        bottom=Side(style='thin', color=GRAY_BORDER)
+    )
+    
+    def hdr_style(text, row, col, bold=True, bg=PURPLE, fg=WHITE, size=11):
+        cell = ws.cell(row=row, column=col, value=text)
+        cell.font = Font(bold=bold, color=fg, size=size, name='Calibri')
+        cell.fill = PatternFill("solid", fgColor=bg)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = border_thin
+        return cell
+    
+    def data_style(text, row, col, bold=False, bg=WHITE, fg="111827", align='left'):
+        cell = ws.cell(row=row, column=col, value=text)
+        cell.font = Font(bold=bold, color=fg, size=10, name='Calibri')
+        cell.fill = PatternFill("solid", fgColor=bg)
+        cell.alignment = Alignment(horizontal=align, vertical='center', wrap_text=False)
+        cell.border = border_thin
+        return cell
+    
+    # ── Título del informe ───────────────────────────────────────────────────
+    color_suffix = f" — Color: {color}" if color else ""
+    title_text = f"Informe de Stock: {cat_label}{color_suffix}"
+    date_text = datetime.now().strftime("%d/%m/%Y %H:%M")
+    
+    ws.merge_cells('A1:G1')
+    title_cell = ws['A1']
+    title_cell.value = title_text
+    title_cell.font = Font(bold=True, color=WHITE, size=16, name='Calibri')
+    title_cell.fill = PatternFill("solid", fgColor=PURPLE)
+    title_cell.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[1].height = 40
+    
+    ws.merge_cells('H1:J1')
+    date_cell = ws['H1']
+    date_cell.value = f"Generado: {date_text}"
+    date_cell.font = Font(bold=False, color=WHITE, size=10, name='Calibri')
+    date_cell.fill = PatternFill("solid", fgColor=PURPLE)
+    date_cell.alignment = Alignment(horizontal='right', vertical='center')
+    
+    # ── KPIs ─────────────────────────────────────────────────────────────────
+    kpis = data.get("kpis", {})
+    kpi_labels = ["Valoración de Stock", "Referencias Únicas", "Total Unidades", "Cobertura"]
+    kpi_values = [
+        f"{kpis.get('total_value', 0):,.2f} €",
+        str(kpis.get('total_references', 0)),
+        str(kpis.get('total_stock', 0)),
+        f"{kpis.get('coverage_pct', 0)}%"
+    ]
+    ws.merge_cells('A2:J2')  # spacer
+    ws['A2'].fill = PatternFill("solid", fgColor=PURPLE_SOFT)
+    ws.row_dimensions[2].height = 10
+    
+    for i, (lbl, val) in enumerate(zip(kpi_labels, kpi_values)):
+        col_start = i * 2 + 1
+        ws.merge_cells(start_row=3, start_column=col_start, end_row=3, end_column=col_start + 1)
+        ws.merge_cells(start_row=4, start_column=col_start, end_row=4, end_column=col_start + 1)
+        kpi_lbl_cell = ws.cell(row=3, column=col_start, value=lbl)
+        kpi_lbl_cell.font = Font(bold=False, color="6B7280", size=9, name='Calibri')
+        kpi_lbl_cell.fill = PatternFill("solid", fgColor=PURPLE_SOFT)
+        kpi_lbl_cell.alignment = Alignment(horizontal='center', vertical='center')
+        ws.row_dimensions[3].height = 18
+        kpi_val_cell = ws.cell(row=4, column=col_start, value=val)
+        kpi_val_cell.font = Font(bold=True, color=PURPLE, size=13, name='Calibri')
+        kpi_val_cell.fill = PatternFill("solid", fgColor=PURPLE_SOFT)
+        kpi_val_cell.alignment = Alignment(horizontal='center', vertical='center')
+        ws.row_dimensions[4].height = 26
+    
+    # ── Hoja de la Matriz ────────────────────────────────────────────────────
+    MATRIX_START_ROW = 7
+    capacities = data.get("capacities", [])
+    brands = data.get("brands", [])
+    
+    # Cabecera de la tabla
+    hdr_style("Marca \\ Capacidad", MATRIX_START_ROW, 1, size=10)
+    ws.column_dimensions['A'].width = 22
+    for ci, cap in enumerate(capacities):
+        col = ci + 2
+        hdr_style(cap, MATRIX_START_ROW, col, size=9)
+        col_letter = get_column_letter(col)
+        ws.column_dimensions[col_letter].width = max(10, len(cap) + 2)
+    ws.row_dimensions[MATRIX_START_ROW].height = 30
+    
+    # Filas de marcas
+    cells_lookup = {(c["brand"], c["capacity"]): c for c in data.get("cells", [])}
+    for ri, brand in enumerate(brands):
+        row = MATRIX_START_ROW + 1 + ri
+        row_bg = ALT_ROW if ri % 2 == 0 else WHITE
+        data_style(brand, row, 1, bold=True, bg=row_bg, fg="111827", align='left')
+        ws.row_dimensions[row].height = 20
+        for ci, cap in enumerate(capacities):
+            col = ci + 2
+            cell_data = cells_lookup.get((brand, cap))
+            if cell_data and cell_data.get("count", 0) > 0:
+                segs = cell_data.get("segments", {})
+                e_ok = segs.get("E", {}).get("count", 0) > 0
+                m_ok = segs.get("M", {}).get("count", 0) > 0
+                p_ok = segs.get("P", {}).get("count", 0) > 0
+                all_ok = e_ok and m_ok and p_ok
+                none_ok = not e_ok and not m_ok and not p_ok
+                total_stock = cell_data.get("total_stock", 0)
+                count = cell_data.get("count", 0)
+                cell_text = f"{count} ref / {total_stock} uds"
+                bg = SUCCESS_CLR if all_ok else (WARN_CLR if not none_ok else DANGER_CLR)
+                c = data_style(cell_text, row, col, bold=False, bg=row_bg, fg="111827", align='center')
+            else:
+                c = data_style("—", row, col, bg=row_bg, fg="9CA3AF", align='center')
+    
+    # ── Hoja de detalle de productos ─────────────────────────────────────────
+    ws2 = wb.create_sheet(title="Detalle Productos")
+    detail_headers = ["SKU/Modelo", "Marca", "Categoría", "Descripción", "Capacidad", "Color", "Stock", "Coste Unit. (€)", "Valor Total (€)"]
+    for ci, h in enumerate(detail_headers):
+        cell = ws2.cell(row=1, column=ci+1, value=h)
+        cell.font = Font(bold=True, color=WHITE, size=10, name='Calibri')
+        cell.fill = PatternFill("solid", fgColor=PURPLE)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border_thin
+    ws2.row_dimensions[1].height = 28
+    ws2.column_dimensions['A'].width = 18
+    ws2.column_dimensions['B'].width = 14
+    ws2.column_dimensions['C'].width = 20
+    ws2.column_dimensions['D'].width = 40
+    ws2.column_dimensions['E'].width = 12
+    ws2.column_dimensions['F'].width = 10
+    ws2.column_dimensions['G'].width = 8
+    ws2.column_dimensions['H'].width = 14
+    ws2.column_dimensions['I'].width = 14
+    
+    # Cargar datos del inventario completo para esta categoría
+    inventory_file = os.path.join(DATA_DIR, "stock", "inventory.json")
+    all_products = []
+    if os.path.exists(inventory_file):
+        try:
+            with open(inventory_file, "r", encoding="utf-8") as f:
+                all_products = json.load(f)
+        except Exception:
+            pass
+    
+    cat_prods = [p for p in all_products if p.get("category") == (category or "Lavadoras")]
+    if color:
+        cat_prods = [p for p in cat_prods if p.get("color", "") == color]
+    cat_prods.sort(key=lambda p: (p.get("brand", ""), p.get("capacity", ""), p.get("sku", "")))
+    
+    for ri, p in enumerate(cat_prods):
+        row = ri + 2
+        row_bg = ALT_ROW if ri % 2 == 0 else WHITE
+        cost = p.get("cost", 0.0)
+        stk = p.get("stock", 0)
+        vals = [p.get("sku", ""), p.get("brand", ""), p.get("category", ""), p.get("description", ""), p.get("capacity", ""), p.get("color", ""), stk, round(cost, 2), round(cost * stk, 2)]
+        for ci, v in enumerate(vals):
+            c = ws2.cell(row=row, column=ci+1, value=v)
+            c.font = Font(size=9, name='Calibri', color="111827")
+            c.fill = PatternFill("solid", fgColor=row_bg)
+            c.alignment = Alignment(horizontal='center' if ci >= 6 else 'left', vertical='center')
+            c.border = border_thin
+        ws2.row_dimensions[row].height = 16
+    
+    # Auto-filter en hoja de detalle
+    ws2.auto_filter.ref = ws2.dimensions
+    ws2.freeze_panes = "A2"
+    
+    # ── Generar respuesta de streaming ───────────────────────────────────────
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    safe_cat = re.sub(r'[^\w\-]', '_', cat_label)
+    filename = f"informe_stock_{safe_cat}.xlsx"
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 @app.get("/api/stock/raw")
 async def get_stock_raw():

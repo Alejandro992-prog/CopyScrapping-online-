@@ -1,5 +1,11 @@
 {
   "categorias": {
+    "Lavadoras-Secadoras": {
+      "sinonimos": ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer", "washer-dryer"],
+      "atributos_clave": {
+        "capacidad": ["kg", "kilogramos", "kilos"]
+      }
+    },
     "Lavadoras": {
       "sinonimos": ["lavadora", "washer", "lavar", "lavarropa", "lavadoras", "frontal", "superior"],
       "atributos_clave": {
@@ -13,14 +19,55 @@
         "capacidad": ["kg", "kilogramos", "kilos"]
       }
     },
-    "Lavavajillas": {
+    "Lavavajillas 45cm": {
+      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos"],
+      "atributos_clave": {
+        "servicios": ["cubiertos", "servicios", "cub"]
+      }
+    },
+    "Lavavajillas 60cm": {
       "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "integrable"],
       "atributos_clave": {
         "servicios": ["cubiertos", "servicios", "cub"]
       }
     },
+    "Frigo Combi": {
+      "sinonimos": ["combi", "combis"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
+    "Frigo 2 puertas": {
+      "sinonimos": ["2 puertas", "dos puertas", "2 ptas", "2-puertas"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
+    "Frigo 1 puerta": {
+      "sinonimos": ["1 puerta", "una puerta", "monopuerta", "1 pta", "1-puerta", "cooler", "table top", "table-top"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
+    "Frigos integrables": {
+      "sinonimos": ["integrable", "integrables", "encastrable", "encastrables", "panelable", "panelables", "integrado", "integrados"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
+    "Frigos americanos": {
+      "sinonimos": ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "multi-puerta"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"],
+        "tecnologia": ["no frost", "frost free"]
+      }
+    },
     "Frigoríficos": {
-      "sinonimos": ["frigo", "frigorífico", "frigorifico", "refrigerador", "combi", "americano", "congelador", "cooler", "side by side", "freezer", "2 puertas", "monopuerta"],
+      "sinonimos": ["frigo", "frigorífico", "frigorifico", "refrigerador", "congelador", "freezer"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
         "tecnologia": ["no frost", "frost free"]
@@ -50,6 +97,37 @@
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"]
       }
+    },
+    "Fregaderos": {
+      "sinonimos": ["fregadero", "fregaderos", "pileta"],
+      "atributos_clave": {
+        "cubas": ["cuba", "cubas"]
+      }
+    },
+    "Calentadores": {
+      "sinonimos": ["termo", "calentador", "calentadores", "acumulador"],
+      "atributos_clave": {
+        "capacidad": ["l", "litros", "lts"]
+      }
+    },
+    "Ventiladores": {
+      "sinonimos": ["ventilador", "ventiladores", "turbo", "circulador", "techo", "pie", "sobremesa", "box fan"],
+      "atributos_clave": {
+        "potencia": ["w"]
+      }
+    },
+    "Climatizadores": {
+      "sinonimos": ["climatizador", "aire acondicionado", "aire", "split"],
+      "atributos_clave": {
+        "potencia": ["frig", "frigorias", "kcal"]
+      }
+    },
+    "Menaje y PAE": {
+      "sinonimos": ["batidora", "tostador", "tostadora", "freidora", "hervidor", "exprimidor", "bascula", "báscula", "plancha", "cortapelo", "cortapelos", "depiladora", "molinillo", "chocolatera", "picadora", "cafetera", "olla", "sarten", "sartén", "cacerola", "barbacoa", "palomitero", "sandwichera", "licuadora", "robot de cocina", "limpiadora", "aspirador", "aspiradora", "vaporetino", "deshumidificador", "secador", "destornillador", "arrocera", "escurridor"],
+      "atributos_clave": {
+        "potencia": ["w", "v"],
+        "capacidad": ["l", "litros"]
+      }
     }
   },
   "marcas": {
@@ -75,6 +153,23 @@
     "Corbero": ["corbero", "corberó"],
     "Edesa": ["edesa"],
     "Cecotec": ["cecotec"],
-    "Infiniton": ["infiniton", "infinito"]
+    "Infiniton": ["infiniton", "infinito"],
+    "Orbegozo": ["orbegozo"],
+    "Cata": ["cata"],
+    "Jata": ["jata"],
+    "Mepamsa": ["mepamsa"],
+    "Rowenta": ["rowenta"],
+    "Moulinex": ["moulinex"],
+    "Tefal": ["tefal"],
+    "Cointra": ["cointra"],
+    "Vaillant": ["vaillant"],
+    "Midea": ["midea"],
+    "TCL": ["tcl"],
+    "Ariete": ["ariete"],
+    "Russell Hobbs": ["russell hobbs", "russell", "hobbs"],
+    "Polti": ["polti"],
+    "Karcher": ["karcher"],
+    "Newpol": ["newpol"],
+    "Icoben": ["icoben"]
   }
 }
