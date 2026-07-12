@@ -1249,6 +1249,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnClearStock = document.getElementById("btn-clear-stock");
     const btnExportStockXlsx = document.getElementById("btn-export-stock-xlsx");
     const stockCoveragePctBadge = document.getElementById("stock-coverage-pct-badge");
+    const btnConfigureLimits = document.getElementById("btn-configure-limits");
     
     const kpiStockValue = document.getElementById("kpi-stock-value");
     const kpiStockRefs = document.getElementById("kpi-stock-refs");
@@ -1356,6 +1357,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             } else {
                 stockCategorySelect.innerHTML = `<option value="">-- Sin datos --</option>`;
+            }
+
+            if (btnConfigureLimits) {
+                btnConfigureLimits.disabled = !data.categories || data.categories.length === 0;
             }
 
             // 1.5 Rellenar selector de colores
@@ -1889,18 +1894,126 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    btnClearStock.addEventListener("click", async () => {
-        if (confirm("¿Estás seguro de que deseas eliminar permanentemente el inventario de stock importado?")) {
+    // MODAL DE AJUSTE DE GAMAS (LÍMITES DE PRECIO)
+    const modalLimits = document.getElementById("modal-limits");
+    const btnCloseModalLimits = document.getElementById("btn-close-modal-limits");
+    const btnCancelLimits = document.getElementById("btn-cancel-limits");
+    const btnSaveLimits = document.getElementById("btn-save-limits");
+    const inputLimitEco = document.getElementById("input-limit-eco");
+    const inputLimitMed = document.getElementById("input-limit-med");
+    const modalCategoryName = document.getElementById("modal-category-name");
+    const modalMedStartLabel = document.getElementById("modal-med-start-label");
+    const modalPremiumStart = document.getElementById("modal-premium-start");
+
+    if (btnConfigureLimits && modalLimits) {
+        btnConfigureLimits.addEventListener("click", async () => {
+            const category = stockCategorySelect.value;
+            if (!category) return;
+
             try {
-                const res = await fetch("/api/stock/clear", { method: "POST" });
+                const res = await fetch(`/api/stock/price-limits?category=${encodeURIComponent(category)}`);
                 if (res.ok) {
-                    loadStockMatrix();
+                    const data = await res.json();
+                    modalCategoryName.textContent = category;
+                    inputLimitEco.value = data.eco_max;
+                    inputLimitMed.value = data.med_max;
+
+                    // Trigger helper text updates
+                    updateModalLabels();
+
+                    modalLimits.style.display = "flex";
+                } else {
+                    alert("Error al cargar los límites de precio.");
                 }
             } catch (err) {
-                console.error("Error limpiando stock:", err);
+                console.error("Error al obtener límites:", err);
+                alert("Error de conexión al obtener límites.");
             }
+        });
+
+        const closeModal = () => {
+            modalLimits.style.display = "none";
+        };
+
+        if (btnCloseModalLimits) btnCloseModalLimits.addEventListener("click", closeModal);
+        if (btnCancelLimits) btnCancelLimits.addEventListener("click", closeModal);
+
+        // Close on clicking outside the modal content
+        modalLimits.addEventListener("click", (e) => {
+            if (e.target === modalLimits) {
+                closeModal();
+            }
+        });
+
+        // Helper calculations inside the modal
+        function updateModalLabels() {
+            const ecoVal = parseFloat(inputLimitEco.value) || 0;
+            const medVal = parseFloat(inputLimitMed.value) || 0;
+            if (modalMedStartLabel) modalMedStartLabel.textContent = `Desde ${ecoVal} € hasta`;
+            if (modalPremiumStart) modalPremiumStart.textContent = `${medVal} €`;
         }
-    });
+
+        if (inputLimitEco) {
+            inputLimitEco.addEventListener("input", updateModalLabels);
+            inputLimitEco.addEventListener("change", updateModalLabels);
+        }
+        if (inputLimitMed) {
+            inputLimitMed.addEventListener("input", updateModalLabels);
+            inputLimitMed.addEventListener("change", updateModalLabels);
+        }
+
+        if (btnSaveLimits) {
+            btnSaveLimits.addEventListener("click", async () => {
+                const category = stockCategorySelect.value;
+                const eco_max = parseFloat(inputLimitEco.value) || 0;
+                const med_max = parseFloat(inputLimitMed.value) || 0;
+
+                if (eco_max <= 0 || med_max <= eco_max) {
+                    alert("El límite Económico debe ser mayor a cero, y el límite Medio debe ser estrictamente mayor que el Económico.");
+                    return;
+                }
+
+                try {
+                    const res = await fetch("/api/stock/price-limits", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            category: category,
+                            eco_max: eco_max,
+                            med_max: med_max
+                        })
+                    });
+
+                    if (res.ok) {
+                        closeModal();
+                        // Volver a cargar la matriz
+                        loadStockMatrix(category, stockColorSelect ? stockColorSelect.value : "");
+                    } else {
+                        const errData = await res.json();
+                        alert(`Error al guardar límites: ${errData.detail || "Verifica los valores."}`);
+                    }
+                } catch (err) {
+                    console.error("Error guardando límites:", err);
+                    alert("Error al conectar con el servidor.");
+                }
+            });
+        }
+    }
+
+    if (btnClearStock) {
+        btnClearStock.addEventListener("click", async () => {
+            if (confirm("¿Estás seguro de que deseas eliminar permanentemente el inventario de stock importado?")) {
+                try {
+                    const res = await fetch("/api/stock/clear", { method: "POST" });
+                    if (res.ok) {
+                        loadStockMatrix();
+                    }
+                } catch (err) {
+                    console.error("Error limpiando stock:", err);
+                }
+            }
+        });
+    }
 
     // Initialize Page
     initSSEConnection();

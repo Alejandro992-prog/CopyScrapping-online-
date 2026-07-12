@@ -334,9 +334,12 @@
 
                         <div class="form-group">
                             <label for="stock-category-select">Categoría de Producto:</label>
-                            <select id="stock-category-select" class="form-select">
-                                <option value="">-- Sin datos --</option>
-                            </select>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="stock-category-select" class="form-select" style="flex: 1; margin-bottom: 0;">
+                                    <option value="">-- Sin datos --</option>
+                                </select>
+                                <button id="btn-configure-limits" class="btn btn-secondary btn-sm" style="padding: 10px; font-size: 14px;" title="Ajustar límites de precio de gamas" disabled>⚙️</button>
+                            </div>
                         </div>
 
                         <div class="form-group mt-10">
@@ -524,6 +527,55 @@
             <p>Garde Clipboard Parser Online v1.0.0 — Solución de Monitoreo Online Cloud</p>
         </footer>
     </div>
+    <!-- MODAL: AJUSTAR GAMAS -->
+    <div id="modal-limits" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Ajustar Límites de Precios</h3>
+                <button id="btn-close-modal-limits" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 15px;">
+                    Define los precios límites que dividen las gamas en la categoría <strong id="modal-category-name">—</strong>:
+                </p>
+                <div class="form-group">
+                    <label style="font-size: 13px; color: var(--text-color); font-weight: 600; display: block; margin-bottom: 6px;">Gama Económica:</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 13px; color: var(--text-muted);">Desde 0 € hasta</span>
+                        <input type="number" id="input-limit-eco" class="form-input" style="width: 120px; text-align: right; margin-bottom: 0;" min="1" step="5">
+                        <span style="font-size: 13px; color: var(--text-color);">€</span>
+                    </div>
+                    <span style="font-size: 11px; color: var(--text-muted); display: block; margin-top: 6px;">
+                        Los productos con coste menor a este valor se considerarán Económicos.
+                    </span>
+                </div>
+                <div class="divider" style="margin: 15px 0; border-top: 1px solid var(--border-color);"></div>
+                <div class="form-group">
+                    <label style="font-size: 13px; color: var(--text-color); font-weight: 600; display: block; margin-bottom: 6px;">Gama Media:</label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 13px; color: var(--text-muted);" id="modal-med-start-label">Desde X € hasta</span>
+                        <input type="number" id="input-limit-med" class="form-input" style="width: 120px; text-align: right; margin-bottom: 0;" min="1" step="5">
+                        <span style="font-size: 13px; color: var(--text-color);">€</span>
+                    </div>
+                    <span style="font-size: 11px; color: var(--text-muted); display: block; margin-top: 6px;">
+                        Los productos con coste entre el límite Económico y este valor serán de gama Media.
+                    </span>
+                </div>
+                <div class="divider" style="margin: 15px 0; border-top: 1px solid var(--border-color);"></div>
+                <div class="form-group">
+                    <label style="font-size: 13px; color: var(--text-color); font-weight: 600; display: block; margin-bottom: 6px;">Gama Premium:</label>
+                    <p style="font-size: 13px; color: var(--text-muted); margin: 0;">
+                        Todos los productos con coste superior al límite de gama Media (<strong id="modal-premium-start">— €</strong>).
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                <button id="btn-cancel-limits" class="btn btn-secondary btn-sm">Cancelar</button>
+                <button id="btn-save-limits" class="btn btn-primary btn-sm">Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/app.js?v=1.0.3"></script>
 </body>
 </html>

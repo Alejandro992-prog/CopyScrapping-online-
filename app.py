@@ -2581,49 +2581,65 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
     colors_available = sorted(list(set(p.get("color", "") for p in all_cat_products if p.get("color"))))
     
     # Determinar límites de precio para gamas (Económica, Media, Premium)
+    config = {}
+    try:
+        config = load_config()
+    except Exception:
+        pass
+    
+    custom_limits = config.get("price_limits", {}).get(category)
     pr_limits = []
-    if category in ["Lavadoras", "Secadoras", "Lavadoras-Secadoras"]:
+    
+    if custom_limits and len(custom_limits) == 2:
+        eco_max, med_max = custom_limits
         pr_limits = [
-            {"label": "Económica", "min": 0, "max": 350},
-            {"label": "Media", "min": 350, "max": 550},
-            {"label": "Premium", "min": 550, "max": 999999}
-        ]
-    elif category in ["Lavavajillas", "Lavavajillas 60cm"]:
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 300},
-            {"label": "Media", "min": 300, "max": 450},
-            {"label": "Premium", "min": 450, "max": 999999}
-        ]
-    elif category == "Lavavajillas 45cm":
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 250},
-            {"label": "Media", "min": 250, "max": 400},
-            {"label": "Premium", "min": 400, "max": 999999}
-        ]
-    elif category in ["Inducción", "Vitrocerámica", "Vitrocerámicas"]:
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 200},
-            {"label": "Media", "min": 200, "max": 400},
-            {"label": "Premium", "min": 400, "max": 999999}
-        ]
-    elif category in ["Placa de Gas", "Cristal Gas"]:
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 150},
-            {"label": "Media", "min": 150, "max": 300},
-            {"label": "Premium", "min": 300, "max": 999999}
-        ]
-    elif category == "Frigoríficos" or (category and ("frigo" in category.lower() or "frigorific" in category.lower())):
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 400},
-            {"label": "Media", "min": 400, "max": 700},
-            {"label": "Premium", "min": 700, "max": 999999}
+            {"label": "Económica", "min": 0, "max": float(eco_max)},
+            {"label": "Media", "min": float(eco_max), "max": float(med_max)},
+            {"label": "Premium", "min": float(med_max), "max": 999999}
         ]
     else:
-        pr_limits = [
-            {"label": "Económica", "min": 0, "max": 200},
-            {"label": "Media", "min": 200, "max": 400},
-            {"label": "Premium", "min": 400, "max": 999999}
-        ]
+        if category in ["Lavadoras", "Secadoras", "Lavadoras-Secadoras"]:
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 350},
+                {"label": "Media", "min": 350, "max": 550},
+                {"label": "Premium", "min": 550, "max": 999999}
+            ]
+        elif category in ["Lavavajillas", "Lavavajillas 60cm"]:
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 300},
+                {"label": "Media", "min": 300, "max": 450},
+                {"label": "Premium", "min": 450, "max": 999999}
+            ]
+        elif category == "Lavavajillas 45cm":
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 250},
+                {"label": "Media", "min": 250, "max": 400},
+                {"label": "Premium", "min": 400, "max": 999999}
+            ]
+        elif category in ["Inducción", "Vitrocerámica", "Vitrocerámicas"]:
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 200},
+                {"label": "Media", "min": 200, "max": 400},
+                {"label": "Premium", "min": 400, "max": 999999}
+            ]
+        elif category in ["Placa de Gas", "Cristal Gas"]:
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 150},
+                {"label": "Media", "min": 150, "max": 300},
+                {"label": "Premium", "min": 300, "max": 999999}
+            ]
+        elif category == "Frigoríficos" or (category and ("frigo" in category.lower() or "frigorific" in category.lower())):
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 400},
+                {"label": "Media", "min": 400, "max": 700},
+                {"label": "Premium", "min": 700, "max": 999999}
+            ]
+        else:
+            pr_limits = [
+                {"label": "Económica", "min": 0, "max": 200},
+                {"label": "Media", "min": 200, "max": 400},
+                {"label": "Premium", "min": 400, "max": 999999}
+            ]
     
     # Obtener todas las marcas presentes en la categoría
     brands_in_cat = sorted(list(set(p.get("brand", "Genérico") for p in cat_products)))
@@ -3054,6 +3070,57 @@ async def clear_stock_data():
     if os.path.exists(inventory_file):
         os.remove(inventory_file)
         add_log("info", "Datos de inventario eliminados correctamente.")
+    return {"status": "success"}
+
+@app.get("/api/stock/price-limits")
+async def get_price_limits(category: str):
+    config = {}
+    try:
+        config = load_config()
+    except Exception:
+        pass
+    
+    custom_limits = config.get("price_limits", {}).get(category)
+    if custom_limits and len(custom_limits) == 2:
+        return {"category": category, "eco_max": custom_limits[0], "med_max": custom_limits[1], "is_custom": True}
+    
+    default_limits = [200, 400]
+    if category in ["Lavadoras", "Secadoras", "Lavadoras-Secadoras"]:
+        default_limits = [350, 550]
+    elif category in ["Lavavajillas", "Lavavajillas 60cm"]:
+        default_limits = [300, 450]
+    elif category == "Lavavajillas 45cm":
+        default_limits = [250, 400]
+    elif category in ["Inducción", "Vitrocerámica", "Vitrocerámicas"]:
+        default_limits = [200, 400]
+    elif category in ["Placa de Gas", "Cristal Gas"]:
+        default_limits = [150, 300]
+    elif category == "Frigoríficos" or (category and ("frigo" in category.lower() or "frigorific" in category.lower())):
+        default_limits = [400, 700]
+        
+    return {"category": category, "eco_max": default_limits[0], "med_max": default_limits[1], "is_custom": False}
+
+class PriceLimitsSaveModel(BaseModel):
+    category: str
+    eco_max: float
+    med_max: float
+
+@app.post("/api/stock/price-limits")
+async def save_price_limits(data: PriceLimitsSaveModel):
+    try:
+        config = load_config()
+    except Exception:
+        config = {"active_provider_id": None, "providers": []}
+        
+    if "price_limits" not in config:
+        config["price_limits"] = {}
+        
+    if data.eco_max <= 0 or data.med_max <= data.eco_max:
+        raise HTTPException(status_code=400, detail="Los límites deben ser mayores que cero y el límite Medio debe ser mayor que el Económico.")
+        
+    config["price_limits"][data.category] = [data.eco_max, data.med_max]
+    save_config(config)
+    add_log("info", f"Límites de precio actualizados para {data.category}: E < {data.eco_max}€, M < {data.med_max}€.")
     return {"status": "success"}
 
 if __name__ == "__main__":
