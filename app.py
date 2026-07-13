@@ -6,17 +6,44 @@ import time
 import asyncio
 import threading
 import webbrowser
+import hashlib
+import secrets
+from collections import deque
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+import openpyxl
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side, GradientFill
 from openpyxl.utils import get_column_letter
+try:
+    import pypdf as _pypdf_module
+except ImportError:
+    _pypdf_module = None  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Regex pre-compiladas a nivel de módulo (evitar re-compilación en cada llamada)
+# ---------------------------------------------------------------------------
+_RE_MODEL_STRICT = re.compile(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,15}\b')
+_RE_MODEL_LOOSE  = re.compile(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,15}\b')
+_RE_MODEL_MIN4   = re.compile(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{4,15}\b')
+_RE_ATTR_KG_RPM  = re.compile(r'\b\d+\s*(?:kg|KG|Kg|rpm|RPM)\b')
+_RE_PRICE_EUR    = re.compile(r'\b\d+(?:[\.,]\d+)*\s*€')
+_RE_UNIT_FAKE    = re.compile(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', re.IGNORECASE)
+_RE_WORDS_3      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}')
+_RE_WORDS_4      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}')
+_RE_DOTS_END     = re.compile(r'\.\.\.\s*\d*$')
+_RE_NONALNUM     = re.compile(r'[^a-zA-Z0-9]')
+_RE_WHITESPACE   = re.compile(r'\s+')
+_RE_TRAIL_SEP    = re.compile(r'\s+[-\u2013,]\s*$')
+_RE_NUMERIC_TOK  = re.compile(r'^\d[\d\.,]*$')
+_RE_DIGIT_ONLY   = re.compile(r'\D')
 
 def get_resource_path(relative_path: str) -> str:
     """Obtiene la ruta absoluta para un recurso, funciona en desarrollo y con PyInstaller."""
@@ -65,8 +92,6 @@ def get_provider_filepath(provider: Dict[str, Any]) -> str:
     # Forzar a que el archivo esté estrictamente en EXTRACTIONS_DIR con un nombre seguro
     return os.path.join(EXTRACTIONS_DIR, f"{safe_id}.{file_format}")
 
-import hashlib
-import secrets
 
 def hash_password(password: str) -> str:
     salt = os.urandom(16).hex()
@@ -91,22 +116,48 @@ def verify_password(stored_password: str, provided_password: str) -> bool:
     except Exception:
         return False
 
+# ---------------------------------------------------------------------------
+# Caché en memoria para archivos leidos frecuentemente
+# ---------------------------------------------------------------------------
+_CACHE_TTL = 5.0  # segundos
+_users_cache: Dict[str, str] = {}
+_users_cache_ts: float = 0.0
+_users_cache_lock = threading.Lock()
+
 def load_users() -> Dict[str, str]:
+    global _users_cache, _users_cache_ts
+    now = time.monotonic()
+    with _users_cache_lock:
+        if _users_cache and (now - _users_cache_ts) < _CACHE_TTL:
+            return dict(_users_cache)  # devolver copia para evitar mutación
     if not os.path.exists(USERS_FILE):
+        with _users_cache_lock:
+            _users_cache = {}
+            _users_cache_ts = now
         return {}
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        with _users_cache_lock:
+            _users_cache = data
+            _users_cache_ts = now
+        return dict(data)
     except Exception:
         return {}
 
 def save_users(users: Dict[str, str]):
+    global _users_cache, _users_cache_ts
     try:
         os.makedirs(os.path.dirname(USERS_FILE), exist_ok=True)
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(users, f, indent=2, ensure_ascii=False)
+        # Invalidar caché inmediatamente tras escribir
+        with _users_cache_lock:
+            _users_cache = dict(users)
+            _users_cache_ts = time.monotonic()
     except Exception as e:
         add_log("error", f"Error guardando users.json: {str(e)}")
+
 
 def check_authentication(credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False))):
     correct_password = os.environ.get("ADMIN_PASSWORD")
@@ -160,9 +211,10 @@ is_monitoring = True
 active_provider: Optional[Dict[str, Any]] = None
 previous_clipboard = ""
 last_sequence_number = 0
-logs_buffer: List[Dict[str, Any]] = []
+logs_buffer: deque = deque(maxlen=100)  # deque con cap. fija: trim O(1)
 latest_log_index = 0
 logs_lock = threading.Lock()
+
 
 def add_log(msg_type: str, message: str, data: Any = None):
     global latest_log_index
@@ -174,13 +226,25 @@ def add_log(msg_type: str, message: str, data: Any = None):
     }
     print(f"[{log_entry['timestamp']}] [{msg_type.upper()}] {message}", flush=True)
     with logs_lock:
-        logs_buffer.append(log_entry)
-        if len(logs_buffer) > 100:
-            logs_buffer.pop(0)
+        logs_buffer.append(log_entry)  # deque(maxlen=100) auto-descarta el más antiguo
         latest_log_index += 1
 
+
+# ---------------------------------------------------------------------------
+# Caché para config.json
+# ---------------------------------------------------------------------------
+_config_cache: Dict[str, Any] = {}
+_config_cache_ts: float = 0.0
+
 def load_config() -> Dict[str, Any]:
-    global active_provider
+    global active_provider, _config_cache, _config_cache_ts
+    now = time.monotonic()
+    if _config_cache and (now - _config_cache_ts) < _CACHE_TTL:
+        # Actualizar active_provider a partir de la caché
+        providers = _config_cache.get("providers", [])
+        active_id = _config_cache.get("active_provider_id")
+        active_provider = next((p for p in providers if p["id"] == active_id), None)
+        return dict(_config_cache)
     old_config = get_writeable_path("config.json")
     os.makedirs(DATA_DIR, exist_ok=True)
     
@@ -197,6 +261,8 @@ def load_config() -> Dict[str, Any]:
         config = {"active_provider_id": None, "providers": []}
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
+        _config_cache = config
+        _config_cache_ts = time.monotonic()
         return config
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -206,15 +272,21 @@ def load_config() -> Dict[str, Any]:
         providers = config.get("providers", [])
         active_id = config.get("active_provider_id")
         active_provider = next((p for p in providers if p["id"] == active_id), None)
+        _config_cache = config
+        _config_cache_ts = time.monotonic()
         return config
     except Exception as e:
         add_log("error", f"Error cargando config.json: {str(e)}")
         raise RuntimeError(f"Error cargando config.json: {str(e)}") from e
 
 def save_config(config: Dict[str, Any]):
+    global _config_cache, _config_cache_ts
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
+        # Invalidar caché inmediatamente
+        _config_cache = dict(config)
+        _config_cache_ts = time.monotonic()
     except Exception as e:
         add_log("error", f"Error guardando config.json: {str(e)}")
 
@@ -222,10 +294,10 @@ def normalize_model_key(val: str) -> str:
     if not val:
         return ""
     # Convertir a minúsculas, quitar caracteres especiales y espacios
-    return re.sub(r'[^a-zA-Z0-9]', '', str(val)).lower().strip()
+    return _RE_NONALNUM.sub('', str(val)).lower().strip()
+
 
 def format_excel_file(filepath: str):
-    import openpyxl
     try:
         wb = openpyxl.load_workbook(filepath)
         ws = wb.active
@@ -370,23 +442,12 @@ def clean_price(price_str: str) -> float:
 def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     results = []
     
-    # 1. Encontrar todos los modelos posibles en el texto.
-    # Exigimos que tengan al menos una letra y al menos un número, y mayúsculas/números/guiones (de 5 a 15 caracteres)
-    # Ejemplo: 3TS3107BD, 3TS382B, WUU28T6XES, etc.
-    model_pattern = r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,15}\b'
-    
-    # Atributos comunes como capacidad (kg) y velocidad (rpm)
-    attr_pattern = r'\b\d+\s*(?:kg|KG|Kg|rpm|RPM)\b'
-    
-    # Precios
-    price_pattern = r'\b\d+(?:[\.,]\d+)*\s*€'
-    
     # Extraer palabras clave del proveedor dinámicamente
     provider_keywords = set()
     if provider:
         # Palabras del nombre del proveedor
         prov_name = provider.get("name", "")
-        for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}', prov_name.lower()):
+        for w in _RE_WORDS_3.findall(prov_name.lower()):
             provider_keywords.add(w)
             
         # Palabras de las etiquetas de producto/marca entrenadas
@@ -405,7 +466,7 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
             product_label_texts.append(sample_text.lower())
             
         for text_lbl in product_label_texts:
-            for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}', text_lbl):
+            for w in _RE_WORDS_3.findall(text_lbl):
                 if w not in ["con", "del", "para", "por", "sus", "una", "uno", "los", "las", "les", "and", "the", "for"]:
                     provider_keywords.add(w)
                     
@@ -422,18 +483,18 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
             continue
             
         # Descartamos líneas que terminan en puntos suspensivos ("...") o que son de ruido obvio
-        if line_stripped.endswith('...') or re.search(r'\.\.\.\s*\d*$', line_stripped):
+        if line_stripped.endswith('...') or _RE_DOTS_END.search(line_stripped):
             continue
         if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
             continue
             
         # Buscar modelos (sin re.IGNORECASE para evitar que coincidan palabras en minúsculas)
-        models_in_line = re.findall(model_pattern, line_stripped)
+        models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
         
         # Filtrar modelos falsos que son unidades de medida (ej: 1400RPM, 10KG)
-        models_in_line = [m for m in models_in_line if not re.match(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', m, re.IGNORECASE)]
+        models_in_line = [m for m in models_in_line if not _RE_UNIT_FAKE.match(m)]
         
-        has_attrs = re.search(attr_pattern, line_stripped, re.IGNORECASE) is not None
+        has_attrs = _RE_ATTR_KG_RPM.search(line_stripped) is not None
         has_keywords = any(kw in line_stripped.lower() for kw in provider_keywords)
         
         # Si tiene modelo y atributos/palabras clave, la consideramos línea de especificación principal
@@ -449,17 +510,17 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
     if not spec_lines:
         for i, line in enumerate(lines):
             line_stripped = line.strip()
-            if line_stripped.endswith('...') or re.search(r'\.\.\.\s*\d*$', line_stripped):
+            if line_stripped.endswith('...') or _RE_DOTS_END.search(line_stripped):
                 continue
             if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
                 continue
-            models_in_line = re.findall(model_pattern, line_stripped)
-            models_in_line = [m for m in models_in_line if not re.match(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', m, re.IGNORECASE)]
+            models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
+            models_in_line = [m for m in models_in_line if not _RE_UNIT_FAKE.match(m)]
             
             # Validación estricta para evitar falsos positivos de "letras y números sueltos"
             if models_in_line:
                 line_has_keyword = any(kw in line_stripped.lower() for kw in provider_keywords)
-                line_has_price = re.search(price_pattern, line_stripped) is not None
+                line_has_price = _RE_PRICE_EUR.search(line_stripped) is not None
                 if line_has_keyword or line_has_price:
                     spec_lines.append({
                         'index': i,
@@ -483,32 +544,28 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         model = spec['model']
         
         # Extraer Atributos Técnicos de la línea de especificación.
-        attr_match = re.search(r'\b\d+\s*(?:kg|KG|Kg)\b', spec_line, re.IGNORECASE)
+        attr_match = _RE_ATTR_KG_RPM.search(spec_line)
         if attr_match:
             attributes = spec_line[attr_match.start():].strip()
         else:
-            attr_match_rpm = re.search(r'\b\d+\s*(?:rpm|RPM)\b', spec_line, re.IGNORECASE)
-            if attr_match_rpm:
-                attributes = spec_line[attr_match_rpm.start():].strip()
+            model_pos = spec_line.find(model)
+            if model_pos != -1:
+                attributes = spec_line[model_pos + len(model):].strip()
             else:
-                model_pos = spec_line.find(model)
-                if model_pos != -1:
-                    attributes = spec_line[model_pos + len(model):].strip()
-                else:
-                    attributes = ""
+                attributes = ""
                     
         # Limpiar atributos
-        attributes = re.sub(r'\s+', ' ', attributes).strip()
+        attributes = _RE_WHITESPACE.sub(' ', attributes).strip()
         
         # Extraer Precio: primer precio en el bloque
-        price_match = re.search(price_pattern, product_block)
+        price_match = _RE_PRICE_EUR.search(product_block)
         price = price_match.group(0) if price_match else "No disponible"
         
         # Limpiar precio de los atributos si se coló al final de la línea de especificación
         if price != "No disponible" and attributes:
             attributes_clean = attributes.replace(price, "").strip()
             # Eliminar guiones, comas o espacios finales sobrantes
-            attributes = re.sub(r'\s+[-–,]\s*$', '', attributes_clean).strip()
+            attributes = _RE_TRAIL_SEP.sub('', attributes_clean).strip()
             
         # Extraer Producto: es la línea de especificación menos el modelo y los atributos
         product = spec_line
@@ -519,7 +576,7 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         product_parts = product.split(model)
         product_clean = " ".join([part.strip() for part in product_parts if part.strip()])
         
-        product_clean = re.sub(r'\s+', ' ', product_clean).strip()
+        product_clean = _RE_WHITESPACE.sub(' ', product_clean).strip()
         product_clean = product_clean.strip(',').strip('-').strip()
         
         results.append({
@@ -568,19 +625,16 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
         df = df.drop(columns=['_temp_key'], errors='ignore')
         return df
         
-    # Calcular la "completitud" de cada fila: contar cuántas celdas no son nulas y no contienen marcadores de datos vacíos
-    def count_valid_info(row):
-        count = 0
-        for col, val in row.items():
-            if col in ['_temp_key', 'timestamp']:
-                continue
-            if pd.notnull(val):
-                val_str = str(val).strip().lower()
-                if val_str not in ["", "no disponible", "nan", "none", "null", "n/a", "-"]:
-                    count += 1
-        return count
-
-    df_valid['_info_score'] = df_valid.apply(count_valid_info, axis=1)
+    # Calcular la "completitud" de forma vectorizada (evita apply fila a fila)
+    _EMPTY_VALS = {"", "no disponible", "nan", "none", "null", "n/a", "-"}
+    _EXCLUDE_COLS = {'_temp_key', 'timestamp'}
+    score_cols = [c for c in df_valid.columns if c not in _EXCLUDE_COLS]
+    sub = df_valid[score_cols]
+    # Paso 1: no-nulo
+    not_null_mask = sub.notna()
+    # Paso 2: el string normalizado no es un marcador de datos vacíos
+    not_empty_mask = sub.astype(str).apply(lambda col: ~col.str.strip().str.lower().isin(_EMPTY_VALS))
+    df_valid['_info_score'] = (not_null_mask & not_empty_mask).sum(axis=1)
     
     # Crear una columna con el índice original para mantener estabilidad
     df_valid['_orig_index'] = df_valid.index
@@ -610,7 +664,7 @@ def process_text(text: str, provider: Dict[str, Any]):
         sample_text = provider.get("sample_text", "")
         
         required_keywords = set()
-        for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', prov_name.lower()):
+        for w in _RE_WORDS_4.findall(prov_name.lower()):
             required_keywords.add(w)
             
         labels = provider.get("labels", [])
@@ -728,58 +782,47 @@ def process_text(text: str, provider: Dict[str, Any]):
             extracted_data_list.extend(adaptive_extracted)
         
         if extracted_data_list:
-            added_count = 0
+            # --- Batch I/O: leer el archivo existente UNA VEZ, añadir todos los registros y escribir UNA VEZ ---
+            ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            filepath = get_provider_filepath(provider)
+            file_format = provider.get("file_format", "csv")
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+            # Asignar timestamp a todos los registros antes de crear el DataFrame
             for data in extracted_data_list:
-                # Agregar timestamp
-                data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # Nombre de archivo de salida
-                filepath = get_provider_filepath(provider)
-                    
-                file_format = provider.get("file_format", "csv")
-                os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                
-                df_new = pd.DataFrame([data])
-                
-                # Guardar en base al formato
-                if file_format == "xlsx":
-                    if os.path.exists(filepath):
-                        try:
-                            df_existing = pd.read_excel(filepath)
-                            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                        except Exception:
-                            df_combined = df_new
+                data["timestamp"] = ts_now
+
+            df_new = pd.DataFrame(extracted_data_list)
+
+            # Leer archivo existente (una sola lectura)
+            if os.path.exists(filepath):
+                try:
+                    if file_format == "xlsx":
+                        df_existing = pd.read_excel(filepath)
                     else:
-                        df_combined = df_new
-                        
-                    # Deduplicación inteligente
-                    model_col = find_model_column(df_combined.columns, provider.get("fields", []))
-                    if model_col:
-                        df_combined = deduplicate_by_completeness(df_combined, model_col)
-                        
-                    df_combined.to_excel(filepath, index=False)
-                else:
-                    # CSV
-                    if os.path.exists(filepath):
-                        try:
-                            df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
-                            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                        except Exception:
-                            df_combined = df_new
-                    else:
-                        df_combined = df_new
-                        
-                    # Deduplicación inteligente
-                    model_col = find_model_column(df_combined.columns, provider.get("fields", []))
-                    if model_col:
-                        df_combined = deduplicate_by_completeness(df_combined, model_col)
-                        
-                    df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
-                    
+                        df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
+                    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                except Exception:
+                    df_combined = df_new
+            else:
+                df_combined = df_new
+
+            # Deduplicación inteligente (una sola vez sobre el lote completo)
+            model_col = find_model_column(df_combined.columns, provider.get("fields", []))
+            if model_col:
+                df_combined = deduplicate_by_completeness(df_combined, model_col)
+
+            # Guardar (una sola escritura)
+            if file_format == "xlsx":
+                df_combined.to_excel(filepath, index=False)
+            else:
+                df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
+
+            added_count = len(extracted_data_list)
+            for data in extracted_data_list:
                 product_name = data.get("product") or data.get("producto") or list(data.values())[0]
                 add_log("success", f"Capturado y guardado: {product_name}", data)
-                added_count += 1
-                
+
             if added_count > 1:
                 add_log("success", f"Se han procesado y guardado {added_count} productos del portapapeles.")
         else:
@@ -1514,7 +1557,6 @@ async def delete_extraction_file(filename: str):
 
 @app.get("/api/extractions/download/{provider_id}")
 async def download_provider_extraction(provider_id: str):
-    from fastapi.responses import FileResponse
     config = load_config()
     providers = config.get("providers", [])
     provider = next((p for p in providers if p["id"] == provider_id), None)
@@ -1531,7 +1573,6 @@ async def download_provider_extraction(provider_id: str):
 
 @app.get("/api/consolidated/download/{filename}")
 async def download_consolidated(filename: str):
-    from fastapi.responses import FileResponse
     # Evitar Path Traversal sanitizando el nombre de archivo
     safe_filename = os.path.basename(filename)
     filepath = os.path.join(CONSOLIDATED_DIR, safe_filename)
@@ -1568,22 +1609,39 @@ async def sse_stream():
 
 # --- MÓDULO DE MATRIZ DE STOCK E INVENTARIO ERP ---
 
+import urllib.request
+import urllib.error
+
 EAN_CACHE_FILE = os.path.join(DATA_DIR, "ean_cache.json")
 ean_cache_lock = threading.Lock()
+# Caché EAN en memoria (cargada bajo demanda, persistida al disco periódicamente)
+_ean_mem_cache: Dict[str, Any] = {}
+_ean_mem_cache_loaded: bool = False
 
 def load_ean_cache() -> Dict[str, Any]:
+    global _ean_mem_cache, _ean_mem_cache_loaded
+    if _ean_mem_cache_loaded:
+        return _ean_mem_cache
     if not os.path.exists(EAN_CACHE_FILE):
+        _ean_mem_cache = {}
+        _ean_mem_cache_loaded = True
         return {}
     try:
         with open(EAN_CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            _ean_mem_cache = json.load(f)
+        _ean_mem_cache_loaded = True
+        return _ean_mem_cache
     except Exception:
+        _ean_mem_cache = {}
+        _ean_mem_cache_loaded = True
         return {}
 
 def save_ean_cache(cache: Dict[str, Any]):
+    global _ean_mem_cache
     try:
         with open(EAN_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
+        _ean_mem_cache = cache
     except Exception as e:
         add_log("error", f"Error guardando cache EAN: {str(e)}")
 
@@ -1596,10 +1654,6 @@ def query_ean_online(ean: str) -> Optional[Dict[str, Any]]:
         if ean in cache:
             return cache[ean]
         
-    import urllib.request
-    import urllib.error
-    import json
-    
     url = f"https://api.upcitemdb.com/prod/trial/lookup?upc={ean}"
     req = urllib.request.Request(
         url, 
@@ -1615,6 +1669,7 @@ def query_ean_online(ean: str) -> Optional[Dict[str, Any]]:
                     "brand": item.get("brand") or "",
                     "category": item.get("category") or ""
                 }
+                # Actualizar caché en memoria y persistir al disco una sola vez por EAN
                 with ean_cache_lock:
                     cache = load_ean_cache()
                     cache[ean] = result
@@ -1837,8 +1892,10 @@ def extract_frigo_medida(dim_text: str, is_americano: bool = False) -> str:
 
 
 def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
-    import pypdf
-    import re
+    if _pypdf_module is None:
+        add_log("error", "pypdf no está instalado. No se puede parsear el PDF.")
+        return []
+    pypdf = _pypdf_module
     products = []
     
     def clean_numeric_token(token: str) -> Optional[float]:
@@ -2687,6 +2744,7 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
     capacities = sorted(list(capacities_set), key=sort_capacity)
     
     cells = []
+    alerts = []
     covered_cells_count = 0
     # Cada combinación marca-capacidad tiene 3 segmentos a cubrir (Eco, Media, Premium)
     total_segments_count = len(brands_in_cat) * len(capacities) * 3 if capacities else 0
@@ -2699,7 +2757,7 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
                 if p.get("capacity") == cap and p.get("brand", "Genérico") == brand_name
             ]
             
-            # Dividir en segmentos de precio
+            # Dividir en segmentos de precio (una sola vez)
             eco_prods = [p for p in cell_products if pr_limits[0]["min"] <= p.get("cost", 0.0) < pr_limits[0]["max"]]
             med_prods = [p for p in cell_products if pr_limits[1]["min"] <= p.get("cost", 0.0) < pr_limits[1]["max"]]
             pre_prods = [p for p in cell_products if pr_limits[2]["min"] <= p.get("cost", 0.0) < pr_limits[2]["max"]]
@@ -2743,6 +2801,28 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
                 "status": status
             })
             
+            # --- Alertas generadas en el mismo bucle (sin iterar de nuevo) ---
+            for label, prods in [("Económica", eco_prods), ("Media", med_prods), ("Premium", pre_prods)]:
+                if not prods:
+                    alerts.append({
+                        "type": "danger",
+                        "message": f"Falta gama: '{brand_name}' en {cap} de gama {label}."
+                    })
+                elif sum(p.get("stock", 0) for p in prods) == 0:
+                    alerts.append({
+                        "type": "warning",
+                        "message": f"Sin stock: '{brand_name}' en {cap} de gama {label} sin unidades físicas."
+                    })
+                elif len(prods) == 1:
+                    alerts.append({
+                        "type": "info",
+                        "message": f"Baja variedad: Solo tienes 1 opción de '{brand_name}' en {cap} gama {label}."
+                    })
+            
+    alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
+    alerts = alerts[:10]
+    
+    # KPIs globales de la categoría
     total_value = sum(p.get("cost", 0.0) * p.get("stock", 0) for p in cat_products)
     total_references = len(cat_products)
     total_stock = sum(p.get("stock", 0) for p in cat_products)
@@ -2754,37 +2834,6 @@ def get_stock_matrix_data(category: str = "Lavadoras", color_filter: str = "") -
         "total_stock": total_stock,
         "coverage_pct": round(coverage_pct, 1)
     }
-    
-    alerts = []
-    for cap in capacities:
-        for br in brands_in_cat:
-            cell_products = [
-                p for p in cat_products 
-                if p.get("capacity") == cap and p.get("brand", "Genérico") == br
-            ]
-            eco_prods = [p for p in cell_products if pr_limits[0]["min"] <= p.get("cost", 0.0) < pr_limits[0]["max"]]
-            med_prods = [p for p in cell_products if pr_limits[1]["min"] <= p.get("cost", 0.0) < pr_limits[1]["max"]]
-            pre_prods = [p for p in cell_products if pr_limits[2]["min"] <= p.get("cost", 0.0) < pr_limits[2]["max"]]
-            
-            for label, prods in [("Económica", eco_prods), ("Media", med_prods), ("Premium", pre_prods)]:
-                if not prods:
-                    alerts.append({
-                        "type": "danger",
-                        "message": f"Falta gama: '{br}' en {cap} de gama {label}."
-                    })
-                elif sum(p.get("stock", 0) for p in prods) == 0:
-                    alerts.append({
-                        "type": "warning",
-                        "message": f"Sin stock: '{br}' en {cap} de gama {label} sin unidades físicas."
-                    })
-                elif len(prods) == 1:
-                    alerts.append({
-                        "type": "info",
-                        "message": f"Baja variedad: Solo tienes 1 opción de '{br}' en {cap} gama {label}."
-                    })
-                
-    alerts.sort(key=lambda x: {"danger": 0, "warning": 1, "info": 2}[x["type"]])
-    alerts = alerts[:10]
     
     # Calcular distribución por marcas para el panel lateral
     brands_dist = {}
@@ -2852,10 +2901,6 @@ async def get_stock_matrix(category: Optional[str] = None, color: Optional[str] 
 async def export_stock_xlsx(category: Optional[str] = None, color: Optional[str] = None):
     """Genera y devuelve un informe Excel profesional de la categoría de stock seleccionada."""
     import io
-    import openpyxl
-    from openpyxl import Workbook
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side, GradientFill
-    from openpyxl.utils import get_column_letter
     
     data = get_stock_matrix_data(category or "Lavadoras", color_filter=color or "")
     
