@@ -484,26 +484,35 @@ def normalize_and_reorder_product_prices(item: Dict[str, Any]) -> Dict[str, Any]
     """
     Normaliza y reordena los campos de precios de un producto.
     Garantiza que en caso de existir múltiples cantidades/precios (ej: sin IVA, con IVA, PVP):
-    - La cifra más baja se asigna a 'price_no_vat' / 'precio_sin_iva'.
-    - La cifra intermedia se asigna a 'price_vat' / 'precio_con_iva'.
-    - La cifra más alta se asigna a 'pvp' / 'precio_pvp'.
+    - El importe MÁS BAJO siempre se asigna a 'price_no_vat' / 'precio_sin_iva' / 'sin_iva'.
+    - El importe INTERMEDIO (o segundo más bajo) se asigna a 'price_vat' / 'precio_con_iva' / 'con_iva'.
+    - El importe MÁS ALTO se asigna a 'pvp' / 'precio_pvp'.
     """
     if not item or not isinstance(item, dict):
         return item
 
-    no_vat_keys = ["price_no_vat", "precio_sin_iva", "sin_iva", "no_vat"]
-    vat_keys = ["price_vat", "precio_con_iva", "con_iva", "vat"]
-    pvp_keys = ["pvp", "precio_pvp"]
-    gen_keys = ["price", "precio"]
+    no_vat_synonyms = {"price_no_vat", "precio_sin_iva", "sin_iva", "no_vat", "siniva", "precio_siniva", "p_sin_iva", "sin_iva_eur"}
+    vat_synonyms = {"price_vat", "precio_con_iva", "con_iva", "vat", "coniva", "precio_coniva", "p_con_iva", "con_iva_eur"}
+    pvp_synonyms = {"pvp", "precio_pvp", "pvp_precio", "p_pvp", "pvp_eur"}
+    gen_synonyms = {"price", "precio", "importe", "cifra"}
 
-    existing_no_vat_key = next((k for k in item if k in no_vat_keys), None)
-    existing_vat_key = next((k for k in item if k in vat_keys), None)
-    existing_pvp_key = next((k for k in item if k in pvp_keys), None)
-    existing_gen_key = next((k for k in item if k in gen_keys), None)
+    def norm_key(k: str) -> str:
+        return re.sub(r'[^a-z0-9]', '', str(k).lower())
+
+    norm_no_vat = {norm_key(s) for s in no_vat_synonyms}
+    norm_vat = {norm_key(s) for s in vat_synonyms}
+    norm_pvp = {norm_key(s) for s in pvp_synonyms}
+    norm_gen = {norm_key(s) for s in gen_synonyms}
+
+    existing_no_vat_key = next((k for k in item if norm_key(k) in norm_no_vat), None)
+    existing_vat_key = next((k for k in item if norm_key(k) in norm_vat), None)
+    existing_pvp_key = next((k for k in item if norm_key(k) in norm_pvp), None)
+    existing_gen_key = next((k for k in item if norm_key(k) in norm_gen), None)
 
     all_price_keys = [k for k in [existing_no_vat_key, existing_vat_key, existing_pvp_key, existing_gen_key] if k]
     for k in list(item.keys()):
-        if any(term in str(k).lower() for term in ["price", "precio", "pvp", "cifra", "importe"]) and k not in all_price_keys:
+        k_norm = norm_key(k)
+        if any(term in k_norm for term in ["price", "precio", "pvp", "cifra", "importe", "iva", "vat"]) and k not in all_price_keys:
             all_price_keys.append(k)
 
     if not all_price_keys:
@@ -519,6 +528,10 @@ def normalize_and_reorder_product_prices(item: Dict[str, Any]) -> Dict[str, Any]
     if not price_entries:
         return item
 
+    # Ordenar por valor numérico ascendente
+    price_entries.sort(key=lambda x: x[2])
+
+    # Filtrar entradas únicas por valor numérico (redondeado a 2 decimales)
     unique_entries = []
     seen_nums = set()
     for entry in price_entries:
@@ -527,33 +540,38 @@ def normalize_and_reorder_product_prices(item: Dict[str, Any]) -> Dict[str, Any]
             seen_nums.add(rounded)
             unique_entries.append(entry)
 
-    unique_entries.sort(key=lambda x: x[2])
+    if not unique_entries:
+        return item
 
-    if len(unique_entries) >= 2:
-        lowest_str = unique_entries[0][1]
+    lowest_str = unique_entries[0][1]
+    if len(unique_entries) == 1:
+        middle_str = lowest_str
+        highest_str = lowest_str
+    elif len(unique_entries) == 2:
+        middle_str = unique_entries[1][1]
+        highest_str = unique_entries[1][1]
+    else: # 3 o más valores numéricos de precio distintos
+        middle_str = unique_entries[1][1]
         highest_str = unique_entries[-1][1]
-        middle_str = unique_entries[1][1] if len(unique_entries) >= 3 else (
-            unique_entries[1][1] if len(unique_entries) == 2 else unique_entries[0][1]
-        )
 
-        if existing_no_vat_key and existing_vat_key and existing_pvp_key and len(unique_entries) >= 3:
-            item[existing_no_vat_key] = lowest_str
+    # Asignación estricta por jerarquía económica:
+    # Sin IVA = Cifra más baja de las 3
+    # Con IVA = Cifra intermedia
+    # PVP = Cifra más alta
+    if existing_no_vat_key:
+        item[existing_no_vat_key] = lowest_str
+
+    if existing_vat_key:
+        if existing_no_vat_key:
             item[existing_vat_key] = middle_str
-            item[existing_pvp_key] = highest_str
-        elif existing_no_vat_key and existing_vat_key:
-            item[existing_no_vat_key] = lowest_str
-            item[existing_vat_key] = highest_str
-            if existing_pvp_key and len(unique_entries) >= 3:
-                item[existing_pvp_key] = highest_str
-        elif existing_no_vat_key and existing_pvp_key:
-            item[existing_no_vat_key] = lowest_str
-            item[existing_pvp_key] = highest_str
-        elif existing_vat_key and existing_pvp_key:
+        else:
             item[existing_vat_key] = lowest_str
-            item[existing_pvp_key] = highest_str
-        elif existing_no_vat_key and existing_gen_key:
-            item[existing_no_vat_key] = lowest_str
-            item[existing_gen_key] = highest_str
+
+    if existing_pvp_key:
+        item[existing_pvp_key] = highest_str
+
+    if existing_gen_key and not (existing_no_vat_key or existing_vat_key or existing_pvp_key):
+        item[existing_gen_key] = lowest_str
 
     return item
 
@@ -987,24 +1005,30 @@ def process_text(text: str, provider: Dict[str, Any]):
                     p_middle = price_tuples[1][0] if len(price_tuples) >= 2 else p_lowest
                     p_highest = price_tuples[-1][0] if len(price_tuples) >= 2 else p_lowest
 
+                    no_vat_names = {"price_no_vat", "precio_sin_iva", "sin_iva", "no_vat", "siniva", "precio_siniva", "p_sin_iva"}
+                    vat_names = {"price_vat", "precio_con_iva", "con_iva", "vat", "coniva", "precio_coniva", "p_con_iva"}
+                    pvp_names = {"pvp", "precio_pvp", "pvp_precio", "p_pvp"}
+                    gen_names = {"price", "precio"}
+
                     for field in expected_fields:
-                        if field in ["product", "producto"]:
+                        f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
+                        if f_norm in ["product", "producto"]:
                             data[field] = item["product"]
-                        elif field in ["model", "modelo"]:
+                        elif f_norm in ["model", "modelo", "sku", "ref", "referencia"]:
                             data[field] = item["model"]
-                        elif field in ["attributes", "atributos"]:
+                        elif f_norm in ["attributes", "atributos", "specs", "especificaciones"]:
                             data[field] = item["attributes"]
-                        elif field in ["price", "precio"]:
+                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in no_vat_names}:
                             data[field] = p_lowest
-                        elif field in ["price_no_vat", "precio_sin_iva"]:
-                            data[field] = p_lowest
-                        elif field in ["price_vat", "precio_con_iva"]:
+                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in vat_names}:
                             data[field] = p_middle
-                        elif field in ["pvp", "precio_pvp"]:
+                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in pvp_names}:
                             data[field] = p_highest
-                        elif field in ["color"]:
+                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in gen_names}:
+                            data[field] = p_lowest
+                        elif f_norm in ["color"]:
                             data[field] = item.get("color", "")
-                        elif field in ["energy_class", "clase_energetica", "eficiencia", "eficiencia_energetica"]:
+                        elif f_norm in ["energyclass", "claseenergetica", "eficiencia", "eficienciaenergetica"]:
                             data[field] = item.get("energy_class", "")
                         else:
                             data[field] = ""
@@ -1539,6 +1563,73 @@ async def get_extraction_files():
             })
     return files
 
+def classify_product_category_and_gama(product_text: str, price: float, config: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Clasifica un producto en su Gama (Económica, Media, Premium)
+    en base a su categoría y su precio de referencia.
+    """
+    if price <= 0:
+        return "N/D"
+
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            config = {}
+
+    dict_data = load_dictionary()
+    categories_dict = dict_data.get("categorias", {})
+    text_lower = (product_text or "").lower()
+    matched_category = None
+
+    for cat_name, info in categories_dict.items():
+        synonyms = info.get("sinonimos", [])
+        if any(syn in text_lower for syn in synonyms):
+            matched_category = cat_name
+            break
+
+    if not matched_category:
+        if any(k in text_lower for k in ["lavadora", "washer"]):
+            matched_category = "Lavadoras"
+        elif any(k in text_lower for k in ["secadora", "dryer"]):
+            matched_category = "Secadoras"
+        elif any(k in text_lower for k in ["lavavajillas", "dishwasher", "lavaplatos"]):
+            matched_category = "Lavavajillas 60cm"
+        elif any(k in text_lower for k in ["frigo", "frigorifico", "combi", "refrigerador"]):
+            matched_category = "Frigoríficos"
+        elif any(k in text_lower for k in ["induccion", "inducción", "vitro", "vitroceramica"]):
+            matched_category = "Inducción"
+        elif any(k in text_lower for k in ["placa gas", "cristal gas", "butano"]):
+            matched_category = "Placa de Gas"
+        elif any(k in text_lower for k in ["horno", "oven"]):
+            matched_category = "Hornos"
+        else:
+            matched_category = "Otros"
+
+    custom_limits = config.get("price_limits", {}).get(matched_category) if config else None
+    if custom_limits and len(custom_limits) == 2:
+        eco_max, med_max = float(custom_limits[0]), float(custom_limits[1])
+    else:
+        if matched_category in ["Lavadoras", "Secadoras", "Lavadoras-Secadoras"]:
+            eco_max, med_max = 350.0, 550.0
+        elif matched_category in ["Lavavajillas", "Lavavajillas 60cm", "Lavavajillas 45cm"]:
+            eco_max, med_max = 300.0, 450.0
+        elif "Frigo" in matched_category or matched_category == "Frigoríficos":
+            eco_max, med_max = 400.0, 700.0
+        elif matched_category in ["Inducción", "Vitrocerámica", "Vitrocerámicas"]:
+            eco_max, med_max = 200.0, 400.0
+        elif matched_category in ["Placa de Gas", "Cristal Gas"]:
+            eco_max, med_max = 150.0, 300.0
+        else:
+            eco_max, med_max = 200.0, 400.0
+
+    if price < eco_max:
+        return "Económica"
+    elif price < med_max:
+        return "Media"
+    else:
+        return "Premium"
+
 @app.post("/api/extractions/merge")
 async def merge_extractions(req: MergeRequest):
     if not req.files:
@@ -1586,14 +1677,14 @@ async def merge_extractions(req: MergeRequest):
         
         for col in df.columns:
             col_lower = col.lower()
-            if 'price' in col_lower or 'precio' in col_lower or 'pvp' in col_lower:
-                if any(term in col_lower for term in ['sin_iva', 'sin iva', 'no_vat', 'no-vat']):
+            col_norm = re.sub(r'[^a-z0-9]', '', col_lower)
+            if any(term in col_norm for term in ['price', 'precio', 'pvp', 'cifra', 'importe', 'iva', 'vat']):
+                if any(term in col_norm for term in ['siniva', 'novat']):
                     no_vat_price_col = col
-                elif any(term in col_lower for term in ['con_iva', 'con iva', 'price_vat']) or col_lower.endswith('_vat'):
-                    # Asegurar que no contenga 'no_vat'
-                    if 'no_vat' not in col_lower and 'no-vat' not in col_lower:
+                elif any(term in col_norm for term in ['coniva', 'pricevat', 'withvat', 'vat']) or col_norm.endswith('vat'):
+                    if 'novat' not in col_norm and 'siniva' not in col_norm:
                         vat_price_col = col
-                elif 'pvp' in col_lower:
+                elif 'pvp' in col_norm:
                     pvp_price_col = col
                 else:
                     general_price_col = col
@@ -1729,6 +1820,25 @@ async def merge_extractions(req: MergeRequest):
         
     if not price_cols and not price_no_vat_cols and not price_vat_cols and not price_pvp_cols:
         merged_df['Diferencia / Oportunidad'] = "Sin precios cargados"
+
+    # Calcular la Gama por producto basándonos en los límites de precio de su categoría
+    all_p_cols = price_no_vat_cols + price_vat_cols + price_cols + price_pvp_cols
+    config_now = load_config()
+
+    def get_row_gama(row):
+        valid_prices = []
+        for c in all_p_cols:
+            v = row.get(c)
+            if pd.notnull(v):
+                n = clean_price(str(v))
+                if n > 0:
+                    valid_prices.append(n)
+        ref_p = min(valid_prices) if valid_prices else 0.0
+        prod_title = str(row.get('Producto / Modelo') or '')
+        return classify_product_category_and_gama(prod_title, ref_p, config_now)
+
+    gamas = merged_df.apply(get_row_gama, axis=1)
+    merged_df.insert(1, 'Gama', gamas)
         
     # Guardar fusión consolidada
     out_filename = req.output_filename

@@ -284,8 +284,12 @@ document.addEventListener("DOMContentLoaded", () => {
             "precio": "Precio",
             "price_no_vat": "Precio Sin IVA",
             "precio_sin_iva": "Precio Sin IVA",
+            "sin_iva": "Precio Sin IVA",
+            "no_vat": "Precio Sin IVA",
             "price_vat": "Precio Con IVA",
             "precio_con_iva": "Precio Con IVA",
+            "con_iva": "Precio Con IVA",
+            "vat": "Precio Con IVA",
             "pvp": "PVP",
             "precio_pvp": "PVP",
             "attributes": "Atributos Técnicos",
@@ -952,7 +956,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (col.toLowerCase().includes('pvp')) return;
                 const td = document.createElement("td");
                 const val = row[col];
-                td.textContent = val !== null ? val : "";
+                
+                if (col === "Gama") {
+                    let badgeClass = "badge-nd";
+                    if (val === "Económica") badgeClass = "badge-eco";
+                    else if (val === "Media") badgeClass = "badge-med";
+                    else if (val === "Premium") badgeClass = "badge-pre";
+                    td.innerHTML = `<span class="${badgeClass}">${val || 'N/D'}</span>`;
+                } else {
+                    td.textContent = val !== null ? val : "";
+                }
                 
                 // Destacar precio mínimo en base a su grupo
                 if (col.startsWith("Precio ")) {
