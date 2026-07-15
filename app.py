@@ -30,12 +30,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Regex pre-compiladas a nivel de módulo (evitar re-compilación en cada llamada)
 # ---------------------------------------------------------------------------
-_RE_MODEL_STRICT = re.compile(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,15}\b')
-_RE_MODEL_LOOSE  = re.compile(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,15}\b')
-_RE_MODEL_MIN4   = re.compile(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{4,15}\b')
-_RE_ATTR_KG_RPM  = re.compile(r'\b\d+\s*(?:kg|KG|Kg|rpm|RPM)\b')
-_RE_PRICE_EUR    = re.compile(r'\b\d+(?:[\.,]\d+)*\s*€')
-_RE_UNIT_FAKE    = re.compile(r'^\d+(?:KG|RPM|W|V|HZ|DB)$', re.IGNORECASE)
+# Modelo estricto para electrodomésticos (admite /, -, letras y números de 4 a 25 caracteres)
+_RE_MODEL_STRICT = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
+_RE_MODEL_LOOSE  = re.compile(r'\b(?=[-A-Za-z0-9/]*\d)(?=[-A-Za-z0-9/]*[A-Za-z])[-A-Za-z0-9/]{4,25}\b')
+_RE_MODEL_MIN4   = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
+_RE_ATTR_KG_RPM  = re.compile(r'\b\d+(?:[\.,]\d+)?\s*(?:kg|KG|Kg|kilos|KILOS|rpm|RPM|l|L|litros|LITROS|db|DB|dB|dBA|w|W|kw|KW|kwh|kWh|KWh|cubiertos|servicios|bar|m3/h|cm|mm|pulgadas|")\b', re.IGNORECASE)
+_RE_PRICE_EUR    = re.compile(r'(?:\b\d+(?:[\.,]\d+)*\s*(?:€|EUR|euros|Euro|Euros)(?!\w)|(?:€|EUR|euros|Euro|Euros)\s*\b\d+(?:[\.,]\d+)*)', re.IGNORECASE)
+_RE_SPLIT_PRICE  = re.compile(r'(\b\d+(?:[\.,]\d+)*)\s*\n\s*(€|EUR|euro|euros)(?!\w)', re.IGNORECASE)
+_RE_UNIT_FAKE    = re.compile(r'^\d+(?:KG|RPM|W|V|HZ|DB|L|MM|CM|KILOS|LITROS|KWH)$', re.IGNORECASE)
 _RE_WORDS_3      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}')
 _RE_WORDS_4      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}')
 _RE_DOTS_END     = re.compile(r'\.\.\.\s*\d*$')
@@ -44,6 +46,45 @@ _RE_WHITESPACE   = re.compile(r'\s+')
 _RE_TRAIL_SEP    = re.compile(r'\s+[-\u2013,]\s*$')
 _RE_NUMERIC_TOK  = re.compile(r'^\d[\d\.,]*$')
 _RE_DIGIT_ONLY   = re.compile(r'\D')
+
+WEB_NOISE_KEYWORDS = [
+    'recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación',
+    'añadir a la cesta', 'añadir al carrito', 'añadir al carro', 'política de cookies',
+    'política de privacidad', 'todos los derechos reservados', 'gastos de envío',
+    'opiniones de los clientes', 'ver valoraciones', 'filtrar por', 'ordenar por',
+    'página 1 de', 'iniciar sesión', 'crear cuenta', 'atención al cliente',
+    'derechos reservados', 'aceptar todas', 'cookies estrictamente', 'financiación sin intereses',
+    'envío gratis', 'stock disponible', 'en stock', 'agotado', 'últimas unidades',
+    'garantía de', 'vendido por', 'gestionado por', 'añadir a la lista', 'ver ficha técnica',
+    'descargar manual', 'comparar producto'
+]
+
+SECTION_CUTOFF_KEYWORDS = [
+    'productos relacionados', 'también te puede interesar', 'quien vio esto también vio',
+    'comprados juntos habitualmente', 'accesorios recomendados', 'productos similares',
+    'ofertas destacadas en', 'artículos patrocinados'
+]
+
+def preprocess_clipboard_text(text: str) -> str:
+    """Preprocesa el texto plano copiado del navegador (Ctrl+A -> Ctrl+C)."""
+    if not text:
+        return ""
+    # 1a. Unificar precios donde el símbolo € o EUR quedó en la línea siguiente por maquetación HTML
+    cleaned = _RE_SPLIT_PRICE.sub(r'\1 \2', text)
+    # 1b. Unificar precios donde el símbolo € está ANTES de la cifra o en línea superior
+    cleaned = re.sub(r'(\b(?:€|EUR|euro|euros))\s*\n\s*(\d+(?:[\.,]\d+)*)\b', r'\1 \2', cleaned, flags=re.IGNORECASE)
+    # 1c. Unificar decimales partidos en otra línea (ej: 299\n,95\n€ -> 299,95 €)
+    cleaned = re.sub(r'(\b\d+)\s*\n\s*([,\.]\d{1,2})\s*\n\s*(€|EUR|euro|euros)\b', r'\1\2 \3', cleaned, flags=re.IGNORECASE)
+
+    # 2. Reemplazar caracteres especiales HTML, espacios duros y caracteres invisibles/BOM
+    cleaned = cleaned.replace('\xa0', ' ').replace('&nbsp;', ' ')
+    cleaned = cleaned.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+    # Normalizar comillas y guiones unicode
+    cleaned = cleaned.replace('–', '-').replace('—', '-').replace('’', "'")
+    
+    # 3. Eliminar espacios múltiples consecutivos horizontales (manteniendo saltos de línea)
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+    return cleaned
 
 def get_resource_path(relative_path: str) -> str:
     """Obtiene la ruta absoluta para un recurso, funciona en desarrollo y con PyInstaller."""
@@ -439,7 +480,150 @@ def clean_price(price_str: str) -> float:
     except ValueError:
         return 0.0
 
+def normalize_and_reorder_product_prices(item: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normaliza y reordena los campos de precios de un producto.
+    Garantiza que en caso de existir múltiples cantidades/precios (ej: sin IVA, con IVA, PVP):
+    - La cifra más baja se asigna a 'price_no_vat' / 'precio_sin_iva'.
+    - La cifra intermedia se asigna a 'price_vat' / 'precio_con_iva'.
+    - La cifra más alta se asigna a 'pvp' / 'precio_pvp'.
+    """
+    if not item or not isinstance(item, dict):
+        return item
+
+    no_vat_keys = ["price_no_vat", "precio_sin_iva", "sin_iva", "no_vat"]
+    vat_keys = ["price_vat", "precio_con_iva", "con_iva", "vat"]
+    pvp_keys = ["pvp", "precio_pvp"]
+    gen_keys = ["price", "precio"]
+
+    existing_no_vat_key = next((k for k in item if k in no_vat_keys), None)
+    existing_vat_key = next((k for k in item if k in vat_keys), None)
+    existing_pvp_key = next((k for k in item if k in pvp_keys), None)
+    existing_gen_key = next((k for k in item if k in gen_keys), None)
+
+    all_price_keys = [k for k in [existing_no_vat_key, existing_vat_key, existing_pvp_key, existing_gen_key] if k]
+    for k in list(item.keys()):
+        if any(term in str(k).lower() for term in ["price", "precio", "pvp", "cifra", "importe"]) and k not in all_price_keys:
+            all_price_keys.append(k)
+
+    if not all_price_keys:
+        return item
+
+    price_entries = []
+    for k in all_price_keys:
+        val_str = str(item.get(k) or "").strip()
+        num = clean_price(val_str)
+        if num > 0:
+            price_entries.append((k, val_str, num))
+
+    if not price_entries:
+        return item
+
+    unique_entries = []
+    seen_nums = set()
+    for entry in price_entries:
+        rounded = round(entry[2], 2)
+        if rounded not in seen_nums:
+            seen_nums.add(rounded)
+            unique_entries.append(entry)
+
+    unique_entries.sort(key=lambda x: x[2])
+
+    if len(unique_entries) >= 2:
+        lowest_str = unique_entries[0][1]
+        highest_str = unique_entries[-1][1]
+        middle_str = unique_entries[1][1] if len(unique_entries) >= 3 else (
+            unique_entries[1][1] if len(unique_entries) == 2 else unique_entries[0][1]
+        )
+
+        if existing_no_vat_key and existing_vat_key and existing_pvp_key and len(unique_entries) >= 3:
+            item[existing_no_vat_key] = lowest_str
+            item[existing_vat_key] = middle_str
+            item[existing_pvp_key] = highest_str
+        elif existing_no_vat_key and existing_vat_key:
+            item[existing_no_vat_key] = lowest_str
+            item[existing_vat_key] = highest_str
+            if existing_pvp_key and len(unique_entries) >= 3:
+                item[existing_pvp_key] = highest_str
+        elif existing_no_vat_key and existing_pvp_key:
+            item[existing_no_vat_key] = lowest_str
+            item[existing_pvp_key] = highest_str
+        elif existing_vat_key and existing_pvp_key:
+            item[existing_vat_key] = lowest_str
+            item[existing_pvp_key] = highest_str
+        elif existing_no_vat_key and existing_gen_key:
+            item[existing_no_vat_key] = lowest_str
+            item[existing_gen_key] = highest_str
+
+    return item
+
+
+TITLE_NOISE_WORDS = [
+    r'¡?oferta\s*(?:top|flash|especial)?!?', r'¡?chollo!?', r'¡?descuento!?',
+    r'¡?precio\s*especial!?', r'¡?promoci[oó]n!?', r'¡?comprar!?', r'¡?nuevo\s*(?:modelo)?!?',
+    r'¡?top\s*ventas!?', r'¡?mejor\s*precio!?', r'¡?env[ií]o\s*gratis!?', r'¡?en\s*stock!?',
+    r'¡?disponible!?', r'¡?env[ií]o\s*\d+\s*h!?', r'¡?venda\s*flash!?'
+]
+_RE_TITLE_NOISE = re.compile(r'\b(?:' + '|'.join(TITLE_NOISE_WORDS) + r')\b', re.IGNORECASE)
+
+COLOR_PATTERNS = [
+    (re.compile(r'\b(?:acero\s*inoxidable|acero\s*inox|inox|antihuellas)\b', re.IGNORECASE), 'Acero Inoxidable'),
+    (re.compile(r'\b(?:cristal\s*negro)\b', re.IGNORECASE), 'Cristal Negro'),
+    (re.compile(r'\b(?:cristal\s*blanco)\b', re.IGNORECASE), 'Cristal Blanco'),
+    (re.compile(r'\b(?:blanco|blanca)\b', re.IGNORECASE), 'Blanco'),
+    (re.compile(r'\b(?:negro|negra|black)\b', re.IGNORECASE), 'Negro'),
+    (re.compile(r'\b(?:grafito|antracita|gris|silver|plata)\b', re.IGNORECASE), 'Grafito / Gris'),
+    (re.compile(r'\b(?:integrable|encastrable|panelable)\b', re.IGNORECASE), 'Integrable'),
+]
+
+def clean_and_normalize_product_name(title: str, model: str = "") -> str:
+    if not title:
+        return ""
+    cleaned = _RE_TITLE_NOISE.sub("", title)
+    cleaned = re.sub(r'[!¡?¿*]', '', cleaned)
+    cleaned = re.sub(r'\s*-\s*$', '', cleaned).strip()
+    cleaned = re.sub(r'^\s*-\s*', '', cleaned).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    
+    words = cleaned.split()
+    formatted = []
+    for w in words:
+        if w.isupper() and len(w) <= 4 and any(c.isdigit() for c in w):
+            formatted.append(w)
+        elif w.isupper() and len(w) > 1 and not w.isalpha():
+            formatted.append(w)
+        else:
+            formatted.append(w.capitalize())
+    clean_title = " ".join(formatted)
+    
+    if model and model.upper() not in clean_title.upper():
+        clean_title = f"{clean_title} ({model})"
+    return clean_title
+
+def extract_color_and_energy_class(text: str, category: str = ""):
+    color = ""
+    for pattern, name in COLOR_PATTERNS:
+        if pattern.search(text):
+            color = name
+            break
+            
+    if not color and any(k in category.lower() for k in ["inducci", "vitro", "cristal gas"]):
+        color = "Negro"
+        
+    energy = ""
+    m = re.search(r'\b(?:clase\s+(?:energ[eé]tica\s+)?|eficiencia\s+(?:energ[eé]tica\s+)?|etiqueta\s+)?([A-Ga-g](?:\+{1,3})?)(?!\w)', text, re.IGNORECASE)
+    if m:
+        val = m.group(1).upper()
+        if val in ['A+++', 'A++', 'A+', 'A', 'B', 'C', 'D', 'E', 'F', 'G']:
+            energy = val
+    if not energy:
+        m2 = re.search(r'\bclase\s+([A-Ga-g](?:\+{1,3})?)(?!\w)', text, re.IGNORECASE)
+        if m2:
+            energy = m2.group(1).upper()
+    return color, energy
+
 def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    text = preprocess_clipboard_text(text)
     results = []
     
     # Extraer palabras clave del proveedor dinámicamente
@@ -470,6 +654,24 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
                 if w not in ["con", "del", "para", "por", "sus", "una", "uno", "los", "las", "les", "and", "the", "for"]:
                     provider_keywords.add(w)
                     
+    # Cargar marcas conocidas desde dictionary.json para garantizar detección
+    try:
+        dict_data = load_dictionary()
+        if isinstance(dict_data, dict):
+            marcas = dict_data.get("marcas", {})
+            if isinstance(marcas, dict):
+                for k in marcas.keys():
+                    if len(k.strip()) >= 2:
+                        provider_keywords.add(k.strip().lower())
+            elif isinstance(marcas, list):
+                for m in marcas:
+                    if isinstance(m, str) and len(m.strip()) >= 2:
+                        provider_keywords.add(m.strip().lower())
+    except Exception:
+        pass
+        
+    provider_keywords.update({"balay", "bosch", "siemens", "samsung", "lg", "beko", "aeg", "whirlpool", "haier", "teka", "candy", "cecotec", "liebherr", "hisense", "electrolux", "indesit"})
+
     if not provider_keywords:
         provider_keywords = {'lavadora', 'carga', 'frontal', 'balay', 'secadora', 'lavavajillas', 'electro'}
     
@@ -482,11 +684,16 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         if not line_stripped:
             continue
             
-        # Descartamos líneas que terminan en puntos suspensivos ("...") o que son de ruido obvio
+        # Descartamos líneas que terminan en puntos suspensivos ("...") o que son de ruido obvio de maquetación web
+        line_lower = line_stripped.lower()
         if line_stripped.endswith('...') or _RE_DOTS_END.search(line_stripped):
             continue
-        if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
+        if any(keyword in line_lower for keyword in WEB_NOISE_KEYWORDS):
             continue
+            
+        # Si llegamos a una sección de productos relacionados / recomendaciones en el footer y ya tenemos producto principal, detener
+        if spec_lines and any(cutoff in line_lower for cutoff in SECTION_CUTOFF_KEYWORDS):
+            break
             
         # Buscar modelos (sin re.IGNORECASE para evitar que coincidan palabras en minúsculas)
         models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
@@ -510,9 +717,10 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
     if not spec_lines:
         for i, line in enumerate(lines):
             line_stripped = line.strip()
+            line_lower = line_stripped.lower()
             if line_stripped.endswith('...') or _RE_DOTS_END.search(line_stripped):
                 continue
-            if any(keyword in line_stripped.lower() for keyword in ['recíbelo entre', 'entrega garantizada', 'programas de lavado', 'tipo de instalación']):
+            if any(keyword in line_lower for keyword in WEB_NOISE_KEYWORDS):
                 continue
             models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
             models_in_line = [m for m in models_in_line if not _RE_UNIT_FAKE.match(m)]
@@ -557,9 +765,9 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         # Limpiar atributos
         attributes = _RE_WHITESPACE.sub(' ', attributes).strip()
         
-        # Extraer Precio: primer precio en el bloque
-        price_match = _RE_PRICE_EUR.search(product_block)
-        price = price_match.group(0) if price_match else "No disponible"
+        # Extraer Precio: capturar todas las cifras en el bloque para manejar múltiples precios (Sin IVA, Con IVA, PVP)
+        all_prices_matches = _RE_PRICE_EUR.findall(product_block)
+        price = all_prices_matches[0] if all_prices_matches else "No disponible"
         
         # Limpiar precio de los atributos si se coló al final de la línea de especificación
         if price != "No disponible" and attributes:
@@ -579,11 +787,18 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         product_clean = _RE_WHITESPACE.sub(' ', product_clean).strip()
         product_clean = product_clean.strip(',').strip('-').strip()
         
+        # Limpieza de título y extracción automática de metadatos de color y eficiencia energética
+        product_clean = clean_and_normalize_product_name(product_clean, model)
+        color, energy = extract_color_and_energy_class(product_block, product_clean)
+        
         results.append({
             'product': product_clean,
             'model': model,
             'attributes': attributes,
-            'price': price
+            'price': price,
+            'all_prices': all_prices_matches,
+            'color': color,
+            'energy_class': energy
         })
         
     return results
@@ -654,6 +869,7 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
     return pd.concat([df_clean, df_invalid], ignore_index=True)
 
 def process_text(text: str, provider: Dict[str, Any]):
+    text = preprocess_clipboard_text(text)
     regex_pattern = provider.get("regex")
     if not regex_pattern:
         return
@@ -688,8 +904,8 @@ def process_text(text: str, provider: Dict[str, Any]):
             
             # Permitir si contiene una estructura clara de producto (modelo + precio)
             has_product_structure = False
-            model_match = re.search(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,15}\b', text)
-            price_match = re.search(r'\b\d+(?:[\.,]\d+)*\s*€', text)
+            model_match = _RE_MODEL_LOOSE.search(text)
+            price_match = _RE_PRICE_EUR.search(text)
             if model_match and price_match:
                 has_product_structure = True
                 
@@ -708,8 +924,10 @@ def process_text(text: str, provider: Dict[str, Any]):
         matches = list(re.finditer(pattern, text))
         extracted_data_list = []
         
-        # Limitar longitud máxima de coincidencia para evitar falsos positivos dispersos
-        max_match_len = max(350, len(sample_text) * 3)
+        # Limitar longitud máxima de coincidencia para evitar falsos positivos dispersos.
+        # Se usa el máximo entre 1000 chars fijos, 10× el texto de muestra, o 1/3 del texto copiado
+        # para garantizar que bloques de múltiples líneas no sean descartados.
+        max_match_len = max(1000, len(sample_text) * 10, len(text) // 3)
         valid_matches = []
         matched_intervals = []
         
@@ -742,6 +960,11 @@ def process_text(text: str, provider: Dict[str, Any]):
             unmatched_segments = [text.strip()]
 
         if valid_matches:
+            for item in valid_matches:
+                for k, v in list(item.items()):
+                    if k in ["product", "producto"] and v:
+                        item[k] = clean_and_normalize_product_name(v, item.get("model") or item.get("modelo") or "")
+                normalize_and_reorder_product_prices(item)
             extracted_data_list.extend(valid_matches)
             
         # Ejecutar extractor adaptativo para procesar todos los fragmentos que no coincidieron con la regex principal
@@ -752,6 +975,18 @@ def process_text(text: str, provider: Dict[str, Any]):
                 expected_fields = provider.get("fields", [])
                 for item in adaptive_matches:
                     data = {}
+                    all_p_matches = item.get("all_prices", [])
+                    price_tuples = []
+                    for p_str in all_p_matches:
+                        v_num = clean_price(p_str)
+                        if v_num > 0 and not any(abs(v_num - existing[1]) < 0.001 for existing in price_tuples):
+                            price_tuples.append((p_str, v_num))
+                    price_tuples.sort(key=lambda x: x[1])
+
+                    p_lowest = price_tuples[0][0] if price_tuples else item.get("price", "No disponible")
+                    p_middle = price_tuples[1][0] if len(price_tuples) >= 2 else p_lowest
+                    p_highest = price_tuples[-1][0] if len(price_tuples) >= 2 else p_lowest
+
                     for field in expected_fields:
                         if field in ["product", "producto"]:
                             data[field] = item["product"]
@@ -760,18 +995,23 @@ def process_text(text: str, provider: Dict[str, Any]):
                         elif field in ["attributes", "atributos"]:
                             data[field] = item["attributes"]
                         elif field in ["price", "precio"]:
-                            data[field] = item["price"]
+                            data[field] = p_lowest
                         elif field in ["price_no_vat", "precio_sin_iva"]:
-                            data[field] = item["price"]
+                            data[field] = p_lowest
                         elif field in ["price_vat", "precio_con_iva"]:
-                            data[field] = item["price"]
+                            data[field] = p_middle
                         elif field in ["pvp", "precio_pvp"]:
-                            data[field] = item["price"]
+                            data[field] = p_highest
+                        elif field in ["color"]:
+                            data[field] = item.get("color", "")
+                        elif field in ["energy_class", "clase_energetica", "eficiencia", "eficiencia_energetica"]:
+                            data[field] = item.get("energy_class", "")
                         else:
                             data[field] = ""
                             
                     if not data:
                         data = item
+                    normalize_and_reorder_product_prices(data)
                     adaptive_extracted.append(data)
                     
         if adaptive_extracted:
@@ -1186,12 +1426,8 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         
         # Si es un precio: contiene dígitos y opcionalmente símbolos de moneda
         if "precio" in name_lower or "price" in name_lower or "pvp" in name_lower or (re.search(r'\d', val_clean) and any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur', 'usd', 'GBP', 'gbp'])):
-            # Si el valor de muestra contiene un símbolo de moneda común, lo exigimos
-            has_currency = any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur', 'usd', 'GBP', 'gbp'])
-            if has_currency:
-                return r"\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp)"
-            else:
-                return r"\d+(?:[.,\d]*\d+)?"
+            # Permitir que el símbolo de moneda sea opcional tanto antes como después para prevenir caídas de coincidencia
+            return r"(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?"
             
         # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura
         if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[A-Za-z0-9-]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
@@ -1203,15 +1439,15 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
                 return r"\b[A-Za-z0-9-]{3,25}\b"
             
         # Si es producto/marca o atributos:
-        suffix = "?" if is_lazy else ""
+        # Usamos [\s\S]+? para todos los campos para prevenir comportamiento codicioso
         if "producto" in name_lower or "product" in name_lower or "marca" in name_lower or "brand" in name_lower:
-            return f"[^\n]+{suffix}"
+            return r"[\s\S]+?"
             
         if "atributo" in name_lower or "attr" in name_lower or "spec" in name_lower:
-            return f"[^\n]+{suffix}"
+            return r"[\s\S]+?"
             
         # Fallback por defecto:
-        return f"[^\n]+{suffix}"
+        return r"[\s\S]+?"
         
     def get_transition_pattern(literal: str) -> str:
         if not literal:

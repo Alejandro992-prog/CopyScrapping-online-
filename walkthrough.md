@@ -105,3 +105,11 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
     *   `Placa de Gas` / `Cristal Gas`: E≤150€ / M≤300€ / P>300€
     *   `Lavavajillas 60cm`: E≤300€ / M≤450€ / P>450€
     *   `Lavavajillas 45cm`: E≤250€ / M≤400€ / P>400€
+
+*   **Soporte Multicantidad y Clasificación Automática de Precios (3 Cantidades)**:
+    *   **Problema**: Al copiar bloques con 3 importes distintos (ej: Precio Sin IVA, Con IVA y PVP), la ordenación posicional del HTML de la web hacía que la Regex colocara a veces importes altos en `Precio Sin IVA` y menores en `Precio Con IVA`. Además, la extracción adaptativa descartaba el 2º y 3º precio.
+    *   **Solución Implementada**:
+        - Se creó la función `normalize_and_reorder_product_prices` en [app.py](file:///c:/Users/aleja/OneDrive/Escritorio/Programacion%20programas%20etc/ideas%20Nuevos%20Proyectos/CopyScrapping%20%28online%29/app.py), la cual analiza numéricamente todas las cantidades de precio extraídas y asigna estrictamente la **cifra más baja** a `Precio Sin IVA`, la **intermedia** a `Precio Con IVA` y la **más alta** a `PVP`.
+        - Se actualizó `extract_products_adaptively` para buscar todos los importes (`findall`) en el bloque y distribuirlos entre las 3 columnas en lugar de duplicar el primer precio.
+        - Se flexibilizó `generate_regex_pattern` permitiendo símbolos de moneda opcionales antes o después de los números para evitar desajustes en plantillas No-Code.
+

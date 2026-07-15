@@ -705,9 +705,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnSaveProvider.disabled = false;
             } else if (data.status === "warning") {
                 regexMatchStatus.className = "regex-match-status status-box-warning";
-                regexMatchStatus.textContent = `⚠ Advertencia: ${data.message}`;
-                extractedFieldsJson.textContent = "{}";
-                btnSaveProvider.disabled = true;
+                regexMatchStatus.textContent = `⚠ ${data.message} (Puedes guardar la plantilla seleccionando únicamente los colores/campos que te interesen).`;
+                extractedFieldsJson.textContent = JSON.stringify(data.extracted || {}, null, 2);
+                btnSaveProvider.disabled = false;
             } else {
                 regexMatchStatus.className = "regex-match-status status-box-error";
                 regexMatchStatus.textContent = `✗ Error: ${data.message}`;
