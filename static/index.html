@@ -83,7 +83,21 @@
                             <textarea id="paste-input-area" placeholder="Pega texto aquí (Ctrl+V) para procesar..." class="form-textarea" style="height: 60px; font-size: 12px;"></textarea>
                         </div>
 
+                        <div class="control-row mt-10" style="width: 100%;">
+                            <div id="image-ocr-dropzone" class="image-dropzone">
+                                <input type="file" id="image-file-input" accept="image/*" style="display: none;">
+                                <div class="dropzone-content">
+                                    <span class="dropzone-icon">📷</span>
+                                    <div class="dropzone-text">
+                                        <strong>Subir o Arrastrar Captura de Pantalla (OCR)</strong>
+                                        <span>o presiona <kbd style="background: rgba(255,255,255,0.15); padding: 2px 5px; border-radius: 4px; font-size: 11px;">Ctrl + V</kbd> con una imagen copiada</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="divider"></div>
+
 
                         <h3 class="section-title">Última Captura</h3>
                         <div id="last-capture-container" class="empty-state">

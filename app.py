@@ -1,8 +1,10 @@
 import os
 import sys
+import io
 import re
 import json
 import time
+
 import asyncio
 import threading
 import webbrowser
@@ -75,6 +77,9 @@ def preprocess_clipboard_text(text: str) -> str:
     cleaned = re.sub(r'(\b(?:€|EUR|euro|euros))\s*\n\s*(\d+(?:[\.,]\d+)*)\b', r'\1 \2', cleaned, flags=re.IGNORECASE)
     # 1c. Unificar decimales partidos en otra línea (ej: 299\n,95\n€ -> 299,95 €)
     cleaned = re.sub(r'(\b\d+)\s*\n\s*([,\.]\d{1,2})\s*\n\s*(€|EUR|euro|euros)\b', r'\1\2 \3', cleaned, flags=re.IGNORECASE)
+    # 1d. Normalizar lecturas de OCR donde el símbolo € o EUR fue confundido con 0 u O tras 2 cifras decimales
+    cleaned = re.sub(r'(\b\d+[\.,]\d{2})\s*[0Oo]\b', r'\1 €', cleaned)
+
 
     # 2. Reemplazar caracteres especiales HTML, espacios duros y caracteres invisibles/BOM
     cleaned = cleaned.replace('\xa0', ' ').replace('&nbsp;', ' ')
@@ -1095,6 +1100,87 @@ def process_text(text: str, provider: Dict[str, Any]):
     except Exception as e:
         add_log("error", f"Error en el análisis del portapapeles: {str(e)}")
 
+_ocr_reader = None
+_ocr_reader_lock = threading.Lock()
+
+def get_ocr_reader():
+    global _ocr_reader
+    if _ocr_reader is None:
+        with _ocr_reader_lock:
+            if _ocr_reader is None:
+                os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+                import easyocr
+                _ocr_reader = easyocr.Reader(['es', 'en'], gpu=False, verbose=False)
+    return _ocr_reader
+
+def extract_text_from_image_bytes(image_bytes: bytes) -> str:
+    """Extrae texto de una imagen por OCR manteniendo la estructura espacial."""
+    lines_text = []
+    try:
+        reader = get_ocr_reader()
+        results = reader.readtext(image_bytes, detail=1, paragraph=False)
+        if results:
+            boxes = []
+            for bbox, text, prob in results:
+                clean_txt = text.strip()
+                if not clean_txt:
+                    continue
+                y_center = (bbox[0][1] + bbox[2][1]) / 2.0
+                x_min = bbox[0][0]
+                boxes.append({"text": clean_txt, "y": y_center, "x": x_min})
+            
+            if boxes:
+                boxes.sort(key=lambda b: b["y"])
+                line_threshold = 20.0
+                lines = []
+                current_line = []
+                current_y = None
+
+                for b in boxes:
+                    if current_y is None or abs(b["y"] - current_y) < line_threshold:
+                        current_line.append(b)
+                        if current_y is None:
+                            current_y = b["y"]
+                    else:
+                        current_line.sort(key=lambda item: item["x"])
+                        lines.append(" ".join(item["text"] for item in current_line))
+                        current_line = [b]
+                        current_y = b["y"]
+
+                if current_line:
+                    current_line.sort(key=lambda item: item["x"])
+                    lines.append(" ".join(item["text"] for item in current_line))
+
+                lines_text = lines
+    except Exception as e:
+        add_log("warning", f"EasyOCR no disponible o error: {str(e)}")
+
+    if not lines_text:
+        try:
+            import pytesseract
+            from PIL import Image
+            img = Image.open(io.BytesIO(image_bytes))
+            raw_tess = pytesseract.image_to_string(img, lang='spa+eng')
+            if raw_tess:
+                lines_text = [l.strip() for l in raw_tess.splitlines() if l.strip()]
+        except Exception as e:
+            add_log("warning", f"PyTesseract fallo o no disponible: {str(e)}")
+
+    raw_text = "\n".join(lines_text)
+    # Reparar códigos de modelo partidos por espacios (ej: WUU28 TBOES -> WUU28TBOES)
+    cleaned_lines = []
+    for line in raw_text.splitlines():
+        fixed_line = re.sub(
+            r'\b([A-Za-z0-9/]{2,8})\s+([A-Za-z0-9/]{2,8})\b',
+            lambda m: (m.group(1) + m.group(2)) if (any(c.isdigit() for c in m.group(1)) and m.group(2).isalnum() and not m.group(2).lower() in ["iva", "eur", "euros", "con", "sin", "kg", "rpm"]) else m.group(0),
+            line
+        )
+        fixed_line = re.sub(r'(\b\d+[\.,]\d{2})0\b', r'\1 €', fixed_line)
+        cleaned_lines.append(fixed_line)
+
+    return "\n".join(cleaned_lines)
+
+
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     global is_monitoring
@@ -1210,6 +1296,52 @@ async def delete_user_route(username_to_delete: str, username: str = Depends(req
     save_users(users)
     add_log("info", f"Usuario estándar '{username_to_delete}' eliminado por '{username}'.")
     return {"status": "success"}
+
+@app.post("/api/parse-image")
+async def parse_image(file: UploadFile = File(...), username: str = Depends(check_authentication)):
+    fname = (file.filename or "").lower()
+    c_type = (file.content_type or "").lower()
+    if not (c_type.startswith("image/") or any(fname.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp"])):
+        raise HTTPException(status_code=400, detail="El archivo subido debe ser una imagen válida (PNG, JPG, WEBP, BMP).")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="La imagen subida está vacía.")
+
+    add_log("info", f"Procesando captura de pantalla/imagen '{file.filename or 'captura.png'}' con OCR local...")
+    ocr_text = extract_text_from_image_bytes(contents)
+
+    if not ocr_text.strip():
+        add_log("warning", "No se logró detectar texto en la imagen proporcionada.")
+        return {"status": "warning", "message": "No se detectó texto en la imagen.", "ocr_text": ""}
+
+    add_log("info", "Texto extraído por OCR exitosamente. Extrayendo productos...")
+
+    load_config()
+    target_provider = active_provider
+    if not target_provider:
+        target_provider = {
+            "id": "default",
+            "name": "General",
+            "fields": ["Producto", "Modelo", "Precio Sin IVA (€)", "Precio Con IVA (€)"],
+            "file_format": "csv"
+        }
+
+    process_text(ocr_text, target_provider)
+
+    # Si hay un proveedor activo con regex estricta pero no coincidió por ser captura de imagen,
+    # ejecutamos también la extracción adaptativa general para asegurar captura de datos.
+    if target_provider and target_provider.get("regex"):
+        fallback_prov = dict(target_provider)
+        fallback_prov["regex"] = ""
+        process_text(ocr_text, fallback_prov)
+
+    return {
+        "status": "success",
+        "message": "Imagen procesada mediante OCR correctamente.",
+        "ocr_text": ocr_text
+    }
+
 
 @app.get("/")
 async def get_index():

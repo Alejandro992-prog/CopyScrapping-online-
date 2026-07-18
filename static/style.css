@@ -1276,3 +1276,49 @@ tr:hover td {
     display: inline-block;
 }
 
+/* Image OCR Dropzone */
+.image-dropzone {
+    border: 2px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    padding: 16px 12px;
+    background-color: rgba(255, 255, 255, 0.02);
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+    text-align: center;
+}
+
+.image-dropzone:hover, .image-dropzone.dragover {
+    border-color: var(--primary);
+    background-color: rgba(59, 130, 246, 0.08);
+    transform: translateY(-1px);
+}
+
+.dropzone-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
+.dropzone-icon {
+    font-size: 24px;
+}
+
+.dropzone-text {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    gap: 2px;
+}
+
+.dropzone-text strong {
+    font-size: 13px;
+    color: #e5e7eb;
+}
+
+.dropzone-text span {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+

@@ -4,3 +4,6 @@ pandas
 openpyxl
 python-multipart
 pypdf
+Pillow
+pytesseract
+easyocr

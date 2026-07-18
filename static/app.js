@@ -30,6 +30,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnClearCaptures = document.getElementById("btn-clear-captures");
     const btnPasteClipboard = document.getElementById("btn-paste-clipboard");
     const pasteInputArea = document.getElementById("paste-input-area");
+    const imageOcrDropzone = document.getElementById("image-ocr-dropzone");
+    const imageFileInput = document.getElementById("image-file-input");
+
     
     // Tab 2 Elements
     const provNameInput = document.getElementById("prov-name");
@@ -112,9 +115,96 @@ document.addEventListener("DOMContentLoaded", () => {
         provIdInput.dataset.autogen = "false";
     });
 
+    // Image OCR Processing Function & Event Listeners
+    async function uploadAndProcessImage(file) {
+        if (!file) return;
+        const formData = new FormData();
+        formData.append("file", file);
+
+        appendLog({
+            timestamp: new Date().toLocaleTimeString(),
+            type: "info",
+            message: `Enviando captura/imagen '${file.name || 'captura.png'}' al OCR local...`
+        });
+
+        try {
+            const response = await fetch("/api/parse-image", {
+                method: "POST",
+                body: formData
+            });
+            const data = await response.json();
+            if (response.ok && data.status === "success") {
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "success",
+                    message: "Imagen procesada por OCR con éxito. Datos actualizados."
+                });
+                loadRecentCaptures();
+            } else {
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "warning",
+                    message: data.message || "Error procesando la imagen por OCR."
+                });
+            }
+        } catch (err) {
+            appendLog({
+                timestamp: new Date().toLocaleTimeString(),
+                type: "error",
+                message: "Error de red al procesar la imagen: " + err.message
+            });
+        }
+    }
+
+    if (imageOcrDropzone && imageFileInput) {
+        imageOcrDropzone.addEventListener("click", () => imageFileInput.click());
+        
+        imageFileInput.addEventListener("change", (e) => {
+            if (e.target.files && e.target.files[0]) {
+                uploadAndProcessImage(e.target.files[0]);
+                imageFileInput.value = "";
+            }
+        });
+
+        imageOcrDropzone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            imageOcrDropzone.classList.add("dragover");
+        });
+
+        imageOcrDropzone.addEventListener("dragleave", () => {
+            imageOcrDropzone.classList.remove("dragover");
+        });
+
+        imageOcrDropzone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            imageOcrDropzone.classList.remove("dragover");
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                uploadAndProcessImage(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    // Escucha global de pegado (Ctrl+V) para capturas de pantalla de la competencia
+    window.addEventListener("paste", (e) => {
+        const items = (e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData))?.items;
+        if (!items) return;
+
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf("image") !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    e.preventDefault();
+                    uploadAndProcessImage(blob);
+                    break;
+                }
+            }
+        }
+    });
+
     // ----------------------------------------------------
     // 2. REAL-TIME LOGGING & DAEMON CONNECTION (SSE)
     // ----------------------------------------------------
+
     function initSSEConnection() {
         if (eventSource) {
             eventSource.close();
