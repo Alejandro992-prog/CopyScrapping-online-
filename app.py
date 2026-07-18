@@ -473,7 +473,7 @@ def clean_price(price_str: str) -> float:
     has_currency = re.search(r'€|EUR|euro|euros', str_val, re.IGNORECASE)
     if not has_currency:
         if re.search(
-            r'\b(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|kg|kilos|db|dba|kwh|m3/h|cubiertos|servicios|hz|v)\b|\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado)\b',
+            r'\b(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|kg|kilos|l|litros|lts|db|dba|w|kw|kwh|m3/h|bar|cubiertos|servicios|pulgadas|hz|v|cm|mm)\b|\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado)\b',
             str_val,
             re.IGNORECASE
         ):
