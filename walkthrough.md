@@ -113,3 +113,11 @@ Se configuró un archivo de directrices en la carpeta del agente de desarrollo l
         - Se actualizó `extract_products_adaptively` para buscar todos los importes (`findall`) en el bloque y distribuirlos entre las 3 columnas en lugar de duplicar el primer precio.
         - Se flexibilizó `generate_regex_pattern` permitiendo símbolos de moneda opcionales antes o después de los números para evitar desajustes en plantillas No-Code.
 
+*   **Filtrado Estricto de Revoluciones (RPM) en Precios**:
+    *   **Problema**: Al copiar especificaciones de lavadoras, las cifras de velocidad de centrifugado (`1400`, `1200`, `1.400 rpm`, `Centrifugado: 1400`) eran interpretadas erróneamente como precios de productos cuando no había un símbolo explícito de moneda (`€`/`EUR`).
+    *   **Solución Implementada**:
+        - Se añadió una regla de guardia en `clean_price` para ignorar textos que incluyan unidades técnicas (`rpm`, `r.p.m.`, `revoluciones`, `kg`, `db`, `w`, etc.) a menos que tengan explícitamente el símbolo `€`.
+        - Se ampliaron las expresiones regulares de atributos (`_RE_ATTR_KG_RPM`, `_RE_RPM_SPEC`, `_RE_UNIT_FAKE`) y `universal_units` para capturar todas las variantes de RPM.
+        - Se añadió unificación de saltos de línea en `preprocess_clipboard_text` y *negative lookahead* en `generate_regex_pattern` para evitar desajustes en el asistente No-Code.
+
+
