@@ -36,10 +36,21 @@ except ImportError:
 _RE_MODEL_STRICT = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
 _RE_MODEL_LOOSE  = re.compile(r'\b(?=[-A-Za-z0-9/]*\d)(?=[-A-Za-z0-9/]*[A-Za-z])[-A-Za-z0-9/]{4,25}\b')
 _RE_MODEL_MIN4   = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
-_RE_ATTR_KG_RPM  = re.compile(r'\b\d+(?:[\.,]\d+)?\s*(?:kg|KG|Kg|kilos|KILOS|rpm|RPM|l|L|litros|LITROS|db|DB|dB|dBA|w|W|kw|KW|kwh|kWh|KWh|cubiertos|servicios|bar|m3/h|cm|mm|pulgadas|")\b', re.IGNORECASE)
+_RE_RPM_SUFFIX = r'(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min)'
+_RE_RPM_PREFIX = r'(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado|vel\.?\s*max\.?|vel\.?\s*centrifugado)'
+_RE_ATTR_KG_RPM  = re.compile(
+    r'\b(?:\d{1,3}(?:[\.,]\d{3})*|\d+)(?:[\.,]\d+)?\s*(?:kg|kilos|rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|l|litros|lts|db|dba|w|kw|kwh|cubiertos|servicios|bar|m3/h|cm|mm|pulgadas|hz|v|")\b'
+    r'|'
+    r'\b' + _RE_RPM_PREFIX + r'\s*[:=]?\s*(?:\d{1,3}(?:[\.,]\d{3})*|\d+)\b',
+    re.IGNORECASE
+)
+_RE_RPM_SPEC     = re.compile(
+    r'\b(?:\d{1,3}(?:[\.,]\d{3})*|\d+)\s*' + _RE_RPM_SUFFIX + r'\b|\b' + _RE_RPM_PREFIX + r'\s*[:=]?\s*(?:\d{1,3}(?:[\.,]\d{3})*|\d+)\b',
+    re.IGNORECASE
+)
 _RE_PRICE_EUR    = re.compile(r'(?:\b\d+(?:[\.,]\d+)*\s*(?:€|EUR|euros|Euro|Euros)(?!\w)|(?:€|EUR|euros|Euro|Euros)\s*\b\d+(?:[\.,]\d+)*)', re.IGNORECASE)
 _RE_SPLIT_PRICE  = re.compile(r'(\b\d+(?:[\.,]\d+)*)\s*\n\s*(€|EUR|euro|euros)(?!\w)', re.IGNORECASE)
-_RE_UNIT_FAKE    = re.compile(r'^\d+(?:KG|RPM|W|V|HZ|DB|L|MM|CM|KILOS|LITROS|KWH)$', re.IGNORECASE)
+_RE_UNIT_FAKE    = re.compile(r'^\d[\d\.,]*(?:KG|RPM|R\.P\.M\.?|REV|REVOLUCIONES|W|V|HZ|DB|DBA|L|MM|CM|KILOS|LITROS|KWH)$', re.IGNORECASE)
 _RE_WORDS_3      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3,}')
 _RE_WORDS_4      = re.compile(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}')
 _RE_DOTS_END     = re.compile(r'\.\.\.\s*\d*$')
@@ -71,15 +82,19 @@ def preprocess_clipboard_text(text: str) -> str:
     """Preprocesa el texto plano copiado del navegador (Ctrl+A -> Ctrl+C)."""
     if not text:
         return ""
-    # 1a. Unificar precios donde el símbolo € o EUR quedó en la línea siguiente por maquetación HTML
-    cleaned = _RE_SPLIT_PRICE.sub(r'\1 \2', text)
+    # 1a. Unificar precios donde el símbolo € o EUR quedó en la línea siguiente por maquetación HTML (admite múltiplos saltos de línea)
+    cleaned = re.sub(r'(\b\d+(?:[\.,]\d+)*)\s*[\r\n]+\s*(€|EUR|euro|euros|\.-|,-)(?!\w)', r'\1 \2', text, flags=re.IGNORECASE)
     # 1b. Unificar precios donde el símbolo € está ANTES de la cifra o en línea superior
-    cleaned = re.sub(r'(\b(?:€|EUR|euro|euros))\s*\n\s*(\d+(?:[\.,]\d+)*)\b', r'\1 \2', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'(\b(?:€|EUR|euro|euros))\s*[\r\n]+\s*(\d+(?:[\.,]\d+)*)\b', r'\1 \2', cleaned, flags=re.IGNORECASE)
     # 1c. Unificar decimales partidos en otra línea (ej: 299\n,95\n€ -> 299,95 €)
-    cleaned = re.sub(r'(\b\d+)\s*\n\s*([,\.]\d{1,2})\s*\n\s*(€|EUR|euro|euros)\b', r'\1\2 \3', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'(\b\d+)\s*[\r\n]+\s*([,\.]\d{1,2})\s*[\r\n]+\s*(€|EUR|euro|euros|\.-|,-)\b', r'\1\2 \3', cleaned, flags=re.IGNORECASE)
     # 1d. Normalizar lecturas de OCR donde el símbolo € o EUR fue confundido con 0 u O tras 2 cifras decimales
-    cleaned = re.sub(r'(\b\d+[\.,]\d{2})\s*[0Oo]\b', r'\1 €', cleaned)
-
+    cleaned = re.sub(r'(\b\d+[\.,]\d{2})\s+[0Oo]\b', r'\1 €', cleaned)
+    # 1e. Normalizar comas decimales separadas por espacios (ej: 419 , 00 € -> 419,00 €)
+    cleaned = re.sub(r'(\b\d+)\s*,\s*(\d{2}\b)', r'\1,\2', cleaned)
+    # 1f. Unificar cifras de RPM / centrifugado partidas por saltos de línea (ej: Centrifugado:\n1400 rpm o 1400\nr.p.m.)
+    cleaned = re.sub(r'(\b(?:\d{1,3}(?:\.\d{3})*|\d{3,4}))\s*[\r\n]+\s*(rpm|r\.p\.m\.?|revoluciones|rev|r/min)\b', r'\1 \2', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'(\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado|vel\.?\s*max\.?))\s*[:=]?\s*[\r\n]+\s*(\d{3,4})\b', r'\1: \2', cleaned, flags=re.IGNORECASE)
 
     # 2. Reemplazar caracteres especiales HTML, espacios duros y caracteres invisibles/BOM
     cleaned = cleaned.replace('\xa0', ' ').replace('&nbsp;', ' ')
@@ -452,8 +467,20 @@ def format_excel_file(filepath: str):
 def clean_price(price_str: str) -> float:
     if not price_str:
         return 0.0
+    str_val = str(price_str).strip()
+
+    # Si contiene unidades técnicas (rpm, kg, db, w, etc.) y NO tiene símbolo de moneda explícito (€, EUR, euro, euros), NO es un precio.
+    has_currency = re.search(r'€|EUR|euro|euros', str_val, re.IGNORECASE)
+    if not has_currency:
+        if re.search(
+            r'\b(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|kg|kilos|db|dba|kwh|m3/h|cubiertos|servicios|hz|v)\b|\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado)\b',
+            str_val,
+            re.IGNORECASE
+        ):
+            return 0.0
+
     # Eliminar símbolos de moneda y espacios
-    cleaned = re.sub(r'[^\d,.-]', '', price_str)
+    cleaned = re.sub(r'[^\d,.-]', '', str_val)
     # Estandarizar separador de decimales a punto
     if ',' in cleaned and '.' in cleaned:
         # Ambos presentes, por ejemplo: 1.250,50 o 1,250.50
@@ -645,6 +672,43 @@ def extract_color_and_energy_class(text: str, category: str = ""):
             energy = m2.group(1).upper()
     return color, energy
 
+def find_prices_in_text(text: str) -> List[str]:
+    """Busca precios en un bloque de texto, priorizando moneda explícita (€, EUR, euros, .-)."""
+    explicit_pattern = re.compile(
+        r'(?:\b\d+(?:[\.,]\d+)*\s*(?:€|EUR|euros|Euro|Euros|\.-|,-)(?!\w)|(?:€|EUR|euros|Euro|Euros)\s*\b\d+(?:[\.,]\d+)*)',
+        re.IGNORECASE
+    )
+    p_matches = explicit_pattern.findall(text)
+    results = []
+    for p in p_matches:
+        v = clean_price(p)
+        if 15.0 <= v <= 15000.0:
+            fmt = f"{v:.2f} €".replace(".00", "")
+            if fmt not in results:
+                results.append(fmt)
+                
+    if not results:
+        # Fallback a números limpios quitando especificaciones técnicas primero
+        clean_t = _RE_ATTR_KG_RPM.sub('', text)
+        clean_t = re.sub(r'\b(?:\d{1,3}(?:\.\d{3})*|\d+)\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|kg|kilos|l|litros|lts|db|dba|w|kw|kwh|m3/h|bar|cubiertos|servicios|pulgadas|hz|v|cm|mm)\b', '', clean_t, flags=re.IGNORECASE)
+        clean_t = re.sub(r'\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado|vel\.?\s*max\.?|vel\.?\s*centrifugado)\s*[:=]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\b', '', clean_t, flags=re.IGNORECASE)
+        clean_t = re.sub(r'\b(?:19|20)\d{2}\b', '', clean_t) # Años
+        raw_nums = re.findall(r'\b\d{1,5}(?:[\.,]\d{1,2})?\b', clean_t)
+        
+        # Valores típicos de RPM a excluir en fallback si no llevan símbolo € explícito
+        TYPICAL_RPMS = {600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0}
+        has_wash_context = any(k in text.lower() for k in ['lavadora', 'centrifugado', 'rpm', 'revoluci', 'r.p.m'])
+        
+        for r in raw_nums:
+            v = clean_price(r)
+            if 15.0 <= v <= 15000.0:
+                if has_wash_context and v in TYPICAL_RPMS:
+                    continue
+                fmt = f"{v:.2f} €".replace(".00", "")
+                if fmt not in results:
+                    results.append(fmt)
+    return results
+
 def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     text = preprocess_clipboard_text(text)
     results = []
@@ -652,12 +716,10 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
     # Extraer palabras clave del proveedor dinámicamente
     provider_keywords = set()
     if provider:
-        # Palabras del nombre del proveedor
         prov_name = provider.get("name", "")
         for w in _RE_WORDS_3.findall(prov_name.lower()):
             provider_keywords.add(w)
             
-        # Palabras de las etiquetas de producto/marca entrenadas
         sample_text = provider.get("sample_text", "")
         labels = provider.get("labels", [])
         product_label_texts = []
@@ -677,7 +739,6 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
                 if w not in ["con", "del", "para", "por", "sus", "una", "uno", "los", "las", "les", "and", "the", "for"]:
                     provider_keywords.add(w)
                     
-    # Cargar marcas conocidas desde dictionary.json para garantizar detección
     try:
         dict_data = load_dictionary()
         if isinstance(dict_data, dict):
@@ -707,27 +768,20 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         if not line_stripped:
             continue
             
-        # Descartamos líneas que terminan en puntos suspensivos ("...") o que son de ruido obvio de maquetación web
         line_lower = line_stripped.lower()
         if line_stripped.endswith('...') or _RE_DOTS_END.search(line_stripped):
             continue
         if any(keyword in line_lower for keyword in WEB_NOISE_KEYWORDS):
             continue
             
-        # Si llegamos a una sección de productos relacionados / recomendaciones en el footer y ya tenemos producto principal, detener
         if spec_lines and any(cutoff in line_lower for cutoff in SECTION_CUTOFF_KEYWORDS):
             break
             
-        # Buscar modelos (sin re.IGNORECASE para evitar que coincidan palabras en minúsculas)
-        models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
-        
-        # Filtrar modelos falsos que son unidades de medida (ej: 1400RPM, 10KG)
-        models_in_line = [m for m in models_in_line if not _RE_UNIT_FAKE.match(m)]
+        models_in_line = [m.upper() for m in _RE_MODEL_LOOSE.findall(line_stripped) if not _RE_UNIT_FAKE.match(m)]
         
         has_attrs = _RE_ATTR_KG_RPM.search(line_stripped) is not None
         has_keywords = any(kw in line_stripped.lower() for kw in provider_keywords)
         
-        # Si tiene modelo y atributos/palabras clave, la consideramos línea de especificación principal
         if models_in_line and (has_attrs or has_keywords):
             spec_lines.append({
                 'index': i,
@@ -736,7 +790,6 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
                 'models': models_in_line
             })
             
-    # Si no hay líneas de especificación con atributos, buscamos cualquier línea con un modelo válido
     if not spec_lines:
         for i, line in enumerate(lines):
             line_stripped = line.strip()
@@ -745,14 +798,14 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
                 continue
             if any(keyword in line_lower for keyword in WEB_NOISE_KEYWORDS):
                 continue
-            models_in_line = _RE_MODEL_STRICT.findall(line_stripped)
-            models_in_line = [m for m in models_in_line if not _RE_UNIT_FAKE.match(m)]
+            models_in_line = [m.upper() for m in _RE_MODEL_LOOSE.findall(line_stripped) if not _RE_UNIT_FAKE.match(m)]
             
-            # Validación estricta para evitar falsos positivos de "letras y números sueltos"
             if models_in_line:
                 line_has_keyword = any(kw in line_stripped.lower() for kw in provider_keywords)
-                line_has_price = _RE_PRICE_EUR.search(line_stripped) is not None
-                if line_has_keyword or line_has_price:
+                clean_line_no_attr = _RE_ATTR_KG_RPM.sub('', line_stripped)
+                raw_nums_line = re.findall(r'\b\d{1,5}(?:[\.,]\d{1,2})?\b', clean_line_no_attr)
+                line_has_price = (_RE_PRICE_EUR.search(line_stripped) is not None) or any(15.0 <= clean_price(n) <= 15000.0 for n in raw_nums_line)
+                if line_has_keyword or line_has_price or len(models_in_line[0]) >= 6:
                     spec_lines.append({
                         'index': i,
                         'line': line_stripped,
@@ -763,54 +816,70 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
     if not spec_lines:
         return []
         
-    # 2. Para cada línea de especificación, delimitamos su bloque y extraemos los datos
+    # Analizar maquetación del documento (Price-First vs Price-Last)
+    before_count = 0
+    after_count = 0
+    explicit_price_regex = re.compile(r'(?:€|EUR|euros|Euro|Euros|\.-|,-)', re.IGNORECASE)
+    price_line_indices = [idx for idx, l in enumerate(lines) if explicit_price_regex.search(l)]
+    
+    for p_idx in price_line_indices:
+        closest_model_idx = min(spec_lines, key=lambda s: abs(s['index'] - p_idx))['index']
+        if p_idx < closest_model_idx:
+            before_count += 1
+        elif p_idx > closest_model_idx:
+            after_count += 1
+            
+    is_price_first = (before_count > after_count)
+    
+    # Extraer datos de cada producto
     for idx, spec in enumerate(spec_lines):
-        start_line_idx = spec['index']
-        end_line_idx = spec_lines[idx+1]['index'] if idx + 1 < len(spec_lines) else len(lines)
+        model_idx = spec['index']
+        model = spec['model']
+        spec_line = spec['line']
         
-        # El bloque de texto para este producto específico (hasta el inicio del siguiente producto)
+        if is_price_first:
+            start_line_idx = spec_lines[idx-1]['index'] + 1 if idx > 0 else 0
+            end_line_idx = spec_lines[idx+1]['index'] if idx + 1 < len(spec_lines) else len(lines)
+        else:
+            start_line_idx = model_idx
+            end_line_idx = spec_lines[idx+1]['index'] if idx + 1 < len(spec_lines) else len(lines)
+            
         product_block = "\n".join(lines[start_line_idx:end_line_idx])
         
-        spec_line = spec['line']
-        model = spec['model']
-        
-        # Extraer Atributos Técnicos de la línea de especificación.
+        # Extraer Atributos Técnicos
         attr_match = _RE_ATTR_KG_RPM.search(spec_line)
         if attr_match:
             attributes = spec_line[attr_match.start():].strip()
         else:
-            model_pos = spec_line.find(model)
+            model_pos = spec_line.upper().find(model)
             if model_pos != -1:
                 attributes = spec_line[model_pos + len(model):].strip()
             else:
                 attributes = ""
                     
-        # Limpiar atributos
         attributes = _RE_WHITESPACE.sub(' ', attributes).strip()
         
-        # Extraer Precio: capturar todas las cifras en el bloque para manejar múltiples precios (Sin IVA, Con IVA, PVP)
-        all_prices_matches = _RE_PRICE_EUR.findall(product_block)
+        # Extraer Precios del bloque de forma adaptativa
+        text_no_model = product_block.replace(model, "").replace(model.lower(), "")
+        all_prices_matches = find_prices_in_text(text_no_model)
         price = all_prices_matches[0] if all_prices_matches else "No disponible"
         
         # Limpiar precio de los atributos si se coló al final de la línea de especificación
         if price != "No disponible" and attributes:
             attributes_clean = attributes.replace(price, "").strip()
-            # Eliminar guiones, comas o espacios finales sobrantes
             attributes = _RE_TRAIL_SEP.sub('', attributes_clean).strip()
             
-        # Extraer Producto: es la línea de especificación menos el modelo y los atributos
+        # Extraer Producto
         product = spec_line
         if attributes:
-            # Quitamos los atributos originales de la línea
             product = product.replace(spec_line[attr_match.start():] if attr_match else attributes, '')
             
-        product_parts = product.split(model)
-        product_clean = " ".join([part.strip() for part in product_parts if part.strip()])
+        pattern_model = re.compile(re.escape(model), re.IGNORECASE)
+        product_clean = pattern_model.sub('', product)
         
         product_clean = _RE_WHITESPACE.sub(' ', product_clean).strip()
         product_clean = product_clean.strip(',').strip('-').strip()
         
-        # Limpieza de título y extracción automática de metadatos de color y eficiencia energética
         product_clean = clean_and_normalize_product_name(product_clean, model)
         color, energy = extract_color_and_energy_class(product_block, product_clean)
         
@@ -891,95 +960,91 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
     
     return pd.concat([df_clean, df_invalid], ignore_index=True)
 
-def process_text(text: str, provider: Dict[str, Any]):
+def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
     text = preprocess_clipboard_text(text)
     regex_pattern = provider.get("regex")
-    if not regex_pattern:
-        return
-        
+    
+    valid_matches = []
+    unmatched_segments = []
+    extracted_data_list = []
+
     try:
-        # Filtrado previo por palabras clave requeridas del proveedor antes de procesar
         prov_name = provider.get("name", "")
         sample_text = provider.get("sample_text", "")
-        
-        required_keywords = set()
-        for w in _RE_WORDS_4.findall(prov_name.lower()):
-            required_keywords.add(w)
-            
-        labels = provider.get("labels", [])
-        for label in labels:
-            name_lbl = label.get("name", "").lower()
-            if any(term in name_lbl for term in ["product", "producto", "marca", "brand"]):
-                start = label.get("start", 0)
-                end = label.get("end", 0)
-                if 0 <= start < end <= len(sample_text):
-                    for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text[start:end].lower()):
+
+        if regex_pattern:
+            required_keywords = set()
+            for w in _RE_WORDS_4.findall(prov_name.lower()):
+                required_keywords.add(w)
+                
+            labels = provider.get("labels", [])
+            for label in labels:
+                name_lbl = label.get("name", "").lower()
+                if any(term in name_lbl for term in ["product", "producto", "marca", "brand"]):
+                    start = label.get("start", 0)
+                    end = label.get("end", 0)
+                    if 0 <= start < end <= len(sample_text):
+                        for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text[start:end].lower()):
+                            required_keywords.add(w)
+                            
+            if not required_keywords and sample_text:
+                for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text.lower()):
+                    if w not in ["carga", "frontal", "para", "sobre", "este"]:
                         required_keywords.add(w)
                         
-        if not required_keywords and sample_text:
-            for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text.lower()):
-                if w not in ["carga", "frontal", "para", "sobre", "este"]:
-                    required_keywords.add(w)
-                    
-        if required_keywords:
-            text_lower = text.lower()
-            has_any_match = any(kw in text_lower for kw in required_keywords)
-            
-            # Permitir si contiene una estructura clara de producto (modelo + precio)
-            has_product_structure = False
-            model_match = _RE_MODEL_LOOSE.search(text)
-            price_match = _RE_PRICE_EUR.search(text)
-            if model_match and price_match:
-                has_product_structure = True
+            if required_keywords and not is_ocr:
+                text_lower = text.lower()
+                has_any_match = any(kw in text_lower for kw in required_keywords)
                 
-            if not has_any_match and not has_product_structure:
-                # Silenciosamente no hacemos nada, o informamos en logs sin saturar
-                add_log("info", f"Texto ignorado: no contiene palabras clave de '{provider['name']}' ni estructura de producto.")
-                return
-                
-        # Limpiar anclajes antiguos
-        pattern = regex_pattern
-        if pattern.startswith("^"):
-            pattern = pattern[1:]
-        if pattern.endswith("$"):
-            pattern = pattern[:-1]
-            
-        matches = list(re.finditer(pattern, text))
-        extracted_data_list = []
-        
-        # Limitar longitud máxima de coincidencia para evitar falsos positivos dispersos.
-        # Se usa el máximo entre 1000 chars fijos, 10× el texto de muestra, o 1/3 del texto copiado
-        # para garantizar que bloques de múltiples líneas no sean descartados.
-        max_match_len = max(1000, len(sample_text) * 10, len(text) // 3)
-        valid_matches = []
-        matched_intervals = []
-        
-        if matches:
-            for match in matches:
-                match_len = match.end() - match.start()
-                if match_len <= max_match_len:
-                    valid_matches.append(match.groupdict())
-                    matched_intervals.append((match.start(), match.end()))
-                else:
-                    add_log("info", f"Coincidencia de expresión regular descartada por tamaño excesivo ({match_len} caracteres).")
+                # Permitir si contiene una estructura clara de producto (modelo + precio)
+                has_product_structure = False
+                model_match = _RE_MODEL_LOOSE.search(text)
+                clean_text_no_attr = _RE_ATTR_KG_RPM.sub('', text)
+                price_match = _RE_PRICE_EUR.search(text) or re.search(r'\b\d{1,5}(?:[\.,]\d{2})\b', clean_text_no_attr)
+                if model_match and price_match:
+                    has_product_structure = True
                     
-        # Obtener fragmentos de texto no coincidentes
-        unmatched_segments = []
-        last_idx = 0
-        matched_intervals.sort(key=lambda x: x[0])
-        for start, end in matched_intervals:
-            if start > last_idx:
-                segment = text[last_idx:start].strip()
+                if not has_any_match and not has_product_structure:
+                    add_log("info", f"Texto ignorado: no contiene palabras clave de '{provider['name']}' ni estructura de producto.")
+                    return
+                    
+            pattern = regex_pattern
+            if pattern.startswith("^"):
+                pattern = pattern[1:]
+            if pattern.endswith("$"):
+                pattern = pattern[:-1]
+                
+            matches = list(re.finditer(pattern, text))
+            max_match_len = max(1000, len(sample_text) * 10, len(text) // 3)
+            matched_intervals = []
+            
+            if matches:
+                for match in matches:
+                    match_len = match.end() - match.start()
+                    if match_len <= max_match_len:
+                        valid_matches.append(match.groupdict())
+                        matched_intervals.append((match.start(), match.end()))
+                    else:
+                        add_log("info", f"Coincidencia de expresión regular descartada por tamaño excesivo ({match_len} caracteres).")
+                        
+            last_idx = 0
+            matched_intervals.sort(key=lambda x: x[0])
+            for start, end in matched_intervals:
+                if start > last_idx:
+                    segment = text[last_idx:start].strip()
+                    if segment:
+                        unmatched_segments.append(segment)
+                last_idx = end
+            if last_idx < len(text):
+                segment = text[last_idx:].strip()
                 if segment:
                     unmatched_segments.append(segment)
-            last_idx = end
-        if last_idx < len(text):
-            segment = text[last_idx:].strip()
-            if segment:
-                unmatched_segments.append(segment)
+        else:
+            # Si no hay expresión regular entrenada, todo el texto pasa a extracción adaptativa
+            if text.strip():
+                unmatched_segments = [text.strip()]
 
-        # Si no hubo ninguna coincidencia válida con regex, el texto completo es un segmento no coincidente
-        if not valid_matches and text.strip():
+        if not valid_matches and text.strip() and not unmatched_segments:
             unmatched_segments = [text.strip()]
 
         if valid_matches:
@@ -987,6 +1052,24 @@ def process_text(text: str, provider: Dict[str, Any]):
                 for k, v in list(item.items()):
                     if k in ["product", "producto"] and v:
                         item[k] = clean_and_normalize_product_name(v, item.get("model") or item.get("modelo") or "")
+                
+                # Si la regex del proveedor no capturó un precio o el valor es 0/No disponible, recuperarlo
+                has_valid_price = False
+                for k, v in item.items():
+                    if any(term in k.lower() for term in ["price", "precio", "pvp", "sin_iva", "con_iva", "importe"]):
+                        if v and clean_price(str(v)) > 0:
+                            has_valid_price = True
+                            break
+                if not has_valid_price:
+                    full_item_text = " ".join([str(v) for v in item.values() if v])
+                    found_prices = find_prices_in_text(full_item_text)
+                    if found_prices:
+                        for field in provider.get("fields", []):
+                            f_norm = field.lower()
+                            if any(term in f_norm for term in ["price", "precio", "pvp", "sin_iva", "con_iva", "importe"]):
+                                if not item.get(field) or item.get(field) == "No disponible" or clean_price(str(item.get(field))) == 0:
+                                    item[field] = found_prices[0]
+                                    
                 normalize_and_reorder_product_prices(item)
             extracted_data_list.extend(valid_matches)
             
@@ -1010,33 +1093,33 @@ def process_text(text: str, provider: Dict[str, Any]):
                     p_middle = price_tuples[1][0] if len(price_tuples) >= 2 else p_lowest
                     p_highest = price_tuples[-1][0] if len(price_tuples) >= 2 else p_lowest
 
-                    no_vat_names = {"price_no_vat", "precio_sin_iva", "sin_iva", "no_vat", "siniva", "precio_siniva", "p_sin_iva"}
-                    vat_names = {"price_vat", "precio_con_iva", "con_iva", "vat", "coniva", "precio_coniva", "p_con_iva"}
-                    pvp_names = {"pvp", "precio_pvp", "pvp_precio", "p_pvp"}
-                    gen_names = {"price", "precio"}
+                    no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva"}
+                    vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva"}
+                    pvp_terms = {"pvp", "precio_pvp", "preciopvp", "pvpprecio", "p_pvp"}
+                    gen_price_terms = {"price", "precio", "importe", "cifra", "coste"}
 
                     for field in expected_fields:
                         f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
-                        if f_norm in ["product", "producto"]:
+                        if any(term in f_norm for term in ["product", "producto", "nombre", "articulo"]):
                             data[field] = item["product"]
-                        elif f_norm in ["model", "modelo", "sku", "ref", "referencia"]:
+                        elif any(term in f_norm for term in ["model", "modelo", "sku", "ref", "referencia"]):
                             data[field] = item["model"]
-                        elif f_norm in ["attributes", "atributos", "specs", "especificaciones"]:
+                        elif any(term in f_norm for term in ["attribute", "atributo", "spec", "especificacion"]):
                             data[field] = item["attributes"]
-                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in no_vat_names}:
+                        elif any(term in f_norm for term in no_vat_terms):
                             data[field] = p_lowest
-                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in vat_names}:
+                        elif any(term in f_norm for term in vat_terms):
                             data[field] = p_middle
-                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in pvp_names}:
+                        elif any(term in f_norm for term in pvp_terms):
                             data[field] = p_highest
-                        elif f_norm in {re.sub(r'[^a-z0-9]', '', s) for s in gen_names}:
+                        elif any(term in f_norm for term in gen_price_terms):
                             data[field] = p_lowest
                         elif f_norm in ["color"]:
                             data[field] = item.get("color", "")
-                        elif f_norm in ["energyclass", "claseenergetica", "eficiencia", "eficienciaenergetica"]:
+                        elif any(term in f_norm for term in ["energy", "claseenergetica", "eficiencia"]):
                             data[field] = item.get("energy_class", "")
                         else:
-                            data[field] = ""
+                            data[field] = p_lowest if ("eur" in f_norm or "€" in field or "precio" in field.lower()) else ""
                             
                     if not data:
                         data = item
@@ -1175,7 +1258,7 @@ def extract_text_from_image_bytes(image_bytes: bytes) -> str:
             lambda m: (m.group(1) + m.group(2)) if (any(c.isdigit() for c in m.group(1)) and m.group(2).isalnum() and not m.group(2).lower() in ["iva", "eur", "euros", "con", "sin", "kg", "rpm"]) else m.group(0),
             line
         )
-        fixed_line = re.sub(r'(\b\d+[\.,]\d{2})0\b', r'\1 €', fixed_line)
+        fixed_line = re.sub(r'(\b\d{2,5}(?:[\.,]\d{1,2})?)\s*(?:[0OoCcEeSs€]|EUR|eur|euro|euros|\.-|,-\b)?(?!\d|\w)', r'\1 €', fixed_line)
         cleaned_lines.append(fixed_line)
 
     return "\n".join(cleaned_lines)
@@ -1298,24 +1381,19 @@ async def delete_user_route(username_to_delete: str, username: str = Depends(req
     return {"status": "success"}
 
 @app.post("/api/parse-image")
-async def parse_image(file: UploadFile = File(...), username: str = Depends(check_authentication)):
-    fname = (file.filename or "").lower()
-    c_type = (file.content_type or "").lower()
-    if not (c_type.startswith("image/") or any(fname.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp"])):
-        raise HTTPException(status_code=400, detail="El archivo subido debe ser una imagen válida (PNG, JPG, WEBP, BMP).")
-
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="La imagen subida está vacía.")
-
-    add_log("info", f"Procesando captura de pantalla/imagen '{file.filename or 'captura.png'}' con OCR local...")
-    ocr_text = extract_text_from_image_bytes(contents)
-
-    if not ocr_text.strip():
-        add_log("warning", "No se logró detectar texto en la imagen proporcionada.")
-        return {"status": "warning", "message": "No se detectó texto en la imagen.", "ocr_text": ""}
-
-    add_log("info", "Texto extraído por OCR exitosamente. Extrayendo productos...")
+async def parse_image(
+    files: Optional[List[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+    username: str = Depends(check_authentication)
+):
+    upload_files = []
+    if files:
+        upload_files.extend([f for f in files if f])
+    if file:
+        upload_files.append(file)
+        
+    if not upload_files:
+        raise HTTPException(status_code=400, detail="No se ha subido ningún archivo de imagen.")
 
     load_config()
     target_provider = active_provider
@@ -1327,20 +1405,58 @@ async def parse_image(file: UploadFile = File(...), username: str = Depends(chec
             "file_format": "csv"
         }
 
-    process_text(ocr_text, target_provider)
+    processed_count = 0
+    extracted_texts = []
 
-    # Si hay un proveedor activo con regex estricta pero no coincidió por ser captura de imagen,
-    # ejecutamos también la extracción adaptativa general para asegurar captura de datos.
-    if target_provider and target_provider.get("regex"):
-        fallback_prov = dict(target_provider)
-        fallback_prov["regex"] = ""
-        process_text(ocr_text, fallback_prov)
+    for idx, upload_file in enumerate(upload_files, 1):
+        fname = (upload_file.filename or "").lower()
+        c_type = (upload_file.content_type or "").lower()
+        if not (c_type.startswith("image/") or any(fname.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp"])):
+            add_log("warning", f"El archivo '{upload_file.filename}' se ignoró por no ser un formato de imagen soportado.")
+            continue
 
+        contents = await upload_file.read()
+        if not contents:
+            add_log("warning", f"El archivo '{upload_file.filename}' está vacío y se ignoró.")
+            continue
+
+        file_label = f" (página {idx}/{len(upload_files)})" if len(upload_files) > 1 else ""
+        add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con OCR local...")
+        ocr_text = extract_text_from_image_bytes(contents)
+
+        if not ocr_text.strip():
+            add_log("warning", f"No se logró detectar texto en la imagen '{upload_file.filename or 'captura.png'}'.")
+            continue
+
+        extracted_texts.append(ocr_text)
+        add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
+
+        process_text(ocr_text, target_provider, is_ocr=True)
+
+        if target_provider and target_provider.get("regex"):
+            fallback_prov = dict(target_provider)
+            fallback_prov["regex"] = ""
+            process_text(ocr_text, fallback_prov, is_ocr=True)
+
+        processed_count += 1
+
+    if processed_count == 0:
+        return {
+            "status": "warning",
+            "message": "No se extrajo ningún texto útil de las imágenes subidas.",
+            "images_processed": 0,
+            "ocr_text": ""
+        }
+
+    combined_ocr = "\n--- PÁGINA ---\n".join(extracted_texts)
+    msg = f"Se han procesado {processed_count} imagen(es) mediante OCR correctamente."
     return {
         "status": "success",
-        "message": "Imagen procesada mediante OCR correctamente.",
-        "ocr_text": ocr_text
+        "message": msg,
+        "images_processed": processed_count,
+        "ocr_text": combined_ocr
     }
+
 
 
 @app.get("/")
@@ -1456,11 +1572,23 @@ async def select_provider(req: SelectProviderRequest):
     last_sequence_number = 0
     return {"status": "success", "active_provider": active_provider}
 
+DEFAULT_PROVIDER = {
+    "id": "default",
+    "name": "General",
+    "fields": ["Producto", "Modelo", "Precio Sin IVA (€)", "Precio Con IVA (€)"],
+    "file_format": "csv"
+}
+
+def get_provider_by_id_or_default(provider_id: str, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if provider_id == "default":
+        return DEFAULT_PROVIDER
+    providers = config.get("providers", [])
+    return next((p for p in providers if p["id"] == provider_id), None)
+
 @app.get("/api/providers/{provider_id}/data")
 async def get_provider_data(provider_id: str):
     config = load_config()
-    providers = config.get("providers", [])
-    provider = next((p for p in providers if p["id"] == provider_id), None)
+    provider = get_provider_by_id_or_default(provider_id, config)
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
@@ -1509,8 +1637,7 @@ class DeleteRowRequest(BaseModel):
 @app.post("/api/providers/{provider_id}/clear")
 async def clear_provider_data(provider_id: str):
     config = load_config()
-    providers = config.get("providers", [])
-    provider = next((p for p in providers if p["id"] == provider_id), None)
+    provider = get_provider_by_id_or_default(provider_id, config)
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
@@ -1528,8 +1655,7 @@ async def clear_provider_data(provider_id: str):
 @app.post("/api/providers/{provider_id}/delete-row")
 async def delete_provider_row(provider_id: str, req: DeleteRowRequest):
     config = load_config()
-    providers = config.get("providers", [])
-    provider = next((p for p in providers if p["id"] == provider_id), None)
+    provider = get_provider_by_id_or_default(provider_id, config)
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
@@ -1583,7 +1709,8 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         # Si es un precio: contiene dígitos y opcionalmente símbolos de moneda
         if "precio" in name_lower or "price" in name_lower or "pvp" in name_lower or (re.search(r'\d', val_clean) and any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur', 'usd', 'GBP', 'gbp'])):
             # Permitir que el símbolo de moneda sea opcional tanto antes como después para prevenir caídas de coincidencia
-            return r"(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?"
+            # pero descartar coincidencias inmediatamente seguidas por unidades técnicas (RPM, KG, DB, etc.)
+            return r"(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?(?!\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev|kg|kilos|db|dba|w|kw|kwh|l|litros|hz|v)\b)"
             
         # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura
         if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[A-Za-z0-9-]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
@@ -2036,8 +2163,7 @@ async def delete_extraction_file(filename: str):
 @app.get("/api/extractions/download/{provider_id}")
 async def download_provider_extraction(provider_id: str):
     config = load_config()
-    providers = config.get("providers", [])
-    provider = next((p for p in providers if p["id"] == provider_id), None)
+    provider = get_provider_by_id_or_default(provider_id, config)
     if not provider:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
         
@@ -2407,7 +2533,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     dct = load_dictionary()
     categorias_dict = dct.get("categorias", {})
     marcas_dict = dct.get("marcas", {})
-    universal_units = ["kg", "l", "cubiertos", "servicios", "botellas", "zonas", "fuegos", "m3/h", "db", "w", "v", "rpm"]
+    universal_units = ["kg", "l", "cubiertos", "servicios", "botellas", "zonas", "fuegos", "m3/h", "db", "w", "v", "rpm", "r.p.m.", "r.p.m", "rev", "revoluciones", "r/min", "rev/min", "tr/min"]
     
     try:
         reader = pypdf.PdfReader(pdf_path)

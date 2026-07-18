@@ -85,14 +85,28 @@
 
                         <div class="control-row mt-10" style="width: 100%;">
                             <div id="image-ocr-dropzone" class="image-dropzone">
-                                <input type="file" id="image-file-input" accept="image/*" style="display: none;">
+                                <input type="file" id="image-file-input" accept="image/*" multiple style="display: none;">
                                 <div class="dropzone-content">
                                     <span class="dropzone-icon">📷</span>
                                     <div class="dropzone-text">
-                                        <strong>Subir o Arrastrar Captura de Pantalla (OCR)</strong>
-                                        <span>o presiona <kbd style="background: rgba(255,255,255,0.15); padding: 2px 5px; border-radius: 4px; font-size: 11px;">Ctrl + V</kbd> con una imagen copiada</span>
+                                        <strong>Subir o Arrastrar Capturas / Páginas (OCR)</strong>
+                                        <span>Selecciona una o varias imágenes (multi-página) o usa <kbd style="background: rgba(255,255,255,0.15); padding: 2px 5px; border-radius: 4px; font-size: 11px;">Ctrl + V</kbd></span>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- PANEL DE LOTE MULTI-PÁGINA (OCR) -->
+                        <div id="batch-ocr-card" class="batch-ocr-container mt-10" style="display: none;">
+                            <div class="batch-header">
+                                <span class="batch-title">📸 Lote Multi-Página Activo</span>
+                                <span id="batch-counter-badge" class="badge badge-info">0 páginas | 0 productos</span>
+                            </div>
+                            <p class="batch-subtitle">Sigue subiendo imágenes del catálogo/documento. Los productos se irán acumulando automáticamente.</p>
+                            <div class="batch-actions mt-10">
+                                <button id="btn-add-batch-images" class="btn btn-secondary btn-sm">➕ Añadir Más Páginas</button>
+                                <button id="btn-clear-batch-images" class="btn btn-danger btn-sm">🗑️ Vaciar Listado</button>
+                                <button id="btn-finish-batch" class="btn btn-success btn-sm">🏁 Finalizar Lote</button>
                             </div>
                         </div>
 

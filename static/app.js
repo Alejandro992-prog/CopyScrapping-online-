@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let savedProviders = [];
     let lastProcessedClipboard = "";
     let currentStockData = null;
+    let activeBatchPages = 0;
 
     // Cached DOM Elements
     const statusDot = document.getElementById("status-dot");
@@ -32,6 +33,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const pasteInputArea = document.getElementById("paste-input-area");
     const imageOcrDropzone = document.getElementById("image-ocr-dropzone");
     const imageFileInput = document.getElementById("image-file-input");
+    const batchOcrCard = document.getElementById("batch-ocr-card");
+    const batchCounterBadge = document.getElementById("batch-counter-badge");
+    const btnAddBatchImages = document.getElementById("btn-add-batch-images");
+    const btnClearBatchImages = document.getElementById("btn-clear-batch-images");
+    const btnFinishBatch = document.getElementById("btn-finish-batch");
 
     
     // Tab 2 Elements
@@ -116,15 +122,30 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Image OCR Processing Function & Event Listeners
-    async function uploadAndProcessImage(file) {
-        if (!file) return;
+    async function uploadAndProcessImages(filesInput) {
+        if (!filesInput) return;
+        let filesArr = [];
+        if (filesInput instanceof FileList || Array.isArray(filesInput)) {
+            filesArr = Array.from(filesInput);
+        } else if (filesInput instanceof File) {
+            filesArr = [filesInput];
+        }
+
+        if (filesArr.length === 0) return;
+
         const formData = new FormData();
-        formData.append("file", file);
+        filesArr.forEach(file => {
+            formData.append("files", file);
+        });
+
+        const labelMsg = filesArr.length === 1 
+            ? `'${filesArr[0].name || 'captura.png'}'`
+            : `${filesArr.length} imágenes (multi-página)`;
 
         appendLog({
             timestamp: new Date().toLocaleTimeString(),
             type: "info",
-            message: `Enviando captura/imagen '${file.name || 'captura.png'}' al OCR local...`
+            message: `Enviando ${labelMsg} al OCR local...`
         });
 
         try {
@@ -134,34 +155,107 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const data = await response.json();
             if (response.ok && data.status === "success") {
+                const addedPages = data.images_processed || filesArr.length;
+                activeBatchPages += addedPages;
+
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
                     type: "success",
-                    message: "Imagen procesada por OCR con éxito. Datos actualizados."
+                    message: `Procesada(s) ${addedPages} página(s) por OCR con éxito. Productos acumulados.`
                 });
+
+                if (batchOcrCard && batchCounterBadge) {
+                    batchOcrCard.style.display = "block";
+                    batchCounterBadge.textContent = `${activeBatchPages} página(s) en lote activo`;
+                }
+
                 loadRecentCaptures();
             } else {
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
                     type: "warning",
-                    message: data.message || "Error procesando la imagen por OCR."
+                    message: data.message || "Error procesando imágenes por OCR."
                 });
             }
         } catch (err) {
             appendLog({
                 timestamp: new Date().toLocaleTimeString(),
                 type: "error",
-                message: "Error de red al procesar la imagen: " + err.message
+                message: "Error de red al procesar las imágenes: " + err.message
             });
         }
+    }
+
+    function finishOcrBatch() {
+        if (activeBatchPages > 0) {
+            appendLog({
+                timestamp: new Date().toLocaleTimeString(),
+                type: "success",
+                message: `🏁 Lote multi-página finalizado. Se completó el procesado de ${activeBatchPages} página(s) de imágenes.`
+            });
+        } else {
+            appendLog({
+                timestamp: new Date().toLocaleTimeString(),
+                type: "info",
+                message: "🏁 Lote finalizado."
+            });
+        }
+
+        activeBatchPages = 0;
+        if (batchOcrCard) {
+            batchOcrCard.style.display = "none";
+        }
+        loadRecentCaptures();
+    }
+
+    if (btnAddBatchImages && imageFileInput) {
+        btnAddBatchImages.addEventListener("click", (e) => {
+            e.stopPropagation();
+            imageFileInput.click();
+        });
+    }
+
+    if (btnClearBatchImages) {
+        btnClearBatchImages.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (!activeProviderId) return;
+            if (confirm("¿Estás seguro de que deseas vaciar y eliminar todas las capturas registradas de este lote/proveedor?")) {
+                try {
+                    const res = await fetch(`/api/providers/${activeProviderId}/clear`, {
+                        method: "POST"
+                    });
+                    if (res.ok) {
+                        activeBatchPages = 0;
+                        if (batchOcrCard) batchOcrCard.style.display = "none";
+                        appendLog({
+                            timestamp: new Date().toLocaleTimeString(),
+                            type: "info",
+                            message: "🗑️ Listado de capturas vaciado correctamente."
+                        });
+                        loadRecentCaptures();
+                    } else {
+                        alert("Error al intentar limpiar las capturas del lote.");
+                    }
+                } catch (err) {
+                    console.error("Error al vaciar lote:", err);
+                }
+            }
+        });
+    }
+
+    if (btnFinishBatch) {
+        btnFinishBatch.addEventListener("click", (e) => {
+            e.stopPropagation();
+            finishOcrBatch();
+        });
     }
 
     if (imageOcrDropzone && imageFileInput) {
         imageOcrDropzone.addEventListener("click", () => imageFileInput.click());
         
         imageFileInput.addEventListener("change", (e) => {
-            if (e.target.files && e.target.files[0]) {
-                uploadAndProcessImage(e.target.files[0]);
+            if (e.target.files && e.target.files.length > 0) {
+                uploadAndProcessImages(e.target.files);
                 imageFileInput.value = "";
             }
         });
@@ -178,8 +272,8 @@ document.addEventListener("DOMContentLoaded", () => {
         imageOcrDropzone.addEventListener("drop", (e) => {
             e.preventDefault();
             imageOcrDropzone.classList.remove("dragover");
-            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                uploadAndProcessImage(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                uploadAndProcessImages(e.dataTransfer.files);
             }
         });
     }
@@ -194,7 +288,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const blob = items[i].getAsFile();
                 if (blob) {
                     e.preventDefault();
-                    uploadAndProcessImage(blob);
+                    uploadAndProcessImages(blob);
                     break;
                 }
             }
@@ -396,7 +490,10 @@ document.addEventListener("DOMContentLoaded", () => {
         btnDownloadRaw.style.display = "inline-block";
         btnClearCaptures.style.display = "inline-block";
         
-        const provider = savedProviders.find(p => p.id === activeProviderId);
+        let provider = savedProviders.find(p => p.id === activeProviderId);
+        if (!provider && activeProviderId === "default") {
+            provider = { id: "default", name: "General", file_format: "csv", fields: [] };
+        }
         if (!provider) return;
         
         const ext = provider.file_format || "csv";
