@@ -1432,11 +1432,9 @@ async def parse_image(
         add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
 
         process_text(ocr_text, target_provider, is_ocr=True)
-
-        if target_provider and target_provider.get("regex"):
-            fallback_prov = dict(target_provider)
-            fallback_prov["regex"] = ""
-            process_text(ocr_text, fallback_prov, is_ocr=True)
+        # NOTA: process_text() ya ejecuta internamente extracción adaptativa para
+        # fragmentos no coincidentes con la regex, así que no es necesario un
+        # segundo pase con regex vacía (causaba productos duplicados).
 
         processed_count += 1
 

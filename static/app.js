@@ -480,7 +480,9 @@ document.addEventListener("DOMContentLoaded", () => {
             "atributos": "Atributos Técnicos"
         };
         return mappings[key] || key;
-    }    async function loadRecentCaptures() {
+    }
+
+    async function loadRecentCaptures() {
         if (!activeProviderId) {
             showEmptyRecentTable();
             return;
@@ -1575,12 +1577,12 @@ document.addEventListener("DOMContentLoaded", () => {
             // 3. Pintar Alertas / Huecos de catálogo
             stockAlertsList.innerHTML = "";
             if (data.alerts && data.alerts.length > 0) {
-                data.alerts.forEach(alert => {
+                data.alerts.forEach(alertItem => {
                     const box = document.createElement("div");
-                    box.className = `alert-box-${alert.type === 'danger' ? 'error' : (alert.type === 'warning' ? 'warning' : 'info')}`;
+                    box.className = `alert-box-${alertItem.type === 'danger' ? 'error' : (alertItem.type === 'warning' ? 'warning' : 'info')}`;
                     box.style.margin = "0";
                     box.style.fontSize = "12px";
-                    box.textContent = alert.message;
+                    box.textContent = alertItem.message;
                     stockAlertsList.appendChild(box);
                 });
             } else {
@@ -1669,8 +1671,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderStockMatrixTable() {
-        const matrixHeaders = document.getElementById("matrix-headers");
-        const matrixBody = document.getElementById("matrix-body");
+        // matrixHeaders, matrixBody ya declarados en el scope padre (líneas 1459-1460)
         const stockBrandList = document.getElementById("stock-brand-breakdown-list");
 
         if (!currentStockData || !currentStockData.capacities || currentStockData.capacities.length === 0) {
