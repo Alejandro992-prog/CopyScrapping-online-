@@ -1,123 +1,124 @@
 {
   "categorias": {
     "Lavadoras-Secadoras": {
-      "sinonimos": ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer", "washer-dryer"],
+      "sinonimos": ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer", "washer-dryer", "lava-secadora", "lava-secadoras", "solucion 2 en 1", "solución 2 en 1"],
       "atributos_clave": {
-        "capacidad": ["kg", "kilogramos", "kilos"]
+        "capacidad": ["kg", "kilogramos", "kilos"],
+        "centrifugado": ["rpm", "revoluciones"]
       }
     },
     "Lavadoras": {
-      "sinonimos": ["lavadora", "washer", "lavar", "lavarropa", "lavadoras", "frontal", "superior"],
+      "sinonimos": ["lavadora", "washer", "lavar", "lavarropa", "lavadoras", "frontal", "superior", "carga superior", "lavadora integrable"],
       "atributos_clave": {
         "capacidad": ["kg", "kilogramos", "kilos"],
         "centrifugado": ["rpm", "revoluciones"]
       }
     },
     "Secadoras": {
-      "sinonimos": ["secadora", "dryer", "secar", "secadoras", "condensacion", "bomba de calor"],
+      "sinonimos": ["secadora", "dryer", "secar", "secadoras", "condensacion", "condensación", "bomba de calor", "heat pump"],
       "atributos_clave": {
         "capacidad": ["kg", "kilogramos", "kilos"]
       }
     },
     "Lavavajillas 45cm": {
-      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos"],
+      "sinonimos": ["lavavajillas 45", "lavaplatos 45", "lavavajillas 45cm", "lavaplatos 45cm", "lavavajillas estrecho", "45 cm", "45cm"],
       "atributos_clave": {
         "servicios": ["cubiertos", "servicios", "cub"]
       }
     },
     "Lavavajillas 60cm": {
-      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "integrable"],
+      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "integrable", "60 cm", "60cm"],
       "atributos_clave": {
         "servicios": ["cubiertos", "servicios", "cub"]
       }
     },
     "Frigo Combi": {
-      "sinonimos": ["combi", "combis"],
+      "sinonimos": ["combi", "combis", "frigorifico combi", "frigorífico combi", "frigo combi", "combinado", "combinados"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
-        "tecnologia": ["no frost", "frost free"]
+        "tecnologia": ["no frost", "total no frost", "frost free", "low frost", "ciclico", "cíclico"]
       }
     },
     "Frigo 2 puertas": {
-      "sinonimos": ["2 puertas", "dos puertas", "2 ptas", "2-puertas"],
+      "sinonimos": ["2 puertas", "dos puertas", "2 ptas", "2-puertas", "dos-puertas", "2puertas"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
-        "tecnologia": ["no frost", "frost free"]
+        "tecnologia": ["no frost", "frost free", "ciclico", "cíclico"]
       }
     },
     "Frigo 1 puerta": {
-      "sinonimos": ["1 puerta", "una puerta", "monopuerta", "1 pta", "1-puerta", "cooler", "table top", "table-top"],
+      "sinonimos": ["1 puerta", "una puerta", "monopuerta", "1 pta", "1-puerta", "cooler", "table top", "table-top", "tabletop", "congelador vertical", "congeladores verticales", "pareja twin"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
-        "tecnologia": ["no frost", "frost free"]
+        "tecnologia": ["no frost", "frost free", "ciclico", "cíclico"]
       }
     },
     "Frigos integrables": {
-      "sinonimos": ["integrable", "integrables", "encastrable", "encastrables", "panelable", "panelables", "integrado", "integrados"],
+      "sinonimos": ["integrable", "integrables", "encastrable", "encastrables", "panelable", "panelables", "integrado", "integrados", "frigo integrable", "combi integrable"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
         "tecnologia": ["no frost", "frost free"]
       }
     },
     "Frigos americanos": {
-      "sinonimos": ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "multi-puerta"],
+      "sinonimos": ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "multi-puerta", "french door", "frenchdoor", "quad door", "4 puertas"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
         "tecnologia": ["no frost", "frost free"]
       }
     },
     "Frigoríficos": {
-      "sinonimos": ["frigo", "frigorífico", "frigorifico", "refrigerador", "congelador", "freezer"],
+      "sinonimos": ["frigo", "frigorífico", "frigorifico", "refrigerador", "congelador", "freezer", "nevera"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
-        "tecnologia": ["no frost", "frost free"]
+        "tecnologia": ["no frost", "frost free", "low frost", "ciclico"]
       }
     },
     "Hornos": {
-      "sinonimos": ["horno", "oven", "multifuncion", "pirolitico", "pirolítico"],
+      "sinonimos": ["horno", "oven", "multifuncion", "multifunción", "pirolitico", "pirolítico", "pirolisis", "pirólisis", "hidrolitico", "hidrolítico", "hydroclean", "aquasmart", "catalitico", "catalítico", "horno compacto", "horno vapor"],
       "atributos_clave": {
         "capacidad": ["l", "litros"],
-        "limpieza": ["pirolisis", "hidrolisis", "aquaclise"]
+        "limpieza": ["pirolisis", "pirólisis", "hidrolisis", "hydroclean", "aquasmart", "catalitico", "catalítico"]
       }
     },
     "Vitrocerámicas": {
-      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "placa", "induccion", "inducción", "encimera", "fuego", "fuegos"],
+      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "placa", "encimera", "fuego", "fuegos"],
       "atributos_clave": {
-        "zonas": ["zonas", "fuegos", "areas"]
+        "zonas": ["zonas", "fuegos", "areas", "quemadores"]
       }
     },
     "Inducción": {
-      "sinonimos": ["induccion", "inducción", "inducc", "flex induction", "full induction", "powerinduct", "placa induccion", "placa inducción"],
+      "sinonimos": ["induccion", "inducción", "inducc", "flex induction", "flexinduccion", "flexinducción", "full induction", "powerinduct", "placa induccion", "placa inducción", "zona continua"],
       "atributos_clave": {
         "zonas": ["zonas", "fuegos", "areas"]
       }
     },
     "Vitrocerámica": {
-      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "ceramica", "cerámica", "halogen", "halogeno", "halógeno"],
+      "sinonimos": ["vitro", "vitroceramica", "vitrocerámica", "radiante", "hilight", "highlight", "ceramica", "cerámica", "halogen", "halogeno", "halógeno"],
       "atributos_clave": {
         "zonas": ["zonas", "fuegos", "areas"]
       }
     },
     "Placa de Gas": {
-      "sinonimos": ["encimera gas", "placa gas", "fuegos gas", "butano", "propano", "gas natural"],
+      "sinonimos": ["encimera gas", "placa gas", "fuegos gas", "butano", "propano", "gas natural", "quemadores gas", "wok triple corona"],
       "atributos_clave": {
         "zonas": ["zonas", "fuegos", "quemadores"]
       }
     },
     "Cristal Gas": {
-      "sinonimos": ["cristal gas", "cristalgaz", "cristal gaz", "vidrio gas", "encimera cristal gas"],
+      "sinonimos": ["cristal gas", "cristalgaz", "cristal gaz", "vidrio gas", "encimera cristal gas", "placa cristal gas"],
       "atributos_clave": {
         "zonas": ["zonas", "fuegos", "quemadores"]
       }
     },
     "Campanas": {
-      "sinonimos": ["campana", "extractor", "extractora", "grupo filtrante", "decorativa"],
+      "sinonimos": ["campana", "extractor", "extractora", "grupo filtrante", "decorativa", "campana isla", "campana pared"],
       "atributos_clave": {
         "extraccion": ["m3/h", "m3"]
       }
     },
     "Microondas": {
-      "sinonimos": ["microondas", "micro", "grill"],
+      "sinonimos": ["microondas", "micro", "grill", "microondas integrable", "microondas encastrable", "microondas sobremesa", "conveccion"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"]
       }
@@ -129,7 +130,7 @@
       }
     },
     "Calentadores": {
-      "sinonimos": ["termo", "calentador", "calentadores", "acumulador"],
+      "sinonimos": ["termo", "termo electrico", "termo eléctrico", "calentador", "calentadores", "calentador gas", "estanco", "estancos", "acumulador"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"]
       }
@@ -141,9 +142,9 @@
       }
     },
     "Climatizadores": {
-      "sinonimos": ["climatizador", "aire acondicionado", "aire", "split"],
+      "sinonimos": ["climatizador", "aire acondicionado", "aire", "split", "split wall", "inverter", "frigorias", "frigorías"],
       "atributos_clave": {
-        "potencia": ["frig", "frigorias", "kcal"]
+        "potencia": ["frig", "frigorias", "frigorías", "kw", "kcal"]
       }
     },
     "Menaje y PAE": {

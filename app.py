@@ -693,15 +693,23 @@ def find_prices_in_text(text: str) -> List[str]:
         clean_t = re.sub(r'\b(?:\d{1,3}(?:\.\d{3})*|\d+)\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev\.?|tr/min|t/min|kg|kilos|l|litros|lts|db|dba|w|kw|kwh|m3/h|bar|cubiertos|servicios|pulgadas|hz|v|cm|mm)\b', '', clean_t, flags=re.IGNORECASE)
         clean_t = re.sub(r'\b(?:revoluciones|rpm|centrifugado|velocidad\s*(?:de\s*)?centrifugado|vel\.?\s*max\.?|vel\.?\s*centrifugado)\s*[:=]?\s*(?:\d{1,3}(?:\.\d{3})*|\d+)\b', '', clean_t, flags=re.IGNORECASE)
         clean_t = re.sub(r'\b(?:19|20)\d{2}\b', '', clean_t) # Años
+        # Eliminar números precedidos por contexto técnico (ej: "Programas: 15", "Capacidad: 60")
+        clean_t = re.sub(r'\b(?:programas|ciclos|niveles?|funciones|temperatura|capacidad|ancho|alto|fondo|profundidad|diámetro|dimensi[oó]n(?:es)?)\s*[:=]?\s*\d+\b', '', clean_t, flags=re.IGNORECASE)
+        # Eliminar números sueltos muy pequeños (1-49) que rara vez son precios de electrodomésticos
+        # pero mantener números con decimales (ej: 29,99 sí podría ser un accesorio)
+        clean_t = re.sub(r'(?<!\d)(?<!,)(?<!\.)\b([1-9]|[1-4]\d)\b(?!\s*[,.]\s*\d)', '', clean_t)
         raw_nums = re.findall(r'\b\d{1,5}(?:[\.,]\d{1,2})?\b', clean_t)
         
         # Valores típicos de RPM a excluir en fallback si no llevan símbolo € explícito
         TYPICAL_RPMS = {600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0}
         has_wash_context = any(k in text.lower() for k in ['lavadora', 'centrifugado', 'rpm', 'revoluci', 'r.p.m'])
         
+        # Umbral mínimo: 50€ sin símbolo de moneda (un electrodoméstico casi nunca cuesta menos)
+        MIN_PRICE_NO_SYMBOL = 50.0
+        
         for r in raw_nums:
             v = clean_price(r)
-            if 15.0 <= v <= 15000.0:
+            if MIN_PRICE_NO_SYMBOL <= v <= 15000.0:
                 if has_wash_context and v in TYPICAL_RPMS:
                     continue
                 fmt = f"{v:.2f} €".replace(".00", "")
@@ -860,8 +868,32 @@ def extract_products_adaptively(text: str, provider: Optional[Dict[str, Any]] = 
         attributes = _RE_WHITESPACE.sub(' ', attributes).strip()
         
         # Extraer Precios del bloque de forma adaptativa
+        # Primero: intentar detectar un "bloque de precios" — líneas consecutivas que solo contienen números
+        # (común en webs donde los precios están en líneas separadas sin €)
         text_no_model = product_block.replace(model, "").replace(model.lower(), "")
-        all_prices_matches = find_prices_in_text(text_no_model)
+        
+        # Estrategia: buscar líneas que contienen SOLO un número (con posible €) como bloque de precios
+        block_lines = text_no_model.split('\n')
+        price_only_lines = []
+        _re_price_only_line = re.compile(r'^\s*(?:€|EUR|euros?)?\s*\d+(?:[\.,]\d{1,3})*\s*(?:€|EUR|euros?|\.-|,-)?\s*$', re.IGNORECASE)
+        for bl in block_lines:
+            if _re_price_only_line.match(bl.strip()) and bl.strip():
+                pv = clean_price(bl.strip())
+                if pv >= 50.0:  # Umbral mínimo para precio sin €
+                    price_only_lines.append(bl.strip())
+        
+        if price_only_lines:
+            # Usar líneas de solo-precio como fuente primaria (evita confundir specs con precios)
+            all_prices_matches = []
+            for pol in price_only_lines:
+                v = clean_price(pol)
+                if 50.0 <= v <= 15000.0:
+                    fmt = f"{v:.2f} €".replace(".00", "")
+                    if fmt not in all_prices_matches:
+                        all_prices_matches.append(fmt)
+        else:
+            all_prices_matches = find_prices_in_text(text_no_model)
+        
         price = all_prices_matches[0] if all_prices_matches else "No disponible"
         
         # Limpiar precio de los atributos si se coló al final de la línea de especificación
@@ -1053,13 +1085,17 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
                     if k in ["product", "producto"] and v:
                         item[k] = clean_and_normalize_product_name(v, item.get("model") or item.get("modelo") or "")
                 
-                # Si la regex del proveedor no capturó un precio o el valor es 0/No disponible, recuperarlo
-                has_valid_price = False
+                # Contar cuántos campos de precio tiene la regex y cuántos capturó con valor válido
+                price_fields = []
+                valid_price_count = 0
                 for k, v in item.items():
                     if any(term in k.lower() for term in ["price", "precio", "pvp", "sin_iva", "con_iva", "importe"]):
+                        price_fields.append(k)
                         if v and clean_price(str(v)) > 0:
-                            has_valid_price = True
-                            break
+                            valid_price_count += 1
+                
+                has_valid_price = valid_price_count > 0
+                
                 if not has_valid_price:
                     full_item_text = " ".join([str(v) for v in item.values() if v])
                     found_prices = find_prices_in_text(full_item_text)
@@ -1069,8 +1105,22 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
                             if any(term in f_norm for term in ["price", "precio", "pvp", "sin_iva", "con_iva", "importe"]):
                                 if not item.get(field) or item.get(field) == "No disponible" or clean_price(str(item.get(field))) == 0:
                                     item[field] = found_prices[0]
-                                    
-                normalize_and_reorder_product_prices(item)
+                
+                # Solo reordenar precios si la regex NO capturó todos los campos de precio
+                # con valores válidos distintos. Si la regex ya capturó 2+ precios diferentes,
+                # confiamos en el orden que la regex asignó a cada campo.
+                if valid_price_count < 2:
+                    normalize_and_reorder_product_prices(item)
+                else:
+                    # Aun así, verificar coherencia mínima: si Sin IVA > Con IVA o Con IVA > PVP, reordenar
+                    price_vals = []
+                    for k in price_fields:
+                        pv = clean_price(str(item.get(k, "")))
+                        if pv > 0:
+                            price_vals.append(pv)
+                    if len(price_vals) >= 2 and price_vals != sorted(price_vals):
+                        # Los precios no están en orden ascendente → reordenar
+                        normalize_and_reorder_product_prices(item)
             extracted_data_list.extend(valid_matches)
             
         # Ejecutar extractor adaptativo para procesar todos los fragmentos que no coincidieron con la regex principal
@@ -1705,10 +1755,12 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         val_clean = label_val.strip()
         
         # Si es un precio: contiene dígitos y opcionalmente símbolos de moneda
-        if "precio" in name_lower or "price" in name_lower or "pvp" in name_lower or (re.search(r'\d', val_clean) and any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur', 'usd', 'GBP', 'gbp'])):
-            # Permitir que el símbolo de moneda sea opcional tanto antes como después para prevenir caídas de coincidencia
-            # pero descartar coincidencias inmediatamente seguidas por unidades técnicas (RPM, KG, DB, etc.)
-            return r"(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?(?!\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev|kg|kilos|db|dba|w|kw|kwh|l|litros|hz|v)\b)"
+        if "precio" in name_lower or "price" in name_lower or "pvp" in name_lower or "importe" in name_lower or "coste" in name_lower or (re.search(r'\d', val_clean) and any(c in val_clean for c in ['€', '$', 'EUR', 'eur', 'Eur', 'usd', 'GBP', 'gbp'])):
+            # Patrón de precio mejorado:
+            # - \b al inicio para no capturar dígitos parciales de modelos (ej: '28' de 'WAU28PH1ES')
+            # - Lookahead negativo extendido para todas las unidades técnicas (incluyendo cm, mm, m3/h, etc.)
+            # - El símbolo de moneda es opcional tanto antes como después
+            return r"\b(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,]\d{1,3})*\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?(?!\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev|kg|kilos|db|dba|w|kw|kwh|l|litros|lts|hz|v|cm|mm|m3/h|bar|cubiertos|servicios|pulgadas|programas|ciclos)\b)(?!\w)"
             
         # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura
         if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[A-Za-z0-9-]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
@@ -2360,24 +2412,25 @@ def classify_refrigerator(description: str) -> str:
 
 
 def extract_product_color(desc: str) -> str:
-    """Extrae el color de un producto a partir de su descripción."""
+    """Extrae el color de un producto a partir de su descripción según la Guía de Clasificación."""
     d = desc.lower()
-    # Inox tiene prioridad máxima (puede convivir con otros materiales)
-    if any(k in d for k in ["inox", "inoxidable", "acero inoxidable", "stainless", "inox.", "acero"]):
+    # 1. Inox Oscuro / Black Steel / Grafito (prioridad sobre Inox estándar)
+    if any(k in d for k in ["inox oscuro", "black steel", "dark inox", "grafito", "graphite", "inox negro", "titanio", "titanium", "gris", "silver", "plata"]):
+        return "Titanio"
+    # 2. Inox / Acero Inoxidable (incluye antihuellas)
+    if any(k in d for k in ["inox", "inoxidable", "acero inoxidable", "stainless", "inox.", "acero", "antihuellas"]):
         return "Inox"
-    # Blanco
+    # 3. Blanco / Cristal Blanco
     if any(k in d for k in ["blanco", "white", "blanc"]):
         return "Blanco"
-    # Negro: incluye terminaciones de cristal típicas en placas de inducción
-    if any(k in d for k in ["negro", "black", "noir", "terminacion cristal", "terminación cristal", "acabado cristal"]):
+    # 4. Negro / Cristal Negro: incluye terminaciones de cristal en placas de cocción y hornos
+    if any(k in d for k in ["negro", "black", "noir", "terminacion cristal", "terminación cristal", "acabado cristal", "cristal negro"]):
         return "Negro"
-    # Negro por cristal en placa si viene sin otro color (común en inducción Balay/Bosch/Siemens)
-    if "cristal" in d and not any(k in d for k in ["gas", "blanco", "white", "inox", "titanio"]):
+    # 5. Negro por cristal en placa si viene sin otro color
+    if "cristal" in d and not any(k in d for k in ["gas", "blanco", "white", "inox", "titanio", "grafito"]):
         return "Negro"
-    # Titanio / Grafito
-    if any(k in d for k in ["titanio", "graphite", "grafito", "titanium", "gris", "silver", "plata"]):
-        return "Titanio"
     return ""
+
 
 
 def classify_lavavajillas(desc: str) -> str:
