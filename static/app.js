@@ -55,8 +55,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const generatedRegexString = document.getElementById("generated-regex-string");
     const regexMatchStatus = document.getElementById("regex-match-status");
     const extractedFieldsJson = document.getElementById("extracted-fields-json");
-    const savedProvidersList = document.getElementById("saved-providers-list");
     const clearSelectionsBtn = document.getElementById("clear-selections");
+    const btnAutoSuggestLabels = document.getElementById("btn-auto-suggest-labels");
+    const multiCardPreviewSection = document.getElementById("multi-card-preview-section");
     const tagButtons = document.querySelectorAll(".tag-btn[data-tag]");
     
     // Tab 3 Elements
@@ -869,6 +870,36 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/'/g, "&#039;");
     }
 
+    if (btnAutoSuggestLabels) {
+        btnAutoSuggestLabels.addEventListener("click", async () => {
+            const rawText = rawTrainText.value;
+            if (!rawText || !rawText.trim()) {
+                alert("Pega primero un texto de muestra en la caja de 'Texto Bruto de Muestra'.");
+                return;
+            }
+            try {
+                const res = await fetch("/api/regex/suggest-labels", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ raw_text: rawText })
+                });
+                const data = await res.json();
+                if (data.status === "success" && data.labels && data.labels.length > 0) {
+                    labels = data.labels;
+                    labelingWorkspace.style.display = "block";
+                    activeTagsSection.style.display = "block";
+                    renderInteractiveText();
+                    generateAndTestRegex();
+                } else {
+                    alert("No se pudieron detectar etiquetas automáticas en este texto. Puedes marcarlas manualmente.");
+                }
+            } catch (err) {
+                console.error("Error al auto-sugerir etiquetas:", err);
+                alert("Ocurrió un error al contactar al backend para sugerir etiquetas.");
+            }
+        });
+    }
+
     btnGenerateRegex.addEventListener("click", generateAndTestRegex);
 
     async function generateAndTestRegex() {
@@ -891,20 +922,53 @@ document.addEventListener("DOMContentLoaded", () => {
             regexResultsCard.style.display = "block";
             generatedRegexString.textContent = data.regex;
             
-            if (data.status === "success") {
-                regexMatchStatus.className = "regex-match-status status-box-success";
-                regexMatchStatus.textContent = "✓ ¡Éxito! La expresión regular coincide perfectamente con el texto de muestra.";
-                extractedFieldsJson.textContent = JSON.stringify(data.extracted, null, 2);
-                btnSaveProvider.disabled = false;
-            } else if (data.status === "warning") {
-                regexMatchStatus.className = "regex-match-status status-box-warning";
-                regexMatchStatus.textContent = `⚠ ${data.message} (Puedes guardar la plantilla seleccionando únicamente los colores/campos que te interesen).`;
+            if (data.status === "success" || data.status === "warning") {
+                if (data.status === "success") {
+                    regexMatchStatus.className = "regex-match-status status-box-success";
+                    regexMatchStatus.textContent = "✓ ¡Éxito! La expresión regular coincide perfectamente con el texto de muestra.";
+                } else {
+                    regexMatchStatus.className = "regex-match-status status-box-warning";
+                    regexMatchStatus.textContent = `⚠ ${data.message} (Puedes guardar la plantilla seleccionando únicamente los colores/campos que te interesen).`;
+                }
                 extractedFieldsJson.textContent = JSON.stringify(data.extracted || {}, null, 2);
                 btnSaveProvider.disabled = false;
+
+                // Renderizar vista previa multi-ficha en tiempo real
+                if (data.all_matches && data.all_matches.length > 0) {
+                    let multiHtml = `
+                        <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 14px; margin-top: 10px;">
+                            <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #818cf8; display: flex; align-items: center; justify-content: space-between;">
+                                <span>🎯 Vista Previa Multi-Ficha en Tiempo Real:</span>
+                                <span style="background: #6366f1; color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">${data.total_matched_cards} Fichas Coincidentes</span>
+                            </h4>
+                            <div style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
+                    `;
+
+                    data.all_matches.forEach((item, idx) => {
+                        multiHtml += `
+                            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 10px;">
+                                <div style="font-weight: 600; font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Ficha #${idx + 1}:</div>
+                                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                        `;
+                        for (const [k, v] of Object.entries(item)) {
+                            if (v) {
+                                multiHtml += `<span class="tag-badge badge-${k}" style="font-size: 11px; padding: 3px 8px;">${translateKey(k)}: <strong>${escapeHtml(String(v))}</strong></span>`;
+                            }
+                        }
+                        multiHtml += `</div></div>`;
+                    });
+
+                    multiHtml += `</div></div>`;
+                    multiCardPreviewSection.innerHTML = multiHtml;
+                    multiCardPreviewSection.style.display = "block";
+                } else {
+                    multiCardPreviewSection.style.display = "none";
+                }
             } else {
                 regexMatchStatus.className = "regex-match-status status-box-error";
                 regexMatchStatus.textContent = `✗ Error: ${data.message}`;
                 extractedFieldsJson.textContent = "{}";
+                multiCardPreviewSection.style.display = "none";
                 btnSaveProvider.disabled = true;
             }
         } catch (err) {

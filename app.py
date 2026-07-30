@@ -1750,7 +1750,7 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
     parts = []
     
     # Función para determinar el patrón genérico de una etiqueta basada en su nombre o valor
-    def get_generic_pattern(label_name: str, label_val: str, is_lazy: bool) -> str:
+    def get_generic_pattern(label_name: str, label_val: str, is_last_on_line: bool, is_last_overall: bool) -> str:
         name_lower = label_name.lower()
         val_clean = label_val.strip()
         
@@ -1772,23 +1772,44 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
                 return r"\b[A-Za-z0-9-]{3,25}\b"
             
         # Si es producto/marca o atributos:
-        # Usamos [\s\S]+? para todos los campos para prevenir comportamiento codicioso
-        if "producto" in name_lower or "product" in name_lower or "marca" in name_lower or "brand" in name_lower:
-            return r"[\s\S]+?"
-            
-        if "atributo" in name_lower or "attr" in name_lower or "spec" in name_lower:
-            return r"[\s\S]+?"
-            
-        # Fallback por defecto:
-        return r"[\s\S]+?"
+        # Si es el último campo de la línea o del bloque, capturamos toda la línea para evitar truncamiento
+        if is_last_on_line or is_last_overall:
+            return r"[^\r\n]+"
+        else:
+            return r"[^\r\n]+?"
         
     def get_transition_pattern(literal: str) -> str:
         if not literal:
             return ""
-        if not literal.strip():
+        
+        _RE_MODEL_TOKEN = re.compile(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{3,25}\b')
+        
+        words = literal.split()
+        if not words:
             return r"\s+"
-        parts = [re.escape(p) for p in literal.split()]
-        return r"\s*" + r"\s+".join(parts) + r"\s*"
+            
+        word_pats = []
+        for w in words:
+            w_clean = re.sub(r'^[^\w]+|[^\w]+$', '', w)
+            prefix = w[:w.find(w_clean)] if w_clean and w_clean in w else ""
+            suffix = w[w.find(w_clean)+len(w_clean):] if w_clean and w_clean in w else ""
+            
+            # 1. Números aislados (ej. indicadores de stock M 4 S 6 P 0) -> \d+
+            if w_clean.isdigit():
+                pat = r"\d+"
+            # 2. Tokens de modelo / SKU en texto de transición -> [A-Za-z0-9-]+
+            elif _RE_MODEL_TOKEN.match(w_clean):
+                pat = r"[A-Za-z0-9-]+"
+            # 3. Código/letra variante única (ej. "B" en "Lineal B") -> [A-Za-z0-9]+
+            elif len(w_clean) == 1 and w_clean.isupper():
+                pat = r"[A-Za-z0-9]+"
+            else:
+                pat = re.escape(w_clean)
+                
+            full_w_pat = re.escape(prefix) + pat + re.escape(suffix)
+            word_pats.append(full_w_pat)
+            
+        return r"\s*" + r"\s+".join(word_pats) + r"\s*"
         
     # Construir la expresión regular iterando sobre las etiquetas y los textos intermedios
     last_idx = 0
@@ -1801,16 +1822,14 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         literal_between = raw_text[last_idx:start]
         parts.append(get_transition_pattern(literal_between))
         
-        # Determinar si este grupo es seguido por otro grupo en la misma línea
-        is_lazy = False
-        if i + 1 < len(sorted_labels):
-            next_start = sorted_labels[i+1].start
-            lit_after_this = raw_text[end:next_start]
-            if "\n" not in lit_after_this:
-                is_lazy = True
+        # Determinar si este grupo es el último de su línea o del texto completo
+        next_start = sorted_labels[i+1].start if i + 1 < len(sorted_labels) else len(raw_text)
+        lit_after_this = raw_text[end:next_start]
+        is_last_on_line = "\n" in lit_after_this or i == len(sorted_labels) - 1
+        is_last_overall = i == len(sorted_labels) - 1
                 
         # Añadir el grupo de captura genérico
-        group_pattern = get_generic_pattern(name, val, is_lazy)
+        group_pattern = get_generic_pattern(name, val, is_last_on_line, is_last_overall)
         parts.append(f"(?P<{name}>{group_pattern})")
         last_idx = end
         
@@ -1827,34 +1846,133 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
                 name = label.name
                 expected_val = raw_text[label.start:label.end].strip()
                 actual_val = extracted.get(name, "").strip()
-                if expected_val != actual_val:
+                
+                # Normalizar símbolos de moneda para comparación limpia de precios
+                clean_exp = re.sub(r'[€$\s]|EUR|eur|usd|GBP|gbp', '', expected_val)
+                clean_act = re.sub(r'[€$\s]|EUR|eur|usd|GBP|gbp', '', actual_val)
+                if clean_exp != clean_act and expected_val != actual_val:
                     mismatches.append(f"Campo '{name}': esperado '{expected_val}', obtenido '{actual_val}'")
+            
+            # Capturar todas las coincidencias multi-ficha en el texto de muestra
+            all_matches = [m.groupdict() for m in re.finditer(pattern, raw_text)]
             
             if mismatches:
                 return {
                     "status": "warning",
                     "regex": pattern,
                     "extracted": extracted,
+                    "all_matches": all_matches,
+                    "total_matched_cards": len(all_matches),
                     "message": f"La expresión regular coincide pero los valores extraídos difieren: {'; '.join(mismatches)}"
                 }
             else:
                 return {
                     "status": "success",
                     "regex": pattern,
-                    "extracted": extracted
+                    "extracted": extracted,
+                    "all_matches": all_matches,
+                    "total_matched_cards": len(all_matches)
                 }
         else:
             return {
                 "status": "warning",
                 "regex": pattern,
+                "all_matches": [],
+                "total_matched_cards": 0,
                 "message": "La expresión regular se generó pero no coincide con el texto de muestra. Por favor revisa los límites."
             }
     except Exception as e:
         return {
             "status": "error",
             "regex": pattern,
+            "all_matches": [],
+            "total_matched_cards": 0,
             "message": f"Error compilando la expresión regular: {str(e)}"
         }
+
+class SuggestLabelsRequest(BaseModel):
+    raw_text: str
+
+@app.post("/api/regex/suggest-labels")
+async def suggest_labels_for_text(req: SuggestLabelsRequest):
+    raw_text = req.raw_text
+    if not raw_text or not raw_text.strip():
+        return {"status": "success", "labels": []}
+        
+    labels = []
+    
+    # 1. Buscar Precios (PVP, Pv / Con IVA, Pr / Sin IVA)
+    price_regex = re.compile(r'(?:(PVP|Pv|Pr|Precio)\s*:\s*)?(\d{1,5}(?:[.,]\d{1,3})*)\s*(?:€|EUR)?', re.IGNORECASE)
+    matches = list(price_regex.finditer(raw_text))
+    
+    found_prices = []
+    for m in matches:
+        prefix = (m.group(1) or "").lower()
+        val_str = m.group(2)
+        start = m.start(2)
+        end = m.end(2)
+        try:
+            num = float(val_str.replace('.', '').replace(',', '.'))
+            found_prices.append({"prefix": prefix, "val": val_str, "start": start, "end": end, "num": num})
+        except:
+            pass
+            
+    first_block_prices = found_prices[:3]
+    if len(first_block_prices) >= 1:
+        for p in first_block_prices:
+            if p["prefix"] == "pvp":
+                labels.append({"name": "pvp", "start": p["start"], "end": p["end"], "text": p["val"]})
+            elif p["prefix"] in ["pv", "precio"]:
+                labels.append({"name": "price_vat", "start": p["start"], "end": p["end"], "text": p["val"]})
+            elif p["prefix"] == "pr":
+                labels.append({"name": "price_no_vat", "start": p["start"], "end": p["end"], "text": p["val"]})
+                
+        unassigned = [p for p in first_block_prices if not any(l["start"] == p["start"] for l in labels)]
+        if unassigned:
+            unassigned.sort(key=lambda x: x["num"], reverse=True)
+            tag_names = ["pvp", "price_vat", "price_no_vat"]
+            used_names = {l["name"] for l in labels}
+            avail_names = [tn for tn in tag_names if tn not in used_names]
+            for p, name in zip(unassigned, avail_names):
+                labels.append({"name": name, "start": p["start"], "end": p["end"], "text": p["val"]})
+
+    # 2. Buscar Modelo / SKU
+    _RE_MODEL_STRICT = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
+    model_match = _RE_MODEL_STRICT.search(raw_text)
+    if model_match:
+        labels.append({
+            "name": "model",
+            "start": model_match.start(),
+            "end": model_match.end(),
+            "text": model_match.group(0)
+        })
+
+    # 3. Buscar Producto
+    prod_regex = re.compile(r'\b(inducci[oó]n|vitrocer[aá]mica|vitro|lavavajillas|lavadora|frigor[ií]fico|horno|campana|microondas)\b', re.IGNORECASE)
+    prod_match = prod_regex.search(raw_text)
+    if prod_match:
+        labels.append({
+            "name": "product",
+            "start": prod_match.start(),
+            "end": prod_match.end(),
+            "text": prod_match.group(0)
+        })
+
+    # 4. Buscar Atributos Técnicos (ej: 3 zonas, 60cm, Blanca o similar)
+    attr_regex = re.compile(r'\b(\d+\s*(?:zonas?|z|cm|mm|l|litros|kg|kilos|rpm|flex|inox|blanca|negra)[^,\r\n]*)\b', re.IGNORECASE)
+    attr_match = attr_regex.search(raw_text)
+    if attr_match:
+        s, e = attr_match.start(1), attr_match.end(1)
+        overlap = any(l["start"] < e and l["end"] > s for l in labels)
+        if not overlap:
+            labels.append({
+                "name": "attributes",
+                "start": s,
+                "end": e,
+                "text": attr_match.group(1)
+            })
+
+    return {"status": "success", "labels": labels}
 
 @app.get("/api/extractions/files")
 async def get_extraction_files():

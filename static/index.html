@@ -203,6 +203,7 @@
                             
                             <!-- Label selection buttons -->
                             <div class="tag-buttons-container">
+                                <button id="btn-auto-suggest-labels" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; border: none; font-weight: 600; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">✨ Auto-Sugerir Etiquetas</button>
                                 <button class="tag-btn tag-product" data-tag="product">🏷️ Producto</button>
                                 <button class="tag-btn tag-model" data-tag="model">🧩 Modelo / SKU</button>
                                 <button class="tag-btn tag-price" data-tag="price">💵 Precio</button>
@@ -241,8 +242,13 @@
                             <div class="regex-match-status" id="regex-match-status">
                                 <!-- Success or warning status -->
                             </div>
-                            <div class="extracted-fields-box">
-                                <strong>Campos Extraídos de Muestra:</strong>
+                            <!-- Live Multi-Card Preview Container -->
+                            <div id="multi-card-preview-section" class="multi-card-preview-section mt-15" style="display:none;">
+                                <!-- Rendered Multi-Card breakdown will appear here -->
+                            </div>
+
+                            <div class="extracted-fields-box mt-15">
+                                <strong>Campos Extraídos de Muestra (JSON):</strong>
                                 <pre id="extracted-fields-json">{}</pre>
                             </div>
                         </div>
