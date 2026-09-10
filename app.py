@@ -1392,8 +1392,8 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 
     client = genai.Client(api_key=api_key)
     
-    # Modelos prioritarios con tolerancia a saturación temporal (503 / 429)
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    # Modelos prioritarios activos y compatibles según la API de Gemini
+    candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]
     last_error = None
     response_text = ""
 
@@ -2245,7 +2245,7 @@ Devuelve ÚNICAMENTE un JSON con este formato exacto (deja el valor vacío "" si
   "price": "subcadena exacta",
   "attributes": "subcadena exacta"
 }}"""
-            for m in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            for m in ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]:
                 try:
                     resp = client.models.generate_content(
                         model=m,
