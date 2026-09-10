@@ -14,7 +14,7 @@ from collections import deque
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -992,6 +992,55 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
     
     return pd.concat([df_clean, df_invalid], ignore_index=True)
 
+def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], provider: Dict[str, Any], source_label: str = "portapapeles") -> int:
+    """Guarda un lote de productos extraídos en el archivo del proveedor con deduplicación por modelo."""
+    if not extracted_data_list:
+        return 0
+    try:
+        ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        filepath = get_provider_filepath(provider)
+        file_format = provider.get("file_format", "csv")
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        for data in extracted_data_list:
+            if "timestamp" not in data:
+                data["timestamp"] = ts_now
+
+        df_new = pd.DataFrame(extracted_data_list)
+
+        if os.path.exists(filepath):
+            try:
+                if file_format == "xlsx":
+                    df_existing = pd.read_excel(filepath)
+                else:
+                    df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
+                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+            except Exception:
+                df_combined = df_new
+        else:
+            df_combined = df_new
+
+        model_col = find_model_column(df_combined.columns, provider.get("fields", []))
+        if model_col:
+            df_combined = deduplicate_by_completeness(df_combined, model_col)
+
+        if file_format == "xlsx":
+            df_combined.to_excel(filepath, index=False)
+        else:
+            df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
+
+        added_count = len(extracted_data_list)
+        for data in extracted_data_list:
+            product_name = data.get("product") or data.get("producto") or list(data.values())[0]
+            add_log("success", f"Capturado y guardado: {product_name}", data)
+
+        if added_count > 1:
+            add_log("success", f"Se han procesado y guardado {added_count} productos desde {source_label}.")
+        return added_count
+    except Exception as e:
+        add_log("error", f"Error guardando productos de {source_label}: {str(e)}")
+        return 0
+
 def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
     text = preprocess_clipboard_text(text)
     regex_pattern = provider.get("regex")
@@ -1184,49 +1233,7 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
             extracted_data_list.extend(adaptive_extracted)
         
         if extracted_data_list:
-            # --- Batch I/O: leer el archivo existente UNA VEZ, añadir todos los registros y escribir UNA VEZ ---
-            ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            filepath = get_provider_filepath(provider)
-            file_format = provider.get("file_format", "csv")
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-            # Asignar timestamp a todos los registros antes de crear el DataFrame
-            for data in extracted_data_list:
-                data["timestamp"] = ts_now
-
-            df_new = pd.DataFrame(extracted_data_list)
-
-            # Leer archivo existente (una sola lectura)
-            if os.path.exists(filepath):
-                try:
-                    if file_format == "xlsx":
-                        df_existing = pd.read_excel(filepath)
-                    else:
-                        df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
-                    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                except Exception:
-                    df_combined = df_new
-            else:
-                df_combined = df_new
-
-            # Deduplicación inteligente (una sola vez sobre el lote completo)
-            model_col = find_model_column(df_combined.columns, provider.get("fields", []))
-            if model_col:
-                df_combined = deduplicate_by_completeness(df_combined, model_col)
-
-            # Guardar (una sola escritura)
-            if file_format == "xlsx":
-                df_combined.to_excel(filepath, index=False)
-            else:
-                df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
-
-            added_count = len(extracted_data_list)
-            for data in extracted_data_list:
-                product_name = data.get("product") or data.get("producto") or list(data.values())[0]
-                add_log("success", f"Capturado y guardado: {product_name}", data)
-
-            if added_count > 1:
-                add_log("success", f"Se han procesado y guardado {added_count} productos del portapapeles.")
+            save_extracted_items_to_provider(extracted_data_list, provider, source_label="portapapeles")
         else:
             # Ignorar de forma pasiva, pero registrar en el log informativo local
             add_log("info", f"Texto copiado ignorado (no coincide con la plantilla de '{provider['name']}')")
@@ -1312,6 +1319,172 @@ def extract_text_from_image_bytes(image_bytes: bytes) -> str:
         cleaned_lines.append(fixed_line)
 
     return "\n".join(cleaned_lines)
+
+
+def extract_products_with_gemini(image_bytes: bytes, mime_type: str, provider: Dict[str, Any], filename: str = "") -> Dict[str, Any]:
+    """Extrae productos directamente de una imagen utilizando Google Gemini Vision estructurado."""
+    config = load_config()
+    api_key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "No se ha configurado la clave API de Gemini", "items": []}
+    
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        return {"success": False, "error": "Librería google-genai no está instalada en el entorno", "items": []}
+    
+    expected_fields = provider.get("fields", [])
+    fields_desc = ", ".join(expected_fields) if expected_fields else "producto, modelo, precio, atributos"
+    provider_name = provider.get("name", "General")
+
+    prompt = f"""
+Eres un asistente experto en visión artificial para extracción de catálogos comerciales, albaranes, tickets, facturas y tablas de precios del sector '{provider_name}'.
+
+Analiza minuciosamente la imagen adjunta y extrae TODOS y cada uno de los productos o artículos visibles.
+Para cada producto, extrae los siguientes datos:
+- "product": nombre descriptivo completo del artículo o electrodoméstico (ej: 'Lavadora Balay 8kg 1200rpm Blanco')
+- "model": código de modelo exacto, referencia, SKU o código de fabricante (ej: '3TS382B' o '71489')
+- "price": precio principal numérico con divisa (ej: '569,00 €' o '569.00')
+- "price_sin_iva": precio antes de impuestos o base imponible si figura explícitamente, o null si no se distingue
+- "price_con_iva": precio con impuestos o PVP si figura explícitamente, o null si no se distingue
+- "attributes": características técnicas relevantes (ej: capacidad en kg, rpm, eficiencia energética, color, dimensiones)
+
+Campos esperados por el usuario: [{fields_desc}]
+
+REGLAS OBLIGATORIAS:
+1. Extrae cada fila, producto o tarjeta de forma individual en la lista.
+2. Si un producto no tiene modelo visible, usa el código o referencia más cercana o déjalo vacío.
+3. Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin rodeos, sin markdown envolvente ni texto previo:
+{{
+  "productos": [
+    {{
+      "product": "Nombre del producto",
+      "model": "Código o modelo",
+      "price": "Precio",
+      "price_sin_iva": "Precio sin IVA",
+      "price_con_iva": "Precio con IVA",
+      "attributes": "Atributos o especificaciones"
+    }}
+  ]
+}}
+"""
+
+    if not mime_type or not mime_type.startswith("image/"):
+        mime_type = "image/png"
+
+    client = genai.Client(api_key=api_key)
+    
+    # Modelos prioritarios con tolerancia a saturación temporal (503 / 429)
+    candidate_models = ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]
+    last_error = None
+    response_text = ""
+
+    for model_name in candidate_models:
+        try:
+            add_log("info", f"Enviando '{filename or 'imagen'}' a Gemini Vision ({model_name})...")
+            part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[part, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1
+                )
+            )
+            response_text = (response.text or "").strip()
+            if response_text:
+                break
+        except Exception as e:
+            last_error = e
+            add_log("warning", f"Gemini ({model_name}) no disponible ({str(e)}), probando siguiente modelo...")
+
+    if not response_text:
+        return {"success": False, "error": f"Fallo al conectar con Gemini: {str(last_error)}", "items": []}
+
+    try:
+        # Limpiar posible markdown envolvente por seguridad
+        clean_json_str = response_text
+        if clean_json_str.startswith("```"):
+            clean_json_str = re.sub(r'^```(?:json)?\s*', '', clean_json_str)
+            clean_json_str = re.sub(r'\s*```$', '', clean_json_str)
+
+        data_json = json.loads(clean_json_str)
+        raw_items = []
+        if isinstance(data_json, list):
+            raw_items = data_json
+        elif isinstance(data_json, dict):
+            raw_items = data_json.get("productos") or data_json.get("items") or data_json.get("products") or [data_json]
+            
+        if not raw_items:
+            return {"success": True, "count": 0, "items": [], "raw_json": response_text}
+
+        def _format_price_field(val: Any) -> str:
+            if val is None or val == "":
+                return ""
+            if isinstance(val, (int, float)):
+                return f"{val:.2f} €".replace(".", ",")
+            s = str(val).strip()
+            if s and not any(c in s for c in ["€", "EUR", "$", "eur"]):
+                try:
+                    num = float(s.replace(",", "."))
+                    return f"{num:.2f} €".replace(".", ",")
+                except Exception:
+                    pass
+            return s
+
+        structured_items = []
+        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva"}
+        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pvp", "precio_pvp", "preciopvp"}
+
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            item = {}
+            raw_attr = raw.get("attributes") or raw.get("atributos") or ""
+            if isinstance(raw_attr, dict):
+                raw_attr = ", ".join(f"{k}: {v}" for k, v in raw_attr.items())
+            
+            p_val = _format_price_field(raw.get("price") or raw.get("precio") or "")
+            p_sin = _format_price_field(raw.get("price_sin_iva") or raw.get("precio_sin_iva") or "")
+            p_con = _format_price_field(raw.get("price_con_iva") or raw.get("precio_con_iva") or "")
+            
+            if expected_fields:
+                for field in expected_fields:
+                    f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
+                    if any(term in f_norm for term in ["product", "producto", "nombre", "articulo", "desc"]):
+                        item[field] = str(raw.get("product") or raw.get("producto") or "").strip()
+                    elif any(term in f_norm for term in ["model", "modelo", "sku", "ref", "referencia", "cod"]):
+                        item[field] = str(raw.get("model") or raw.get("modelo") or "").strip()
+                    elif any(term in f_norm for term in ["attribute", "atributo", "spec", "caracteristica"]):
+                        item[field] = str(raw_attr).strip()
+                    elif any(term in f_norm for term in no_vat_terms):
+                        item[field] = p_sin or p_val
+                    elif any(term in f_norm for term in vat_terms):
+                        item[field] = p_con or p_val
+                    elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
+                        item[field] = p_val or p_sin or p_con
+                    else:
+                        item[field] = str(raw.get(field, "")).strip()
+            else:
+                item = {
+                    "Producto": str(raw.get("product") or raw.get("producto") or "").strip(),
+                    "Modelo": str(raw.get("model") or raw.get("modelo") or "").strip(),
+                    "Precio": p_val,
+                    "Atributos": str(raw_attr).strip()
+                }
+
+            normalize_and_reorder_product_prices(item)
+            structured_items.append(item)
+
+        return {
+            "success": True,
+            "count": len(structured_items),
+            "items": structured_items,
+            "raw_json": response_text
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Error procesando JSON de Gemini: {str(e)}", "items": []}
 
 
 @asynccontextmanager
@@ -1430,10 +1603,45 @@ async def delete_user_route(username_to_delete: str, username: str = Depends(req
     add_log("info", f"Usuario estándar '{username_to_delete}' eliminado por '{username}'.")
     return {"status": "success"}
 
+class GeminiConfigRequest(BaseModel):
+    gemini_api_key: Optional[str] = None
+    image_engine: Optional[str] = None
+
+@app.get("/api/gemini-config")
+async def get_gemini_config(username: str = Depends(check_authentication)):
+    config = load_config()
+    key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
+    key_preview = ""
+    if key:
+        key_preview = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "***"
+    return {
+        "has_key": bool(key),
+        "key_preview": key_preview,
+        "image_engine": config.get("image_engine", "gemini")
+    }
+
+@app.post("/api/gemini-config")
+async def update_gemini_config(req: GeminiConfigRequest, username: str = Depends(check_authentication)):
+    config = load_config()
+    if req.gemini_api_key is not None:
+        new_key = req.gemini_api_key.strip()
+        config["gemini_api_key"] = new_key
+        add_log("info", f"Clave API de Gemini actualizada por '{username}'.")
+    if req.image_engine in ["gemini", "ocr", "auto"]:
+        config["image_engine"] = req.image_engine
+        add_log("info", f"Motor de análisis de imagen configurado a: {req.image_engine}")
+    save_config(config)
+    return {
+        "status": "success",
+        "has_key": bool(config.get("gemini_api_key")),
+        "image_engine": config.get("image_engine", "gemini")
+    }
+
 @app.post("/api/parse-image")
 async def parse_image(
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
+    engine: Optional[str] = Form(None),
     username: str = Depends(check_authentication)
 ):
     upload_files = []
@@ -1445,7 +1653,7 @@ async def parse_image(
     if not upload_files:
         raise HTTPException(status_code=400, detail="No se ha subido ningún archivo de imagen.")
 
-    load_config()
+    current_config = load_config()
     target_provider = active_provider
     if not target_provider:
         target_provider = {
@@ -1455,8 +1663,13 @@ async def parse_image(
             "file_format": "csv"
         }
 
+    # Motor seleccionado ("gemini", "ocr", "auto")
+    selected_engine = (engine or current_config.get("image_engine", "gemini")).lower().strip()
+    gemini_key = current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+
     processed_count = 0
     extracted_texts = []
+    total_products_added = 0
 
     for idx, upload_file in enumerate(upload_files, 1):
         fname = (upload_file.filename or "").lower()
@@ -1471,33 +1684,56 @@ async def parse_image(
             continue
 
         file_label = f" (página {idx}/{len(upload_files)})" if len(upload_files) > 1 else ""
-        add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con OCR local...")
-        ocr_text = extract_text_from_image_bytes(contents)
+        
+        # 1. Intentar con Gemini Vision si corresponde y hay clave
+        use_gemini = (selected_engine in ["gemini", "auto"]) and bool(gemini_key)
+        gemini_success = False
 
-        if not ocr_text.strip():
-            add_log("warning", f"No se logró detectar texto en la imagen '{upload_file.filename or 'captura.png'}'.")
-            continue
+        if use_gemini:
+            add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con IA Gemini...")
+            gemini_res = extract_products_with_gemini(contents, c_type, target_provider, upload_file.filename or "captura.png")
+            if gemini_res.get("success") and gemini_res.get("items"):
+                items = gemini_res["items"]
+                saved = save_extracted_items_to_provider(items, target_provider, source_label=f"IA Gemini ({upload_file.filename or 'captura.png'})")
+                total_products_added += saved
+                processed_count += 1
+                gemini_success = True
+                
+                # Crear resumen de productos extraídos para la respuesta
+                summary_lines = [
+                    f"- {it.get('Producto') or it.get('product') or list(it.values())[0]} | Modelo: {it.get('Modelo') or it.get('model') or 'S/M'} | {it.get('Precio') or it.get('price') or ''}"
+                    for it in items
+                ]
+                extracted_texts.append(f"[IA Gemini - {len(items)} producto(s) detectado(s)]:\n" + "\n".join(summary_lines))
+                add_log("success", f"IA Gemini extrajo y guardó {len(items)} producto(s) de '{upload_file.filename or 'captura.png'}'.")
+            else:
+                err_msg = gemini_res.get("error") or "No se identificaron productos estructurados."
+                add_log("warning", f"IA Gemini: {err_msg}. Intentando con OCR local...")
 
-        extracted_texts.append(ocr_text)
-        add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
+        # 2. Si Gemini no estaba activo o no extrajo nada, utilizar el OCR local
+        if not gemini_success:
+            add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con OCR local...")
+            ocr_text = extract_text_from_image_bytes(contents)
 
-        process_text(ocr_text, target_provider, is_ocr=True)
-        # NOTA: process_text() ya ejecuta internamente extracción adaptativa para
-        # fragmentos no coincidentes con la regex, así que no es necesario un
-        # segundo pase con regex vacía (causaba productos duplicados).
+            if not ocr_text.strip():
+                add_log("warning", f"No se logró detectar texto en la imagen '{upload_file.filename or 'captura.png'}'.")
+                continue
 
-        processed_count += 1
+            extracted_texts.append(ocr_text)
+            add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
+            process_text(ocr_text, target_provider, is_ocr=True)
+            processed_count += 1
 
     if processed_count == 0:
         return {
             "status": "warning",
-            "message": "No se extrajo ningún texto útil de las imágenes subidas.",
+            "message": "No se extrajo ningún producto ni texto útil de las imágenes subidas.",
             "images_processed": 0,
             "ocr_text": ""
         }
 
     combined_ocr = "\n--- PÁGINA ---\n".join(extracted_texts)
-    msg = f"Se han procesado {processed_count} imagen(es) mediante OCR correctamente."
+    msg = f"Se han procesado {processed_count} imagen(es) correctamente."
     return {
         "status": "success",
         "message": msg,

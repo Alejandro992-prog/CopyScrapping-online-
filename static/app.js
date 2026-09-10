@@ -39,7 +39,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnClearBatchImages = document.getElementById("btn-clear-batch-images");
     const btnFinishBatch = document.getElementById("btn-finish-batch");
 
-    
+    // Gemini AI / Engine Elements
+    const imageEngineSelect = document.getElementById("image-engine-select");
+    const geminiKeyStatus = document.getElementById("gemini-key-status");
+    const btnConfigGemini = document.getElementById("btn-config-gemini");
+    const geminiConfigCard = document.getElementById("gemini-config-card");
+    const btnCloseGeminiConfig = document.getElementById("btn-close-gemini-config");
+    const geminiApiKeyInput = document.getElementById("gemini-api-key-input");
+    const btnToggleShowKey = document.getElementById("btn-toggle-show-key");
+    const btnSaveGeminiKey = document.getElementById("btn-save-gemini-key");
+    const geminiConfigMsg = document.getElementById("gemini-config-msg");
     // Tab 2 Elements
     const provNameInput = document.getElementById("prov-name");
     const provIdInput = document.getElementById("prov-id");
@@ -139,6 +148,10 @@ document.addEventListener("DOMContentLoaded", () => {
             formData.append("files", file);
         });
 
+        const engine = imageEngineSelect ? imageEngineSelect.value : "gemini";
+        formData.append("engine", engine);
+
+        const engineLabel = engine === "gemini" ? "la IA de Gemini Vision" : "el OCR local";
         const labelMsg = filesArr.length === 1 
             ? `'${filesArr[0].name || 'captura.png'}'`
             : `${filesArr.length} imágenes (multi-página)`;
@@ -146,7 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
         appendLog({
             timestamp: new Date().toLocaleTimeString(),
             type: "info",
-            message: `Enviando ${labelMsg} al OCR local...`
+            message: `Enviando ${labelMsg} a ${engineLabel}...`
         });
 
         try {
@@ -162,7 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
                     type: "success",
-                    message: `Procesada(s) ${addedPages} página(s) por OCR con éxito. Productos acumulados.`
+                    message: `Procesada(s) ${addedPages} página(s) con éxito (${engine === "gemini" ? "IA Gemini" : "OCR"}). Productos acumulados.`
                 });
 
                 if (batchOcrCard && batchCounterBadge) {
@@ -175,7 +188,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
                     type: "warning",
-                    message: data.message || "Error procesando imágenes por OCR."
+                    message: data.message || "Error procesando imágenes."
                 });
             }
         } catch (err) {
@@ -2280,8 +2293,123 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // --- Gestión de Configuración de Gemini AI ---
+    async function loadGeminiConfig() {
+        try {
+            const res = await fetch("/api/gemini-config");
+            if (res.ok) {
+                const data = await res.json();
+                if (imageEngineSelect && data.image_engine) {
+                    imageEngineSelect.value = data.image_engine;
+                }
+                if (geminiKeyStatus) {
+                    if (data.has_key) {
+                        geminiKeyStatus.textContent = "✨ Gemini Conectado";
+                        geminiKeyStatus.className = "badge badge-success";
+                        geminiKeyStatus.title = `Clave activa (${data.key_preview || 'Configurada'})`;
+                        if (geminiApiKeyInput) {
+                            geminiApiKeyInput.placeholder = `Clave guardada: ${data.key_preview || '***'}`;
+                        }
+                    } else {
+                        geminiKeyStatus.textContent = "⚠️ Sin Clave API";
+                        geminiKeyStatus.className = "badge badge-warning";
+                        geminiKeyStatus.title = "Haz clic en '⚙️ Clave' para añadir tu API key";
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Error cargando configuración de Gemini:", e);
+        }
+    }
+
+    if (imageEngineSelect) {
+        imageEngineSelect.addEventListener("change", async () => {
+            const val = imageEngineSelect.value;
+            try {
+                await fetch("/api/gemini-config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image_engine: val })
+                });
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "info",
+                    message: `Motor de análisis de imagen cambiado a: ${val === 'gemini' ? 'IA Gemini' : 'OCR Local'}`
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        });
+    }
+
+    if (btnConfigGemini) {
+        btnConfigGemini.addEventListener("click", () => {
+            if (geminiConfigCard) {
+                geminiConfigCard.style.display = geminiConfigCard.style.display === "none" ? "block" : "none";
+            }
+        });
+    }
+
+    if (geminiKeyStatus) {
+        geminiKeyStatus.addEventListener("click", () => {
+            if (geminiConfigCard) {
+                geminiConfigCard.style.display = "block";
+            }
+        });
+    }
+
+    if (btnCloseGeminiConfig) {
+        btnCloseGeminiConfig.addEventListener("click", () => {
+            if (geminiConfigCard) geminiConfigCard.style.display = "none";
+        });
+    }
+
+    if (btnToggleShowKey && geminiApiKeyInput) {
+        btnToggleShowKey.addEventListener("click", () => {
+            geminiApiKeyInput.type = geminiApiKeyInput.type === "password" ? "text" : "password";
+        });
+    }
+
+    if (btnSaveGeminiKey && geminiApiKeyInput) {
+        btnSaveGeminiKey.addEventListener("click", async () => {
+            const keyVal = geminiApiKeyInput.value.trim();
+            if (!keyVal) {
+                if (geminiConfigMsg) {
+                    geminiConfigMsg.textContent = "⚠️ Introduce una clave válida.";
+                    geminiConfigMsg.style.color = "#f59e0b";
+                }
+                return;
+            }
+            try {
+                const res = await fetch("/api/gemini-config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ gemini_api_key: keyVal })
+                });
+                if (res.ok) {
+                    if (geminiConfigMsg) {
+                        geminiConfigMsg.textContent = "✅ Clave API guardada correctamente.";
+                        geminiConfigMsg.style.color = "#10b981";
+                    }
+                    geminiApiKeyInput.value = "";
+                    loadGeminiConfig();
+                    setTimeout(() => {
+                        if (geminiConfigCard) geminiConfigCard.style.display = "none";
+                        if (geminiConfigMsg) geminiConfigMsg.textContent = "";
+                    }, 1500);
+                }
+            } catch (err) {
+                if (geminiConfigMsg) {
+                    geminiConfigMsg.textContent = "❌ Error guardando la clave.";
+                    geminiConfigMsg.style.color = "#ef4444";
+                }
+            }
+        });
+    }
+
     // Initialize Page
     initSSEConnection();
     loadStatus();
+    loadGeminiConfig();
 });
 

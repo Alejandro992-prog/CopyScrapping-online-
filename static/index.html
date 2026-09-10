@@ -83,13 +83,47 @@
                             <textarea id="paste-input-area" placeholder="Pega texto aquí (Ctrl+V) para procesar..." class="form-textarea" style="height: 60px; font-size: 12px;"></textarea>
                         </div>
 
+                        <div class="control-row mt-10" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); width: 100%;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 14px;">🧠</span>
+                                <label for="image-engine-select" style="font-size: 12px; font-weight: 600; color: var(--text-color, #e0e0e0); margin: 0;">Motor de Imágenes:</label>
+                                <select id="image-engine-select" class="form-select" style="padding: 4px 8px; font-size: 12px; height: auto; width: auto;">
+                                    <option value="gemini" selected>🤖 IA Gemini (Recomendado)</option>
+                                    <option value="ocr">🖥️ OCR Local (EasyOCR)</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <span id="gemini-key-status" class="badge badge-success" style="font-size: 11px; cursor: pointer;" title="Estado de la clave API de Gemini">
+                                    ✨ Gemini Conectado
+                                </span>
+                                <button id="btn-config-gemini" class="btn btn-secondary btn-sm" style="padding: 3px 8px; font-size: 11px;" title="Configurar API Key de Gemini">⚙️ Clave</button>
+                            </div>
+                        </div>
+
+                        <!-- Panel de Configuración de API Key de Gemini -->
+                        <div id="gemini-config-card" class="card mt-10" style="display: none; background: rgba(16, 24, 40, 0.95); border: 1px solid rgba(99, 102, 241, 0.4); padding: 12px; border-radius: 8px; width: 100%;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <strong style="font-size: 13px; color: #a5b4fc;">⚙️ Configuración de Google Gemini API</strong>
+                                <button id="btn-close-gemini-config" class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 11px;">✕</button>
+                            </div>
+                            <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+                                Clave de API de Google AI Studio (<a href="https://aistudio.google.com/" target="_blank" style="color: #818cf8;">aistudio.google.com</a>):
+                            </p>
+                            <div style="display: flex; gap: 6px;">
+                                <input type="password" id="gemini-api-key-input" placeholder="Pega aquí tu API Key" class="form-input" style="font-size: 12px; flex: 1;">
+                                <button id="btn-toggle-show-key" class="btn btn-secondary btn-sm" style="padding: 4px 8px;" title="Mostrar/Ocultar clave">👁️</button>
+                                <button id="btn-save-gemini-key" class="btn btn-primary btn-sm" style="padding: 4px 12px; font-size: 12px;">Guardar</button>
+                            </div>
+                            <div id="gemini-config-msg" style="font-size: 11px; margin-top: 6px;"></div>
+                        </div>
+
                         <div class="control-row mt-10" style="width: 100%;">
                             <div id="image-ocr-dropzone" class="image-dropzone">
                                 <input type="file" id="image-file-input" accept="image/*" multiple style="display: none;">
                                 <div class="dropzone-content">
                                     <span class="dropzone-icon">📷</span>
                                     <div class="dropzone-text">
-                                        <strong>Subir o Arrastrar Capturas / Páginas (OCR)</strong>
+                                        <strong id="dropzone-title-text">Subir o Arrastrar Capturas / Páginas (IA Gemini / OCR)</strong>
                                         <span>Selecciona una o varias imágenes (multi-página) o usa <kbd style="background: rgba(255,255,255,0.15); padding: 2px 5px; border-radius: 4px; font-size: 11px;">Ctrl + V</kbd></span>
                                     </div>
                                 </div>
