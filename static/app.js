@@ -168,7 +168,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 body: formData
             });
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            } catch (_) {
+                const txt = await response.text();
+                data = { status: "error", message: `Error del servidor (${response.status}): ${txt}` };
+            }
             if (response.ok && (data.status === "success" || data.status === "warning")) {
                 const addedPages = data.images_processed || 0;
                 if (addedPages > 0) {

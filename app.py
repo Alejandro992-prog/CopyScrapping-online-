@@ -1724,6 +1724,7 @@ async def parse_image(
     engine: Optional[str] = Form(None),
     username: str = Depends(check_authentication)
 ):
+    global active_provider
     upload_files = []
     if files:
         upload_files.extend([f for f in files if f])
