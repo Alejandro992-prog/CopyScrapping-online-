@@ -168,26 +168,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: formData
             });
             const data = await response.json();
-            if (response.ok && data.status === "success") {
-                const addedPages = data.images_processed || filesArr.length;
-                activeBatchPages += addedPages;
+            if (response.ok && (data.status === "success" || data.status === "warning")) {
+                const addedPages = data.images_processed || 0;
+                if (addedPages > 0) {
+                    activeBatchPages += addedPages;
+                }
 
+                const msgType = data.status === "success" ? "success" : "warning";
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
-                    type: "success",
-                    message: `Procesada(s) ${addedPages} página(s) con éxito (${engine === "gemini" ? "IA Gemini" : "OCR"}). Productos acumulados.`
+                    type: msgType,
+                    message: data.message || `Procesada(s) ${addedPages} página(s) (${engine === "gemini" ? "IA Gemini" : "OCR"}).`
                 });
 
-                if (batchOcrCard && batchCounterBadge) {
+                if (data.status === "success" && batchOcrCard && batchCounterBadge) {
                     batchOcrCard.style.display = "block";
                     batchCounterBadge.textContent = `${activeBatchPages} página(s) en lote activo`;
                 }
 
+                // Siempre refrescar la tabla tras procesar una imagen
                 loadRecentCaptures();
             } else {
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
-                    type: "warning",
+                    type: "error",
                     message: data.message || "Error procesando imágenes."
                 });
             }
@@ -1030,6 +1034,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify(providerData)
             });
             if (res.ok) {
+                const savedData = await res.json();
+                const savedId = savedData.provider?.id || id;
                 alert("¡Plantilla del proveedor guardada exitosamente!");
                 
                 // Limpiar formulario
@@ -1045,7 +1051,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 regexResultsCard.style.display = "none";
                 btnSaveProvider.disabled = true;
                 
-                loadStatus();
+                // Recargar la lista y preseleccionar el proveedor recién guardado
+                await loadProviders();
+                if (savedId) {
+                    providerSelect.value = savedId;
+                }
             } else {
                 alert("Error al guardar la plantilla en el servidor.");
             }
