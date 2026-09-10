@@ -1,0 +1,110 @@
+[
+  {
+    "id": "electrolider",
+    "name": "Electrolider",
+    "regex": "\\s*Referencia\\s+71489\\s+Balay\\s*(?P<model>\\b(?=[A-Za-z0-9-]*\\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\\b)\\s+(?P<product>[^\n]+?)\\s+(?P<attributes>[^\n]+)\\s*Balay\\s+8\\s+kg,\\s+1200\\s+rpm,\\s+A,\\s+46\\s+kWh/100,\\s+71\\s+dB,\\s+Acero\\s+mate\\s*(?P<price>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))",
+    "fields": [
+      "product",
+      "model",
+      "price",
+      "attributes"
+    ],
+    "output_file": "data/extractions/electrolider.xlsx",
+    "file_format": "xlsx",
+    "sample_text": "Referencia 71489\nBalay 3TS382B lavadora Carga frontal 8 kg 1200 RPM Acero inoxidable\nBalay\n8 kg, 1200 rpm, A, 46 kWh/100, 71 dB, Acero mate\n569,00 €\nImpuestos incluidos",
+    "labels": [
+      {
+        "name": "product",
+        "start": 31,
+        "end": 39
+      },
+      {
+        "name": "model",
+        "start": 23,
+        "end": 30
+      },
+      {
+        "name": "price",
+        "start": 140,
+        "end": 148
+      },
+      {
+        "name": "attributes",
+        "start": 40,
+        "end": 84
+      }
+    ]
+  },
+  {
+    "id": "activa",
+    "name": "activa",
+    "regex": "(?P<price>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))\\s*BALAY\\s*(?P<product>[^\n]+?)\\s*carga\\s+frontal\\s+Balay\\s*(?P<model>\\b(?=[A-Za-z0-9-]*\\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\\b)\\s*,\\s*(?P<attributes>[^\n]+)",
+    "fields": [
+      "product",
+      "model",
+      "price",
+      "attributes"
+    ],
+    "output_file": "data/extractions/activa.xlsx",
+    "file_format": "xlsx",
+    "sample_text": "375€\nBALAY\nLavadora carga frontal Balay 3TS273BA, Blanco, 7 kg, 1200 rpm, A",
+    "labels": [
+      {
+        "name": "product",
+        "start": 11,
+        "end": 19
+      },
+      {
+        "name": "model",
+        "start": 40,
+        "end": 48
+      },
+      {
+        "name": "price",
+        "start": 0,
+        "end": 4
+      },
+      {
+        "name": "attributes",
+        "start": 50,
+        "end": 75
+      }
+    ]
+  },
+  {
+    "id": "millar",
+    "name": "Millar",
+    "regex": "(?P<product>[^\n]+?)\\s*Balay\\s*(?P<model>\\b(?=[A-Za-z0-9-]*\\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\\b)\\s+(?P<attributes>[^\n]+)\\s*,\\s+Blanco,\\s+Función\\s+fin\\s+diferido,\\s+598mm\\s*(?P<price>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))",
+    "fields": [
+      "model",
+      "product",
+      "price",
+      "attributes"
+    ],
+    "output_file": "data/extractions/millar.xlsx",
+    "file_format": "xlsx",
+    "sample_text": "Lavadora Balay 3TS390B\nClase A, 9kg, 1200RPM, Blanco, Función fin diferido, 598mm\n519 €\n",
+    "labels": [
+      {
+        "name": "model",
+        "start": 15,
+        "end": 22
+      },
+      {
+        "name": "product",
+        "start": 0,
+        "end": 8
+      },
+      {
+        "name": "price",
+        "start": 82,
+        "end": 87
+      },
+      {
+        "name": "attributes",
+        "start": 23,
+        "end": 44
+      }
+    ]
+  }
+]

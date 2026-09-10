@@ -381,6 +381,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // ----------------------------------------------------
     // 3. MONITOR CONTROLS & RECENT TABLES
     // ----------------------------------------------------
+    let isUpdatingSelect = false;
+
     async function loadStatus() {
         try {
             const res = await fetch("/api/status");
@@ -393,14 +395,15 @@ document.addEventListener("DOMContentLoaded", () => {
             await loadProviders(activeProviderId);
             
             if (activeProviderId) {
+                isUpdatingSelect = true;
                 providerSelect.value = activeProviderId;
-                loadRecentCaptures();
+                isUpdatingSelect = false;
+                await loadRecentCaptures();
             } else if (savedProviders && savedProviders.length > 0) {
-                // Si no había proveedor activo pero hay proveedores guardados, activar automáticamente el primero
+                // Si el backend no tiene proveedor activo, activar automáticamente el primero
                 await activateProvider(savedProviders[0].id);
             } else {
-                // Fallback al proveedor General
-                await activateProvider("default");
+                showEmptyRecentTable();
             }
 
             // Actualizar la interfaz de usuario en base a los privilegios
@@ -447,20 +450,27 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             activeProviderId = data.active_provider ? data.active_provider.id : null;
             updateActiveBadge(data.active_provider);
-            loadStatus();
+
+            // Sincronizar el selector sin disparar el evento change
+            isUpdatingSelect = true;
+            providerSelect.value = activeProviderId || "";
+            isUpdatingSelect = false;
+
+            // Sincronizar elemento activo en la lista lateral
+            document.querySelectorAll(".provider-item").forEach(item => {
+                item.classList.toggle("active", item.dataset.id === activeProviderId);
+            });
+
             lastProcessedClipboard = ""; // Reset duplicate detection on provider change
-            loadRecentCaptures();
-            // Refrescar selector en caso de que esté desincronizado
-            if (providerSelect.value !== (activeProviderId || "")) {
-                providerSelect.value = activeProviderId || "";
-            }
+            await loadRecentCaptures();
         } catch (err) {
             console.error("Error al activar proveedor:", err);
         }
     }
 
     providerSelect.addEventListener("change", async () => {
-        const val = providerSelect.value || null;
+        if (isUpdatingSelect) return;
+        const val = providerSelect.value ? providerSelect.value.trim() : null;
         await activateProvider(val);
     });
 
@@ -520,13 +530,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadRecentCaptures() {
         if (!activeProviderId) {
-            if (savedProviders && savedProviders.length > 0) {
-                await activateProvider(savedProviders[0].id);
-                return;
-            } else {
-                await activateProvider("default");
-                return;
-            }
+            showEmptyRecentTable();
+            return;
         }
         
         btnDownloadRaw.href = `/api/extractions/download/${activeProviderId}`;
@@ -680,6 +685,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 savedProviders.forEach(p => {
                     const item = document.createElement("div");
                     item.className = `provider-item ${p.id === activeProviderId ? 'active' : ''}`;
+                    item.dataset.id = p.id;
                     item.onclick = () => loadProviderIntoTrainer(p);
                     
                     const info = document.createElement("div");
@@ -711,24 +717,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
             
-            // Popular selector
-            const targetId = selectId || activeProviderId || providerSelect.value;
+            // Popular selector protegido contra eventos change no deseados
+            const targetId = selectId || activeProviderId || "";
+            isUpdatingSelect = true;
             providerSelect.innerHTML = `<option value="">-- Seleccionar Proveedor --</option>`;
             savedProviders.forEach(p => {
                 const opt = document.createElement("option");
                 opt.value = p.id;
                 opt.textContent = p.name;
+                if (p.id === targetId) opt.selected = true;
                 providerSelect.appendChild(opt);
             });
             // Opción General para capturas sin plantilla previa
             const optDefault = document.createElement("option");
             optDefault.value = "default";
             optDefault.textContent = "📁 General (Capturas Rápidas / IA)";
+            if (targetId === "default") optDefault.selected = true;
             providerSelect.appendChild(optDefault);
 
             if (targetId && (savedProviders.some(p => p.id === targetId) || targetId === "default")) {
                 providerSelect.value = targetId;
             }
+            isUpdatingSelect = false;
         } catch (err) {
             console.error("Error al cargar proveedores:", err);
         }

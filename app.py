@@ -329,21 +329,43 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             add_log("warning", f"No se pudo migrar config.json automáticamente: {str(e)}")
 
+    seed_file = get_resource_path(os.path.join("data", "providers_seed.json"))
+    default_providers = []
+    if os.path.exists(seed_file):
+        try:
+            with open(seed_file, "r", encoding="utf-8") as sf:
+                default_providers = json.load(sf)
+        except Exception:
+            pass
+
     if not os.path.exists(CONFIG_FILE):
-        config = {"active_provider_id": None, "providers": []}
+        default_active = default_providers[0]["id"] if default_providers else None
+        config = {"active_provider_id": default_active, "providers": default_providers}
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
         _config_cache = config
         _config_cache_ts = time.monotonic()
+        active_provider = default_providers[0] if default_providers else None
         return config
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
             
-        # Actualizar active_provider global
         providers = config.get("providers", [])
+        if not providers and default_providers:
+            providers = default_providers
+            config["providers"] = providers
+            if not config.get("active_provider_id"):
+                config["active_provider_id"] = providers[0]["id"]
+            save_config(config)
+
+        # Actualizar active_provider global
         active_id = config.get("active_provider_id")
         active_provider = next((p for p in providers if p["id"] == active_id), None)
+        if not active_provider and providers:
+            active_provider = providers[0]
+            config["active_provider_id"] = active_provider["id"]
+
         _config_cache = config
         _config_cache_ts = time.monotonic()
         return config

@@ -1,6 +1,7 @@
 __pycache__/
 data/*
 !data/dictionary.json
+!data/providers_seed.json
 *.pyc
 .DS_Store
 config.json
