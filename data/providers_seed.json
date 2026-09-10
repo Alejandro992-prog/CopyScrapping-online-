@@ -2,40 +2,54 @@
   {
     "id": "electrolider",
     "name": "Electrolider",
-    "regex": "\\s*Referencia\\s+71489\\s+Balay\\s*(?P<model>\\b(?=[A-Za-z0-9-]*\\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\\b)\\s+(?P<product>[^\n]+?)\\s+(?P<attributes>[^\n]+)\\s*Balay\\s+8\\s+kg,\\s+1200\\s+rpm,\\s+A,\\s+46\\s+kWh/100,\\s+71\\s+dB,\\s+Acero\\s+mate\\s*(?P<price>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))",
+    "regex": "Balay\\s+(?P<model>\\b(?=[A-Za-z0-9-]*\\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\\b)\\s+(?P<product>[^\n]+?)\\s+Carga\\s+frontal\\s+(?P<attributes>[^\n]+?)\\s+Blanco\\s+(?P<price_no_vat>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))\\s+(?P<price_vat>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))\\s+(?P<pvp>\\d+(?:[.,\\d]*\\d+)?\\s*(?:€|EUR|eur|usd|\\$|GBP|gbp))",
     "fields": [
-      "product",
       "model",
-      "price",
-      "attributes"
+      "product",
+      "attributes",
+      "price_no_vat",
+      "price_vat",
+      "pvp"
     ],
-    "output_file": "data/extractions/electrolider.xlsx",
-    "file_format": "xlsx",
-    "sample_text": "Referencia 71489\nBalay 3TS382B lavadora Carga frontal 8 kg 1200 RPM Acero inoxidable\nBalay\n8 kg, 1200 rpm, A, 46 kWh/100, 71 dB, Acero mate\n569,00 €\nImpuestos incluidos",
+    "output_file": "data/extractions/electrolider.csv",
+    "file_format": "csv",
+    "sample_text": "Balay 3TS3107BD lavadora Carga frontal 10 kg 1400 RPM Blanco 100€ 200€ 300€",
     "labels": [
       {
+        "name": "model",
+        "start": 6,
+        "end": 15,
+        "text": "3TS3107BD"
+      },
+      {
         "name": "product",
-        "start": 31,
-        "end": 39,
+        "start": 16,
+        "end": 24,
         "text": "lavadora"
       },
       {
-        "name": "model",
-        "start": 23,
-        "end": 30,
-        "text": "3TS382B"
-      },
-      {
-        "name": "price",
-        "start": 140,
-        "end": 148,
-        "text": "569,00 €"
-      },
-      {
         "name": "attributes",
-        "start": 40,
-        "end": 84,
-        "text": "Carga frontal 8 kg 1200 RPM Acero inoxidable"
+        "start": 39,
+        "end": 53,
+        "text": "10 kg 1400 RPM"
+      },
+      {
+        "name": "price_no_vat",
+        "start": 61,
+        "end": 65,
+        "text": "100€"
+      },
+      {
+        "name": "price_vat",
+        "start": 66,
+        "end": 70,
+        "text": "200€"
+      },
+      {
+        "name": "pvp",
+        "start": 71,
+        "end": 75,
+        "text": "300€"
       }
     ]
   },

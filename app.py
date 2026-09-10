@@ -1935,8 +1935,16 @@ async def save_provider(provider: ProviderModel):
     if not provider_dict.get("output_file"):
         fmt = provider_dict["file_format"]
         provider_dict["output_file"] = f"data/extractions/{provider.id}.{fmt}"
-    if not provider_dict.get("fields") and provider_dict.get("labels"):
-        provider_dict["fields"] = [l["name"] for l in provider_dict["labels"] if isinstance(l, dict) and "name" in l]
+    # Sincronizar fields siempre a partir de las etiquetas definidas
+    if provider_dict.get("labels"):
+        lbl_fields = []
+        for l in provider_dict["labels"]:
+            if isinstance(l, dict) and "name" in l and l["name"] not in lbl_fields:
+                lbl_fields.append(l["name"])
+        if lbl_fields:
+            provider_dict["fields"] = lbl_fields
+    elif not provider_dict.get("fields"):
+        provider_dict["fields"] = ["product", "model", "price", "attributes"]
 
     # Asegurar que cada etiqueta tenga su text poblado
     sample = provider_dict.get("sample_text", "")

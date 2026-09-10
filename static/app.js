@@ -50,6 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnSaveGeminiKey = document.getElementById("btn-save-gemini-key");
     const geminiConfigMsg = document.getElementById("gemini-config-msg");
     // Tab 2 Elements
+    const savedProvidersList = document.getElementById("saved-providers-list");
     const provNameInput = document.getElementById("prov-name");
     const provIdInput = document.getElementById("prov-id");
     const provFormatSelect = document.getElementById("prov-format");
@@ -677,47 +678,50 @@ document.addEventListener("DOMContentLoaded", () => {
                 activeProviderId = data.active_provider_id;
             }
             
-            // Popular sidebar
-            savedProvidersList.innerHTML = "";
-            if (savedProviders.length === 0) {
-                savedProvidersList.innerHTML = `<p class="empty-text">No hay plantillas guardadas.</p>`;
-            } else {
-                savedProviders.forEach(p => {
-                    const item = document.createElement("div");
-                    item.className = `provider-item ${p.id === activeProviderId ? 'active' : ''}`;
-                    item.dataset.id = p.id;
-                    item.onclick = () => {
-                        loadProviderIntoTrainer(p);
-                        activateProvider(p.id);
-                    };
-                    
-                    const info = document.createElement("div");
-                    info.className = "provider-info";
-                    
-                    const h4 = document.createElement("h4");
-                    h4.textContent = p.name;
-                    
-                    const pSpan = document.createElement("p");
-                    const fieldsList = (p.fields && p.fields.length > 0) ? p.fields.join(", ") : "Sin campos";
-                    const formatStr = (p.file_format || "xlsx").toUpperCase();
-                    pSpan.textContent = `Campos: ${fieldsList} (${formatStr})`;
-                    
-                    info.appendChild(h4);
-                    info.appendChild(pSpan);
-                    
-                    const deleteBtn = document.createElement("button");
-                    deleteBtn.className = "btn-delete-prov";
-                    deleteBtn.innerHTML = "🗑️";
-                    deleteBtn.title = "Eliminar plantilla";
-                    deleteBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        deleteProvider(p.id);
-                    };
-                    
-                    item.appendChild(info);
-                    item.appendChild(deleteBtn);
-                    savedProvidersList.appendChild(item);
-                });
+            // Popular sidebar de plantillas guardadas
+            const listEl = savedProvidersList || document.getElementById("saved-providers-list");
+            if (listEl) {
+                listEl.innerHTML = "";
+                if (savedProviders.length === 0) {
+                    listEl.innerHTML = `<p class="empty-text" style="color: var(--text-muted); font-size: 13px; padding: 10px;">No hay plantillas guardadas.</p>`;
+                } else {
+                    savedProviders.forEach(p => {
+                        const item = document.createElement("div");
+                        item.className = `provider-item ${p.id === activeProviderId ? 'active' : ''}`;
+                        item.dataset.id = p.id;
+                        item.onclick = () => {
+                            loadProviderIntoTrainer(p);
+                            activateProvider(p.id);
+                        };
+                        
+                        const info = document.createElement("div");
+                        info.className = "provider-info";
+                        
+                        const h4 = document.createElement("h4");
+                        h4.textContent = p.name;
+                        
+                        const pSpan = document.createElement("p");
+                        const fieldsList = (p.fields && p.fields.length > 0) ? p.fields.join(", ") : "Sin campos";
+                        const formatStr = (p.file_format || "xlsx").toUpperCase();
+                        pSpan.textContent = `Campos: ${fieldsList} (${formatStr})`;
+                        
+                        info.appendChild(h4);
+                        info.appendChild(pSpan);
+                        
+                        const deleteBtn = document.createElement("button");
+                        deleteBtn.className = "btn-delete-prov";
+                        deleteBtn.innerHTML = "🗑️";
+                        deleteBtn.title = "Eliminar plantilla";
+                        deleteBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            deleteProvider(p.id);
+                        };
+                        
+                        item.appendChild(info);
+                        item.appendChild(deleteBtn);
+                        listEl.appendChild(item);
+                    });
+                }
             }
             
             // Popular selector protegido contra eventos change no deseados
@@ -1176,7 +1180,7 @@ document.addEventListener("DOMContentLoaded", () => {
             regex = ".*";
         }
         
-        const fields = labels.map(l => l.name);
+        const fields = [...new Set(labels.map(l => l.name))];
         const output_file = `data/extractions/${id}.${format}`;
         
         const providerData = {
@@ -1208,7 +1212,16 @@ document.addEventListener("DOMContentLoaded", () => {
             if (res.ok) {
                 const savedData = await res.json();
                 const savedId = savedData.provider?.id || id;
-                
+                const finalSavedProv = savedData.provider || providerData;
+
+                // Actualizar inmediatamente en memoria para feedback instantáneo
+                const existingIdx = savedProviders.findIndex(p => p.id === savedId);
+                if (existingIdx >= 0) {
+                    savedProviders[existingIdx] = finalSavedProv;
+                } else {
+                    savedProviders.push(finalSavedProv);
+                }
+
                 // Feedback visual claro en el botón sin borrar el trabajo
                 btnSaveProvider.textContent = "✓ ¡Plantilla Guardada!";
                 btnSaveProvider.style.background = "#10b981";
@@ -1224,8 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 await activateProvider(savedId);
 
                 // Mantener el proveedor cargado y visible en el entrenador
-                const savedProv = savedProviders.find(p => p.id === savedId) || savedData.provider || providerData;
-                loadProviderIntoTrainer(savedProv);
+                loadProviderIntoTrainer(finalSavedProv);
             } else {
                 const errData = await res.json().catch(() => ({}));
                 const msg = errData.detail || errData.message || `Error HTTP ${res.status}`;
