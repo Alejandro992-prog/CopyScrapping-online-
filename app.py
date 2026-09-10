@@ -21,7 +21,8 @@ except Exception:
 def get_now() -> datetime:
     if APP_TZ:
         return datetime.now(APP_TZ)
-    return datetime.now()
+    return datetime.now()  # fallback naive (sin zoneinfo disponible)
+
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
@@ -2301,7 +2302,7 @@ async def get_extraction_files():
             files.append({
                 "filename": f,
                 "size": stat.st_size,
-                "last_modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                "last_modified": get_now().strftime("%Y-%m-%d %H:%M:%S")
             })
     return files
 
