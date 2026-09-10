@@ -1714,64 +1714,98 @@ async def parse_image(
 
     # Motor seleccionado ("gemini", "ocr", "auto")
     selected_engine = (engine or current_config.get("image_engine", "gemini")).lower().strip()
-    gemini_key = current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    gemini_key = (current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
 
     processed_count = 0
     extracted_texts = []
     total_products_added = 0
 
-    for idx, upload_file in enumerate(upload_files, 1):
-        fname = (upload_file.filename or "").lower()
-        c_type = (upload_file.content_type or "").lower()
-        if not (c_type.startswith("image/") or any(fname.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp"])):
-            add_log("warning", f"El archivo '{upload_file.filename}' se ignoró por no ser un formato de imagen soportado.")
-            continue
+    try:
+        for idx, upload_file in enumerate(upload_files, 1):
+            try:
+                fname = (upload_file.filename or "").lower()
+                c_type = (upload_file.content_type or "").lower()
 
-        contents = await upload_file.read()
-        if not contents:
-            add_log("warning", f"El archivo '{upload_file.filename}' está vacío y se ignoró.")
-            continue
+                # Aceptar imágenes aunque content_type esté vacío (ej: paste de portapapeles)
+                is_image_by_type = c_type.startswith("image/")
+                is_image_by_name = any(fname.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"])
+                # Si no hay ni tipo ni nombre conocido, asumir PNG (típico de clipboard paste)
+                if not is_image_by_type and not is_image_by_name and not fname:
+                    c_type = "image/png"
+                    is_image_by_type = True
 
-        file_label = f" (página {idx}/{len(upload_files)})" if len(upload_files) > 1 else ""
-        
-        # 1. Intentar con Gemini Vision si corresponde y hay clave
-        use_gemini = (selected_engine in ["gemini", "auto"]) and bool(gemini_key)
-        gemini_success = False
+                if not (is_image_by_type or is_image_by_name):
+                    add_log("warning", f"El archivo '{upload_file.filename}' se ignoró por no ser un formato de imagen soportado.")
+                    continue
 
-        if use_gemini:
-            add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con IA Gemini...")
-            gemini_res = extract_products_with_gemini(contents, c_type, target_provider, upload_file.filename or "captura.png")
-            if gemini_res.get("success") and gemini_res.get("items"):
-                items = gemini_res["items"]
-                saved = save_extracted_items_to_provider(items, target_provider, source_label=f"IA Gemini ({upload_file.filename or 'captura.png'})")
-                total_products_added += saved
-                processed_count += 1
-                gemini_success = True
+                # Normalizar mime type si está vacío o incorrecto
+                if not c_type.startswith("image/"):
+                    c_type = "image/png"
+
+                contents = await upload_file.read()
+                if not contents:
+                    add_log("warning", f"El archivo '{upload_file.filename}' está vacío y se ignoró.")
+                    continue
+
+                file_label = f" (página {idx}/{len(upload_files)})" if len(upload_files) > 1 else ""
                 
-                # Crear resumen de productos extraídos para la respuesta
-                summary_lines = [
-                    f"- {it.get('Producto') or it.get('product') or list(it.values())[0]} | Modelo: {it.get('Modelo') or it.get('model') or 'S/M'} | {it.get('Precio') or it.get('price') or ''}"
-                    for it in items
-                ]
-                extracted_texts.append(f"[IA Gemini - {len(items)} producto(s) detectado(s)]:\n" + "\n".join(summary_lines))
-                add_log("success", f"IA Gemini extrajo y guardó {len(items)} producto(s) de '{upload_file.filename or 'captura.png'}'.")
-            else:
-                err_msg = gemini_res.get("error") or "No se identificaron productos estructurados."
-                add_log("warning", f"IA Gemini: {err_msg}. Intentando con OCR local...")
+                # 1. Intentar con Gemini Vision si corresponde y hay clave
+                use_gemini = (selected_engine in ["gemini", "auto"]) and bool(gemini_key)
+                gemini_success = False
 
-        # 2. Si Gemini no estaba activo o no extrajo nada, utilizar el OCR local
-        if not gemini_success:
-            add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con OCR local...")
-            ocr_text = extract_text_from_image_bytes(contents)
+                if not use_gemini:
+                    if selected_engine not in ["gemini", "auto"]:
+                        add_log("info", f"Motor configurado como '{selected_engine}': usando OCR local directamente.")
+                    else:
+                        add_log("warning", "Gemini no disponible: no hay clave API configurada. Usando OCR local.")
 
-            if not ocr_text.strip():
-                add_log("warning", f"No se logró detectar texto en la imagen '{upload_file.filename or 'captura.png'}'.")
+                if use_gemini:
+                    add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con IA Gemini...")
+                    gemini_res = extract_products_with_gemini(contents, c_type, target_provider, upload_file.filename or "captura.png")
+                    if gemini_res.get("success") and gemini_res.get("items"):
+                        items = gemini_res["items"]
+                        saved = save_extracted_items_to_provider(items, target_provider, source_label=f"IA Gemini ({upload_file.filename or 'captura.png'})")
+                        total_products_added += saved
+                        processed_count += 1
+                        gemini_success = True
+                        
+                        # Crear resumen de productos extraídos para la respuesta
+                        summary_lines = [
+                            f"- {it.get('Producto') or it.get('product') or list(it.values())[0]} | Modelo: {it.get('Modelo') or it.get('model') or 'S/M'} | {it.get('Precio') or it.get('price') or ''}"
+                            for it in items
+                        ]
+                        extracted_texts.append(f"[IA Gemini - {len(items)} producto(s) detectado(s)]:\n" + "\n".join(summary_lines))
+                        add_log("success", f"IA Gemini extrajo y guardó {len(items)} producto(s) de '{upload_file.filename or 'captura.png'}'.")
+                    else:
+                        err_msg = gemini_res.get("error") or "No se identificaron productos estructurados."
+                        add_log("warning", f"IA Gemini: {err_msg}. Intentando con OCR local...")
+
+                # 2. Si Gemini no estaba activo o no extrajo nada, utilizar el OCR local
+                if not gemini_success:
+                    add_log("info", f"Procesando imagen '{upload_file.filename or 'captura.png'}'{file_label} con OCR local...")
+                    ocr_text = extract_text_from_image_bytes(contents)
+
+                    if not ocr_text or not ocr_text.strip():
+                        add_log("warning", f"No se logró detectar texto en la imagen '{upload_file.filename or 'captura.png'}'.")
+                        continue
+
+                    extracted_texts.append(ocr_text)
+                    add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
+                    process_text(ocr_text, target_provider, is_ocr=True)
+                    processed_count += 1
+
+            except Exception as file_err:
+                add_log("error", f"Error procesando imagen '{getattr(upload_file, 'filename', '?')}': {str(file_err)}")
                 continue
 
-            extracted_texts.append(ocr_text)
-            add_log("info", f"Texto extraído por OCR de '{upload_file.filename or 'captura.png'}'. Analizando productos...")
-            process_text(ocr_text, target_provider, is_ocr=True)
-            processed_count += 1
+    except Exception as global_err:
+        add_log("error", f"Error interno en parse-image: {str(global_err)}")
+        return {
+            "status": "error",
+            "message": f"Error interno del servidor: {str(global_err)}",
+            "images_processed": processed_count,
+            "ocr_text": ""
+        }
 
     if processed_count == 0:
         return {
