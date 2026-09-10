@@ -890,6 +890,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert("Pega primero un texto de muestra en la caja de 'Texto Bruto de Muestra'.");
                 return;
             }
+            const origHtml = btnAutoSuggestLabels.innerHTML;
+            btnAutoSuggestLabels.disabled = true;
+            btnAutoSuggestLabels.innerHTML = "⏳ Analizando con IA...";
+
             try {
                 const res = await fetch("/api/regex/suggest-labels", {
                     method: "POST",
@@ -909,6 +913,9 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (err) {
                 console.error("Error al auto-sugerir etiquetas:", err);
                 alert("Ocurrió un error al contactar al backend para sugerir etiquetas.");
+            } finally {
+                btnAutoSuggestLabels.disabled = false;
+                btnAutoSuggestLabels.innerHTML = origHtml;
             }
         });
     }

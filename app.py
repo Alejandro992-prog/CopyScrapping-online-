@@ -2136,78 +2136,109 @@ async def suggest_labels_for_text(req: SuggestLabelsRequest):
         return {"status": "success", "labels": []}
         
     labels = []
-    
-    # 1. Buscar Precios (PVP, Pv / Con IVA, Pr / Sin IVA)
-    price_regex = re.compile(r'(?:(PVP|Pv|Pr|Precio)\s*:\s*)?(\d{1,5}(?:[.,]\d{1,3})*)\s*(?:€|EUR)?', re.IGNORECASE)
-    matches = list(price_regex.finditer(raw_text))
-    
-    found_prices = []
-    for m in matches:
-        prefix = (m.group(1) or "").lower()
-        val_str = m.group(2)
-        start = m.start(2)
-        end = m.end(2)
+    config = load_config()
+    gemini_key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+
+    # 1. Sugerencia de alta precisión mediante IA (Gemini) si está disponible
+    if gemini_key:
         try:
-            num = float(val_str.replace('.', '').replace(',', '.'))
-            found_prices.append({"prefix": prefix, "val": val_str, "start": start, "end": end, "num": num})
-        except:
-            pass
-            
-    first_block_prices = found_prices[:3]
-    if len(first_block_prices) >= 1:
-        for p in first_block_prices:
-            if p["prefix"] == "pvp":
-                labels.append({"name": "pvp", "start": p["start"], "end": p["end"], "text": p["val"]})
-            elif p["prefix"] in ["pv", "precio"]:
-                labels.append({"name": "price_vat", "start": p["start"], "end": p["end"], "text": p["val"]})
-            elif p["prefix"] == "pr":
-                labels.append({"name": "price_no_vat", "start": p["start"], "end": p["end"], "text": p["val"]})
-                
-        unassigned = [p for p in first_block_prices if not any(l["start"] == p["start"] for l in labels)]
-        if unassigned:
-            unassigned.sort(key=lambda x: x["num"], reverse=True)
-            tag_names = ["pvp", "price_vat", "price_no_vat"]
-            used_names = {l["name"] for l in labels}
-            avail_names = [tn for tn in tag_names if tn not in used_names]
-            for p, name in zip(unassigned, avail_names):
-                labels.append({"name": name, "start": p["start"], "end": p["end"], "text": p["val"]})
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=gemini_key)
+            prompt = f"""Analiza minuciosamente este texto de muestra de una ficha o catálogo comercial de producto.
+Debes identificar las subcadenas EXACTAS (que aparezcan literalmente de forma idéntica en el texto) correspondientes a:
+- "model": código exacto de modelo, SKU o referencia técnica (ej: '3TS382B', 'TQ55Q60D')
+- "product": nombre o tipo de producto SIN incluir el código de modelo (ej: 'lavadora Balay', 'Frigorífico', 'Televisor')
+- "price": precio numérico con o sin divisa (ej: '569,00 €', '549.99')
+- "attributes": especificaciones o atributos técnicos destacados (ej: '8 kg, 1200 rpm, A, Acero', '55 Pulgadas 4K')
 
-    # 2. Buscar Modelo / SKU
-    _RE_MODEL_STRICT = re.compile(r'\b(?=[-A-Z0-9/]*[0-9])(?=[-A-Z0-9/]*[A-Z])[-A-Z0-9/]{4,25}\b')
-    model_match = _RE_MODEL_STRICT.search(raw_text)
-    if model_match:
-        labels.append({
-            "name": "model",
-            "start": model_match.start(),
-            "end": model_match.end(),
-            "text": model_match.group(0)
-        })
+Texto de muestra:
+\"\"\"{raw_text}\"\"\"
 
-    # 3. Buscar Producto
-    prod_regex = re.compile(r'\b(inducci[oó]n|vitrocer[aá]mica|vitro|lavavajillas|lavadora|frigor[ií]fico|horno|campana|microondas)\b', re.IGNORECASE)
-    prod_match = prod_regex.search(raw_text)
-    if prod_match:
-        labels.append({
-            "name": "product",
-            "start": prod_match.start(),
-            "end": prod_match.end(),
-            "text": prod_match.group(0)
-        })
+Devuelve ÚNICAMENTE un JSON con este formato exacto (deja el valor vacío "" si no encuentras algún campo):
+{{
+  "model": "subcadena exacta",
+  "product": "subcadena exacta",
+  "price": "subcadena exacta",
+  "attributes": "subcadena exacta"
+}}"""
+            for m in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]:
+                try:
+                    resp = client.models.generate_content(
+                        model=m,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+                    )
+                    text_out = (resp.text or "").strip()
+                    if text_out:
+                        data = json.loads(text_out)
+                        occupied_intervals = []
 
-    # 4. Buscar Atributos Técnicos (ej: 3 zonas, 60cm, Blanca o similar)
-    attr_regex = re.compile(r'\b(\d+\s*(?:zonas?|z|cm|mm|l|litros|kg|kilos|rpm|flex|inox|blanca|negra)[^,\r\n]*)\b', re.IGNORECASE)
-    attr_match = attr_regex.search(raw_text)
-    if attr_match:
-        s, e = attr_match.start(1), attr_match.end(1)
-        overlap = any(l["start"] < e and l["end"] > s for l in labels)
-        if not overlap:
-            labels.append({
-                "name": "attributes",
-                "start": s,
-                "end": e,
-                "text": attr_match.group(1)
-            })
+                        # Prioridad de extracción: modelo primero, luego producto, precio y atributos
+                        for tag_key in ["model", "product", "price", "attributes"]:
+                            val = data.get(tag_key)
+                            if isinstance(val, list):
+                                val = val[0] if val else ""
+                            if not val or not isinstance(val, str):
+                                continue
+                            val = val.strip()
+                            idx = raw_text.find(val)
+                            if idx != -1:
+                                s, e = idx, idx + len(val)
+                                # Verificar que no se solape con intervalos ya marcados
+                                if not any(max(s, o[0]) < min(e, o[1]) for o in occupied_intervals):
+                                    occupied_intervals.append((s, e))
+                                    labels.append({"name": tag_key, "start": s, "end": e, "text": val})
+                        break
+                except Exception:
+                    continue
+        except Exception as e:
+            add_log("warning", f"Auto-sugerencia con Gemini falló ({str(e)}), recurriendo al analizador local...")
 
+    # 2. Respaldo por reglas locales (sin solapamientos) si Gemini no está disponible o no devolvió datos
+    if not labels:
+        occupied = []
+        
+        # 2a. Buscar Modelo / SKU primero (evitar que sus números sean confundidos con precios)
+        _RE_MODEL_STRICT = re.compile(r'\b(?=[-A-Za-z0-9/]*\d)(?=[-A-Za-z0-9/]*[A-Za-z])[-A-Za-z0-9/]{4,25}\b')
+        model_match = _RE_MODEL_STRICT.search(raw_text)
+        if model_match:
+            s, e = model_match.start(), model_match.end()
+            occupied.append((s, e))
+            labels.append({"name": "model", "start": s, "end": e, "text": model_match.group(0)})
+
+        # 2b. Buscar Precios REALES (con divisa o formato decimal explícito)
+        price_regex = re.compile(r'(?:(?:PVP|Pv|Pr|Precio)\s*[:=]?\s*)?(\d{1,5}(?:[.,]\d{2,3})?\s*(?:€|EUR|eur|\$|usd|GBP|gbp))\b|\b(?:PVP|Pv|Pr|Precio)\s*[:=]?\s*(\d{1,5}(?:[.,]\d{2})?)\b', re.IGNORECASE)
+        for m in price_regex.finditer(raw_text):
+            val = m.group(1) or m.group(2)
+            if not val:
+                continue
+            s = m.start(1) if m.group(1) else m.start(2)
+            e = m.end(1) if m.group(1) else m.end(2)
+            if not any(max(s, o[0]) < min(e, o[1]) for o in occupied):
+                occupied.append((s, e))
+                labels.append({"name": "price", "start": s, "end": e, "text": val.strip()})
+                break
+
+        # 2c. Buscar Producto (electrodomésticos, electrónica y gama general)
+        prod_regex = re.compile(r'\b(inducci[oó]n|vitrocer[aá]mica|vitro|lavavajillas|lavadora|frigor[ií]fico|horno|campana|microondas|televisor|tv|secadora|congelador|placa|termo|calentador|aspirador|monitor|port[aá]til|smartphone|tablet)\b', re.IGNORECASE)
+        prod_match = prod_regex.search(raw_text)
+        if prod_match:
+            s, e = prod_match.start(), prod_match.end()
+            if not any(max(s, o[0]) < min(e, o[1]) for o in occupied):
+                occupied.append((s, e))
+                labels.append({"name": "product", "start": s, "end": e, "text": prod_match.group(0)})
+
+        # 2d. Buscar Atributos Técnicos
+        attr_regex = re.compile(r'\b(\d+\s*(?:zonas?|z|cm|mm|l|litros|kg|kilos|rpm|flex|inox|blanca|negra|acero|pulgadas|\"|kwh)[^,\r\n]*)\b', re.IGNORECASE)
+        attr_match = attr_regex.search(raw_text)
+        if attr_match:
+            s, e = attr_match.start(1), attr_match.end(1)
+            if not any(max(s, o[0]) < min(e, o[1]) for o in occupied):
+                occupied.append((s, e))
+                labels.append({"name": "attributes", "start": s, "end": e, "text": attr_match.group(1).strip()})
+
+    labels.sort(key=lambda x: x["start"])
     return {"status": "success", "labels": labels}
 
 @app.get("/api/extractions/files")
