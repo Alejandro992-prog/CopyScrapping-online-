@@ -12,6 +12,16 @@ import hashlib
 import secrets
 from collections import deque
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+    APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "Europe/Madrid"))
+except Exception:
+    APP_TZ = None
+
+def get_now() -> datetime:
+    if APP_TZ:
+        return datetime.now(APP_TZ)
+    return datetime.now()
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
@@ -280,7 +290,7 @@ logs_lock = threading.Lock()
 def add_log(msg_type: str, message: str, data: Any = None):
     global latest_log_index
     log_entry = {
-        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "timestamp": get_now().strftime("%H:%M:%S"),
         "type": msg_type, # 'info', 'success', 'warning', 'error'
         "message": message,
         "data": data
@@ -997,7 +1007,7 @@ def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], 
     if not extracted_data_list:
         return 0
     try:
-        ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts_now = get_now().strftime("%Y-%m-%d %H:%M:%S")
         filepath = get_provider_filepath(provider)
         file_format = provider.get("file_format", "csv")
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -4024,7 +4034,7 @@ async def export_stock_xlsx(category: Optional[str] = None, color: Optional[str]
     # ── Título del informe ───────────────────────────────────────────────────
     color_suffix = f" — Color: {color}" if color else ""
     title_text = f"Informe de Stock: {cat_label}{color_suffix}"
-    date_text = datetime.now().strftime("%d/%m/%Y %H:%M")
+    date_text = get_now().strftime("%d/%m/%Y %H:%M")
     
     ws.merge_cells('A1:G1')
     title_cell = ws['A1']
