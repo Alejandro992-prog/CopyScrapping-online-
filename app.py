@@ -1339,31 +1339,37 @@ def extract_products_with_gemini(image_bytes: bytes, mime_type: str, provider: D
     provider_name = provider.get("name", "General")
 
     prompt = f"""
-Eres un asistente experto en visión artificial para extracción de catálogos comerciales, albaranes, tickets, facturas y tablas de precios del sector '{provider_name}'.
+Eres un asistente experto en visión artificial para extracción de catálogos comerciales, plataformas de distribución mayorista/B2B de electrodomésticos, albaranes, tickets y tablas de precios del sector '{provider_name}'.
 
-Analiza minuciosamente la imagen adjunta y extrae TODOS y cada uno de los productos o artículos visibles.
-Para cada producto, extrae los siguientes datos:
-- "product": nombre descriptivo completo del artículo o electrodoméstico (ej: 'Lavadora Balay 8kg 1200rpm Blanco')
-- "model": código de modelo exacto, referencia, SKU o código de fabricante (ej: '3TS382B' o '71489')
-- "price": precio principal numérico con divisa (ej: '569,00 €' o '569.00')
-- "price_sin_iva": precio antes de impuestos o base imponible si figura explícitamente, o null si no se distingue
-- "price_con_iva": precio con impuestos o PVP si figura explícitamente, o null si no se distingue
-- "attributes": características técnicas relevantes (ej: capacidad en kg, rpm, eficiencia energética, color, dimensiones)
+Analiza minuciosamente la imagen adjunta y extrae TODOS y cada uno de los productos o tarjetas visibles.
+
+REGLA FUNDAMENTAL DE PRECIOS (PVP, Pv, Pr):
+En estas fichas comerciales suelen figurar hasta 3 precios distintos:
+1. 'Pr': Precio de compra neto / coste sin IVA. Es SIEMPRE el importe MÁS BAJO / MENOR de todos los precios de la tarjeta (ej: 241,46 € o 274,92 €).
+2. 'Pv': Precio intermedio de venta o profesional (ej: 365,21 €).
+3. 'PVP': Precio Venta al Público recomendado (el importe MÁS ALTO de los tres, ej: 423,62 €).
+
+Para cada producto extrae obligatoriamente:
+- "product": nombre descriptivo completo del artículo (ej: 'Induccion Balay 3EB865XR')
+- "model": código de modelo exacto, referencia, SKU o código de fabricante (ej: '3EB865XR', '3EB965LR')
+- "price_neto": el precio NETO SIN IVA (el valor de 'Pr', es decir, la cifra MÁS BAJA de toda la ficha)
+- "pv_intermedio": el precio de venta intermedio ('Pv')
+- "pvp_alto": el precio de venta al público recomendado ('PVP', el más alto)
+- "all_prices": lista con todos los importes de precio que figuren en la ficha
+- "attributes": características técnicas relevantes (ej: '3 zonas, Inox', 'XL 28cm, 7,4kW')
 
 Campos esperados por el usuario: [{fields_desc}]
 
-REGLAS OBLIGATORIAS:
-1. Extrae cada fila, producto o tarjeta de forma individual en la lista.
-2. Si un producto no tiene modelo visible, usa el código o referencia más cercana o déjalo vacío.
-3. Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin rodeos, sin markdown envolvente ni texto previo:
+Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto previo ni markdown envolvente:
 {{
   "productos": [
     {{
-      "product": "Nombre del producto",
-      "model": "Código o modelo",
-      "price": "Precio",
-      "price_sin_iva": "Precio sin IVA",
-      "price_con_iva": "Precio con IVA",
+      "product": "Nombre descriptivo",
+      "model": "Modelo",
+      "price_neto": "Precio neto sin IVA (el más bajo)",
+      "pv_intermedio": "Precio intermedio",
+      "pvp_alto": "PVP más alto",
+      "all_prices": ["...", "..."],
       "attributes": "Atributos o especificaciones"
     }}
   ]
@@ -1403,7 +1409,6 @@ REGLAS OBLIGATORIAS:
         return {"success": False, "error": f"Fallo al conectar con Gemini: {str(last_error)}", "items": []}
 
     try:
-        # Limpiar posible markdown envolvente por seguridad
         clean_json_str = response_text
         if clean_json_str.startswith("```"):
             clean_json_str = re.sub(r'^```(?:json)?\s*', '', clean_json_str)
@@ -1434,8 +1439,9 @@ REGLAS OBLIGATORIAS:
             return s
 
         structured_items = []
-        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva"}
-        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pvp", "precio_pvp", "preciopvp"}
+        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva", "neto", "pr"}
+        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pv"}
+        pvp_terms = {"pvp", "precio_pvp", "preciopvp", "p_pvp"}
 
         for raw in raw_items:
             if not isinstance(raw, dict):
@@ -1445,10 +1451,39 @@ REGLAS OBLIGATORIAS:
             if isinstance(raw_attr, dict):
                 raw_attr = ", ".join(f"{k}: {v}" for k, v in raw_attr.items())
             
-            p_val = _format_price_field(raw.get("price") or raw.get("precio") or "")
-            p_sin = _format_price_field(raw.get("price_sin_iva") or raw.get("precio_sin_iva") or "")
-            p_con = _format_price_field(raw.get("price_con_iva") or raw.get("precio_con_iva") or "")
+            # Recopilar todos los importes numéricos encontrados en la ficha
+            candidates = []
+            for p_candidate in [
+                raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
+                raw.get("price"), raw.get("precio"), raw.get("pv_intermedio"), raw.get("pv"),
+                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp_alto"), raw.get("pvp")
+            ]:
+                if p_candidate:
+                    p_num = clean_price(str(p_candidate))
+                    if p_num > 0 and not any(abs(p_num - c[0]) < 0.001 for c in candidates):
+                        candidates.append((p_num, _format_price_field(p_candidate)))
+
+            if isinstance(raw.get("all_prices"), list):
+                for p_candidate in raw.get("all_prices"):
+                    p_num = clean_price(str(p_candidate))
+                    if p_num > 0 and not any(abs(p_num - c[0]) < 0.001 for c in candidates):
+                        candidates.append((p_num, _format_price_field(p_candidate)))
+
+            candidates.sort(key=lambda x: x[0])
             
+            # Asignación jerárquica estricta:
+            # p_lowest = El importe menor (Pr / Neto sin IVA)
+            # p_middle = El intermedio (Pv)
+            # p_highest = El mayor (PVP)
+            if candidates:
+                p_lowest = candidates[0][1]
+                p_middle = candidates[1][1] if len(candidates) >= 2 else p_lowest
+                p_highest = candidates[-1][1] if len(candidates) >= 2 else p_lowest
+            else:
+                p_lowest = _format_price_field(raw.get("price") or "")
+                p_middle = p_lowest
+                p_highest = p_lowest
+
             if expected_fields:
                 for field in expected_fields:
                     f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
@@ -1458,19 +1493,22 @@ REGLAS OBLIGATORIAS:
                         item[field] = str(raw.get("model") or raw.get("modelo") or "").strip()
                     elif any(term in f_norm for term in ["attribute", "atributo", "spec", "caracteristica"]):
                         item[field] = str(raw_attr).strip()
-                    elif any(term in f_norm for term in no_vat_terms):
-                        item[field] = p_sin or p_val
+                    elif any(term in f_norm for term in pvp_terms):
+                        item[field] = p_highest
                     elif any(term in f_norm for term in vat_terms):
-                        item[field] = p_con or p_val
+                        item[field] = p_middle
+                    elif any(term in f_norm for term in no_vat_terms):
+                        item[field] = p_lowest
                     elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
-                        item[field] = p_val or p_sin or p_con
+                        # Por defecto el campo principal de precio siempre almacena el neto sin IVA (menor valor)
+                        item[field] = p_lowest
                     else:
                         item[field] = str(raw.get(field, "")).strip()
             else:
                 item = {
                     "Producto": str(raw.get("product") or raw.get("producto") or "").strip(),
                     "Modelo": str(raw.get("model") or raw.get("modelo") or "").strip(),
-                    "Precio": p_val,
+                    "Precio": p_lowest,
                     "Atributos": str(raw_attr).strip()
                 }
 
