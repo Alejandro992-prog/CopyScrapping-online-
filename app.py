@@ -1705,12 +1705,16 @@ async def parse_image(
     current_config = load_config()
     target_provider = active_provider
     if not target_provider:
-        target_provider = {
-            "id": "default",
-            "name": "General",
-            "fields": ["Producto", "Modelo", "Precio Sin IVA (€)", "Precio Con IVA (€)"],
-            "file_format": "csv"
-        }
+        # Si hay proveedores guardados, auto-asignar el primero y activarlo
+        if current_config.get("providers"):
+            target_provider = current_config["providers"][0]
+            active_provider = target_provider
+            current_config["active_provider_id"] = target_provider["id"]
+            save_config(current_config)
+            add_log("info", f"Auto-seleccionado proveedor '{target_provider['name']}' para la extracción de imágenes.")
+        else:
+            target_provider = DEFAULT_PROVIDER
+            active_provider = DEFAULT_PROVIDER
 
     # Motor seleccionado ("gemini", "ocr", "auto")
     selected_engine = (engine or current_config.get("image_engine", "gemini")).lower().strip()
@@ -1821,7 +1825,11 @@ async def parse_image(
         "status": "success",
         "message": msg,
         "images_processed": processed_count,
-        "ocr_text": combined_ocr
+        "ocr_text": combined_ocr,
+        "target_provider": target_provider,
+        "target_provider_id": target_provider.get("id", "default"),
+        "active_provider_id": target_provider.get("id", "default"),
+        "saved_count": total_products_added
     }
 
 
@@ -1845,6 +1853,18 @@ async def get_status(username: str = Depends(check_authentication)):
     if not correct_password or username == correct_username:
         is_root_user = True
         
+    config = load_config()
+    # Si active_provider no está en memoria pero sí en config, restaurarlo
+    if not active_provider and config.get("active_provider_id"):
+        prov_id = config["active_provider_id"]
+        active_provider = get_provider_by_id_or_default(prov_id, config)
+    # Si sigue sin haber proveedor activo pero hay proveedores en config, auto-seleccionar el primero
+    if not active_provider and config.get("providers"):
+        first_prov = config["providers"][0]
+        config["active_provider_id"] = first_prov["id"]
+        active_provider = first_prov
+        save_config(config)
+
     return {
         "is_monitoring": is_monitoring,
         "active_provider": active_provider,
@@ -1933,6 +1953,10 @@ async def select_provider(req: SelectProviderRequest):
         config["active_provider_id"] = None
         active_provider = None
         add_log("info", "Monitoreo desactivado: Ningún proveedor seleccionado.")
+    elif req.provider_id == "default":
+        config["active_provider_id"] = "default"
+        active_provider = DEFAULT_PROVIDER
+        add_log("info", "Proveedor seleccionado para captura: 'General (Capturas Rápidas)'.")
     else:
         # Verificar que existe
         prov = next((p for p in providers if p["id"] == req.provider_id), None)

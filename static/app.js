@@ -186,8 +186,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     batchCounterBadge.textContent = `${activeBatchPages} página(s) en lote activo`;
                 }
 
-                // Siempre refrescar la tabla tras procesar una imagen
-                loadRecentCaptures();
+                // Si el backend asignó o confirmó un proveedor, sincronizarlo y activarlo de inmediato
+                const targetId = data.active_provider_id || data.target_provider_id || (data.target_provider ? data.target_provider.id : null);
+                if (targetId && (!activeProviderId || activeProviderId !== targetId)) {
+                    await loadProviders(targetId);
+                    await activateProvider(targetId);
+                } else {
+                    await loadRecentCaptures();
+                }
             } else {
                 appendLog({
                     timestamp: new Date().toLocaleTimeString(),
@@ -384,14 +390,17 @@ document.addEventListener("DOMContentLoaded", () => {
             activeProviderId = data.active_provider ? data.active_provider.id : null;
             
             updateActiveBadge(data.active_provider);
-            await loadProviders();
+            await loadProviders(activeProviderId);
             
             if (activeProviderId) {
                 providerSelect.value = activeProviderId;
                 loadRecentCaptures();
+            } else if (savedProviders && savedProviders.length > 0) {
+                // Si no había proveedor activo pero hay proveedores guardados, activar automáticamente el primero
+                await activateProvider(savedProviders[0].id);
             } else {
-                providerSelect.value = "";
-                showEmptyRecentTable();
+                // Fallback al proveedor General
+                await activateProvider("default");
             }
 
             // Actualizar la interfaz de usuario en base a los privilegios
@@ -511,8 +520,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadRecentCaptures() {
         if (!activeProviderId) {
-            showEmptyRecentTable();
-            return;
+            if (savedProviders && savedProviders.length > 0) {
+                await activateProvider(savedProviders[0].id);
+                return;
+            } else {
+                await activateProvider("default");
+                return;
+            }
         }
         
         btnDownloadRaw.href = `/api/extractions/download/${activeProviderId}`;
@@ -706,7 +720,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 opt.textContent = p.name;
                 providerSelect.appendChild(opt);
             });
-            if (targetId && savedProviders.some(p => p.id === targetId)) {
+            // Opción General para capturas sin plantilla previa
+            const optDefault = document.createElement("option");
+            optDefault.value = "default";
+            optDefault.textContent = "📁 General (Capturas Rápidas / IA)";
+            providerSelect.appendChild(optDefault);
+
+            if (targetId && (savedProviders.some(p => p.id === targetId) || targetId === "default")) {
                 providerSelect.value = targetId;
             }
         } catch (err) {
