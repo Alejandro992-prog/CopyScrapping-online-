@@ -196,7 +196,10 @@
                 <div class="grid-sidebar-layout">
                     <!-- Sidebar: Saved Templates -->
                     <div class="card sidebar-card">
-                        <h2 class="card-title">Plantillas Guardadas</h2>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h2 class="card-title" style="margin: 0;">Plantillas Guardadas</h2>
+                            <button type="button" id="btn-new-provider" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px; cursor: pointer;" title="Limpiar formulario para crear una nueva plantilla">➕ Nueva</button>
+                        </div>
                         <div class="provider-list" id="saved-providers-list">
                             <!-- Provider items will list here -->
                         </div>

@@ -359,6 +359,15 @@ def load_config() -> Dict[str, Any]:
                 config["active_provider_id"] = providers[0]["id"]
             save_config(config)
 
+        # Asegurar que cada etiqueta tenga su text poblado
+        for p in providers:
+            sample = p.get("sample_text", "")
+            for lbl in p.get("labels", []):
+                if isinstance(lbl, dict) and not lbl.get("text") and sample:
+                    s_idx = max(0, int(lbl.get("start", 0)))
+                    e_idx = max(s_idx, int(lbl.get("end", 0)))
+                    lbl["text"] = sample[s_idx:e_idx]
+
         # Actualizar active_provider global
         active_id = config.get("active_provider_id")
         active_provider = next((p for p in providers if p["id"] == active_id), None)
@@ -1929,6 +1938,14 @@ async def save_provider(provider: ProviderModel):
     if not provider_dict.get("fields") and provider_dict.get("labels"):
         provider_dict["fields"] = [l["name"] for l in provider_dict["labels"] if isinstance(l, dict) and "name" in l]
 
+    # Asegurar que cada etiqueta tenga su text poblado
+    sample = provider_dict.get("sample_text", "")
+    for lbl in provider_dict.get("labels", []):
+        if isinstance(lbl, dict) and not lbl.get("text") and sample:
+            s_idx = max(0, int(lbl.get("start", 0)))
+            e_idx = max(s_idx, int(lbl.get("end", 0)))
+            lbl["text"] = sample[s_idx:e_idx]
+
     # Buscar si ya existe y reemplazarlo, o añadirlo
     idx = next((i for i, p in enumerate(providers) if p["id"] == provider.id), -1)
     
@@ -1942,6 +1959,15 @@ async def save_provider(provider: ProviderModel):
     config["providers"] = providers
     config["active_provider_id"] = provider.id
     save_config(config)
+
+    # Sincronizar archivo semilla de proveedores para que no se pierdan en despliegues en la nube
+    try:
+        seed_path = get_resource_path(os.path.join("data", "providers_seed.json"))
+        with open(seed_path, "w", encoding="utf-8") as sf:
+            json.dump(providers, sf, indent=2, ensure_ascii=False)
+    except Exception as se:
+        add_log("warning", f"No se pudo sincronizar providers_seed.json: {str(se)}")
+
     load_config() # Recargar global
     previous_clipboard = ""
     last_sequence_number = 0

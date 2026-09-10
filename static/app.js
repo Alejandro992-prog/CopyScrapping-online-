@@ -686,7 +686,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     const item = document.createElement("div");
                     item.className = `provider-item ${p.id === activeProviderId ? 'active' : ''}`;
                     item.dataset.id = p.id;
-                    item.onclick = () => loadProviderIntoTrainer(p);
+                    item.onclick = () => {
+                        loadProviderIntoTrainer(p);
+                        activateProvider(p.id);
+                    };
                     
                     const info = document.createElement("div");
                     info.className = "provider-info";
@@ -745,12 +748,25 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function loadProviderIntoTrainer(p) {
+        if (!p) return;
         provNameInput.value = p.name || "";
         provIdInput.value = p.id || "";
         provIdInput.dataset.autogen = "false";
         provFormatSelect.value = p.file_format || "xlsx";
-        rawTrainText.value = p.sample_text || "";
-        labels = Array.isArray(p.labels) ? [...p.labels] : [];
+        const sample = p.sample_text || "";
+        rawTrainText.value = sample;
+        
+        // Mapear etiquetas asegurando índices enteros y texto asignado
+        labels = (Array.isArray(p.labels) ? p.labels : []).map(l => {
+            const s = parseInt(l.start) || 0;
+            const e = parseInt(l.end) || 0;
+            return {
+                name: l.name,
+                start: s,
+                end: e,
+                text: l.text || (sample ? sample.substring(s, e) : "") || l.name
+            };
+        });
         
         // Cargar regex existente si existe
         if (p.regex) {
@@ -759,16 +775,25 @@ document.addEventListener("DOMContentLoaded", () => {
             regexMatchStatus.className = "regex-match-status status-box-success";
             regexMatchStatus.textContent = "✓ Expresión regular cargada desde la plantilla.";
             extractedFieldsJson.textContent = "{}";
+        } else {
+            generatedRegexString.textContent = "^...$";
+            regexResultsCard.style.display = "none";
         }
         
         // Disparar renderizado del workspace
-        labelingWorkspace.style.display = "block";
-        activeTagsSection.style.display = "block";
-        renderInteractiveText();
+        if (sample) {
+            labelingWorkspace.style.display = "block";
+            activeTagsSection.style.display = "block";
+            renderInteractiveText();
+        } else {
+            labelingWorkspace.style.display = "none";
+            activeTagsSection.style.display = "none";
+            renderTagsBadges();
+        }
         btnSaveProvider.disabled = false;
         
         // Si hay texto y etiquetas, validar regex en segundo plano
-        if (labels.length > 0 && p.sample_text) {
+        if (labels.length > 0 && sample) {
             generateAndTestRegex();
         }
     }
@@ -895,20 +920,31 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function renderInteractiveText() {
-        const rawText = rawTrainText.value;
-        if (!rawText) return;
+        const rawText = rawTrainText.value || "";
+        if (!rawText) {
+            interactiveTextBox.innerHTML = "";
+            renderTagsBadges();
+            return;
+        }
         
         const sorted = [...labels].sort((a, b) => a.start - b.start);
-        
         let html = "";
         let lastIdx = 0;
         
         sorted.forEach(l => {
-            html += escapeHtml(rawText.substring(lastIdx, l.start));
-            html += `<span class="tagged-span tagged-${l.name}">${escapeHtml(rawText.substring(l.start, l.end))}</span>`;
-            lastIdx = l.end;
+            const start = Math.max(0, Math.min(l.start, rawText.length));
+            const end = Math.max(start, Math.min(l.end, rawText.length));
+            if (start > lastIdx) {
+                html += escapeHtml(rawText.substring(lastIdx, start));
+            }
+            if (end > start) {
+                html += `<span class="tagged-span tagged-${l.name}">${escapeHtml(rawText.substring(start, end))}</span>`;
+                lastIdx = end;
+            }
         });
-        html += escapeHtml(rawText.substring(lastIdx));
+        if (lastIdx < rawText.length) {
+            html += escapeHtml(rawText.substring(lastIdx));
+        }
         
         interactiveTextBox.innerHTML = html;
         renderTagsBadges();
@@ -916,15 +952,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderTagsBadges() {
         tagsBadgeContainer.innerHTML = "";
-        if (labels.length === 0) {
+        if (!labels || labels.length === 0) {
             tagsBadgeContainer.innerHTML = `<span style="font-size:12px; color:var(--text-muted);">Sin etiquetas asignadas</span>`;
             return;
         }
         
+        const rawText = rawTrainText.value || "";
         labels.forEach((l, idx) => {
+            const valText = l.text || (rawText ? rawText.substring(l.start, l.end) : "") || l.name;
             const badge = document.createElement("span");
             badge.className = `tag-badge badge-${l.name}`;
-            badge.innerHTML = `${translateKey(l.name)}: "<strong>${escapeHtml(l.text)}</strong>"`;
+            badge.innerHTML = `${translateKey(l.name)}: "<strong>${escapeHtml(valText)}</strong>"`;
             
             const removeBtn = document.createElement("button");
             removeBtn.className = "btn-remove-tag";
@@ -940,7 +978,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function escapeHtml(text) {
-        return text
+        if (text === null || text === undefined) return "";
+        return String(text)
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
@@ -1148,7 +1187,12 @@ document.addEventListener("DOMContentLoaded", () => {
             output_file: output_file,
             file_format: format,
             sample_text: rawTrainText.value,
-            labels: labels
+            labels: labels.map(l => ({
+                name: l.name,
+                start: parseInt(l.start) || 0,
+                end: parseInt(l.end) || 0,
+                text: l.text || (rawTrainText.value ? rawTrainText.value.substring(l.start, l.end) : "") || l.name
+            }))
         };
         
         btnSaveProvider.disabled = true;
@@ -1165,24 +1209,23 @@ document.addEventListener("DOMContentLoaded", () => {
                 const savedData = await res.json();
                 const savedId = savedData.provider?.id || id;
                 
-                alert(`¡Plantilla del proveedor '${name}' guardada y activada exitosamente!`);
-                
-                // Limpiar formulario para la siguiente plantilla
-                provNameInput.value = "";
-                provIdInput.value = "";
-                provIdInput.dataset.autogen = "true";
-                rawTrainText.value = "";
-                labels = [];
-                currentSelection = null;
-                
-                labelingWorkspace.style.display = "none";
-                activeTagsSection.style.display = "none";
-                regexResultsCard.style.display = "none";
-                generatedRegexString.textContent = "^...$";
+                // Feedback visual claro en el botón sin borrar el trabajo
+                btnSaveProvider.textContent = "✓ ¡Plantilla Guardada!";
+                btnSaveProvider.style.background = "#10b981";
+                btnSaveProvider.style.color = "#ffffff";
+                setTimeout(() => {
+                    btnSaveProvider.textContent = "Guardar Proveedor";
+                    btnSaveProvider.style.background = "";
+                    btnSaveProvider.style.color = "";
+                }, 3000);
                 
                 // Recargar lista y seleccionar/activar automáticamente el proveedor recién guardado
                 await loadProviders(savedId);
                 await activateProvider(savedId);
+
+                // Mantener el proveedor cargado y visible en el entrenador
+                const savedProv = savedProviders.find(p => p.id === savedId) || savedData.provider || providerData;
+                loadProviderIntoTrainer(savedProv);
             } else {
                 const errData = await res.json().catch(() => ({}));
                 const msg = errData.detail || errData.message || `Error HTTP ${res.status}`;
@@ -1193,9 +1236,28 @@ document.addEventListener("DOMContentLoaded", () => {
             alert(`Error de conexión al intentar guardar la plantilla: ${err.message || err}`);
         } finally {
             btnSaveProvider.disabled = false;
-            btnSaveProvider.textContent = "Guardar Proveedor";
         }
     });
+
+    // Botón para limpiar formulario y crear nueva plantilla
+    const btnNewProvider = document.getElementById("btn-new-provider");
+    if (btnNewProvider) {
+        btnNewProvider.addEventListener("click", () => {
+            provNameInput.value = "";
+            provIdInput.value = "";
+            provIdInput.dataset.autogen = "true";
+            provFormatSelect.value = "xlsx";
+            rawTrainText.value = "";
+            labels = [];
+            currentSelection = null;
+            
+            labelingWorkspace.style.display = "none";
+            activeTagsSection.style.display = "none";
+            regexResultsCard.style.display = "none";
+            generatedRegexString.textContent = "^...$";
+            provNameInput.focus();
+        });
+    }
 
     // ----------------------------------------------------
     // 5. FUSIÓN COMERCIAL & COMPARADOR (TAB 3)

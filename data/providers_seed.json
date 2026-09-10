@@ -16,22 +16,26 @@
       {
         "name": "product",
         "start": 31,
-        "end": 39
+        "end": 39,
+        "text": "lavadora"
       },
       {
         "name": "model",
         "start": 23,
-        "end": 30
+        "end": 30,
+        "text": "3TS382B"
       },
       {
         "name": "price",
         "start": 140,
-        "end": 148
+        "end": 148,
+        "text": "569,00 €"
       },
       {
         "name": "attributes",
         "start": 40,
-        "end": 84
+        "end": 84,
+        "text": "Carga frontal 8 kg 1200 RPM Acero inoxidable"
       }
     ]
   },
@@ -52,22 +56,26 @@
       {
         "name": "product",
         "start": 11,
-        "end": 19
+        "end": 19,
+        "text": "Lavadora"
       },
       {
         "name": "model",
         "start": 40,
-        "end": 48
+        "end": 48,
+        "text": "3TS273BA"
       },
       {
         "name": "price",
         "start": 0,
-        "end": 4
+        "end": 4,
+        "text": "375€"
       },
       {
         "name": "attributes",
         "start": 50,
-        "end": 75
+        "end": 75,
+        "text": "Blanco, 7 kg, 1200 rpm, A"
       }
     ]
   },
@@ -88,22 +96,26 @@
       {
         "name": "model",
         "start": 15,
-        "end": 22
+        "end": 22,
+        "text": "3TS390B"
       },
       {
         "name": "product",
         "start": 0,
-        "end": 8
+        "end": 8,
+        "text": "Lavadora"
       },
       {
         "name": "price",
         "start": 82,
-        "end": 87
+        "end": 87,
+        "text": "519 €"
       },
       {
         "name": "attributes",
         "start": 23,
-        "end": 44
+        "end": 44,
+        "text": "Clase A, 9kg, 1200RPM"
       }
     ]
   }
