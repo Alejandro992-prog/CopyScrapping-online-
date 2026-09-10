@@ -428,22 +428,31 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    providerSelect.addEventListener("change", async () => {
-        const val = providerSelect.value || null;
+    async function activateProvider(id) {
         try {
             const res = await fetch("/api/providers/select", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ provider_id: val })
+                body: JSON.stringify({ provider_id: id || null })
             });
             const data = await res.json();
             activeProviderId = data.active_provider ? data.active_provider.id : null;
             updateActiveBadge(data.active_provider);
             loadStatus();
             lastProcessedClipboard = ""; // Reset duplicate detection on provider change
+            loadRecentCaptures();
+            // Refrescar selector en caso de que esté desincronizado
+            if (providerSelect.value !== (activeProviderId || "")) {
+                providerSelect.value = activeProviderId || "";
+            }
         } catch (err) {
-            console.error("Error al cambiar proveedor:", err);
+            console.error("Error al activar proveedor:", err);
         }
+    }
+
+    providerSelect.addEventListener("change", async () => {
+        const val = providerSelect.value || null;
+        await activateProvider(val);
     });
 
     function displayLastCapture(data) {
@@ -637,11 +646,17 @@ document.addEventListener("DOMContentLoaded", () => {
     // ----------------------------------------------------
     // 4. NO-CODE REGEX TRAINING & ASSISTANT
     // ----------------------------------------------------
-    async function loadProviders() {
+    async function loadProviders(selectId = null) {
         try {
             const res = await fetch("/api/providers");
             const data = await res.json();
             savedProviders = data.providers || [];
+            
+            if (selectId) {
+                activeProviderId = selectId;
+            } else if (data.active_provider_id && !activeProviderId) {
+                activeProviderId = data.active_provider_id;
+            }
             
             // Popular sidebar
             savedProvidersList.innerHTML = "";
@@ -660,7 +675,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     h4.textContent = p.name;
                     
                     const pSpan = document.createElement("p");
-                    pSpan.textContent = `Campos: ${p.fields.join(", ")} (${p.file_format.toUpperCase()})`;
+                    const fieldsList = (p.fields && p.fields.length > 0) ? p.fields.join(", ") : "Sin campos";
+                    const formatStr = (p.file_format || "xlsx").toUpperCase();
+                    pSpan.textContent = `Campos: ${fieldsList} (${formatStr})`;
                     
                     info.appendChild(h4);
                     info.appendChild(pSpan);
@@ -681,7 +698,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             
             // Popular selector
-            const currentVal = providerSelect.value;
+            const targetId = selectId || activeProviderId || providerSelect.value;
             providerSelect.innerHTML = `<option value="">-- Seleccionar Proveedor --</option>`;
             savedProviders.forEach(p => {
                 const opt = document.createElement("option");
@@ -689,8 +706,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 opt.textContent = p.name;
                 providerSelect.appendChild(opt);
             });
-            if (currentVal && savedProviders.some(p => p.id === currentVal)) {
-                providerSelect.value = currentVal;
+            if (targetId && savedProviders.some(p => p.id === targetId)) {
+                providerSelect.value = targetId;
             }
         } catch (err) {
             console.error("Error al cargar proveedores:", err);
@@ -698,12 +715,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function loadProviderIntoTrainer(p) {
-        provNameInput.value = p.name;
-        provIdInput.value = p.id;
+        provNameInput.value = p.name || "";
+        provIdInput.value = p.id || "";
         provIdInput.dataset.autogen = "false";
-        provFormatSelect.value = p.file_format;
-        rawTrainText.value = p.sample_text;
-        labels = [...p.labels];
+        provFormatSelect.value = p.file_format || "xlsx";
+        rawTrainText.value = p.sample_text || "";
+        labels = Array.isArray(p.labels) ? [...p.labels] : [];
+        
+        // Cargar regex existente si existe
+        if (p.regex) {
+            generatedRegexString.textContent = p.regex;
+            regexResultsCard.style.display = "block";
+            regexMatchStatus.className = "regex-match-status status-box-success";
+            regexMatchStatus.textContent = "✓ Expresión regular cargada desde la plantilla.";
+            extractedFieldsJson.textContent = "{}";
+        }
         
         // Disparar renderizado del workspace
         labelingWorkspace.style.display = "block";
@@ -711,8 +737,10 @@ document.addEventListener("DOMContentLoaded", () => {
         renderInteractiveText();
         btnSaveProvider.disabled = false;
         
-        // Simular clic en el test
-        generateAndTestRegex();
+        // Si hay texto y etiquetas, validar regex en segundo plano
+        if (labels.length > 0 && p.sample_text) {
+            generateAndTestRegex();
+        }
     }
 
     async function deleteProvider(id) {
@@ -720,6 +748,7 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             await fetch(`/api/providers/${id}`, { method: "DELETE" });
             if (activeProviderId === id) activeProviderId = null;
+            await loadProviders();
             loadStatus();
         } catch (err) {
             console.error("Error al eliminar proveedor:", err);
@@ -731,14 +760,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (text) {
             labelingWorkspace.style.display = "block";
             activeTagsSection.style.display = "block";
-            labels = []; // Limpiar etiquetas anteriores
+            // Filtrar etiquetas que queden fuera de rango si se acortó el texto
+            labels = labels.filter(l => l.start < text.length && l.end <= text.length);
             renderInteractiveText();
         } else {
             labelingWorkspace.style.display = "none";
             activeTagsSection.style.display = "none";
             regexResultsCard.style.display = "none";
-            btnSaveProvider.disabled = true;
+            labels = [];
         }
+        btnSaveProvider.disabled = false;
     });
 
     // Highlighter logic
@@ -993,24 +1024,87 @@ document.addEventListener("DOMContentLoaded", () => {
                 regexMatchStatus.textContent = `✗ Error: ${data.message}`;
                 extractedFieldsJson.textContent = "{}";
                 multiCardPreviewSection.style.display = "none";
-                btnSaveProvider.disabled = true;
+                btnSaveProvider.disabled = false;
             }
         } catch (err) {
             console.error("Error al generar regex:", err);
             alert("Ocurrió un error al contactar al backend.");
+            btnSaveProvider.disabled = false;
         }
     }
 
     btnSaveProvider.addEventListener("click", async () => {
-        const id = provIdInput.value.trim();
-        const name = provNameInput.value.trim();
-        const format = provFormatSelect.value;
-        const regex = generatedRegexString.textContent;
-        const rawText = rawTrainText.value;
+        let name = provNameInput.value.trim();
+        let id = provIdInput.value.trim();
+        const format = provFormatSelect.value || "xlsx";
+        const rawText = rawTrainText.value.trim();
         
-        if (!id || !name) {
-            alert("Introduce un Nombre e ID válido para el proveedor.");
+        if (!name) {
+            alert("Por favor, introduce un Nombre para el proveedor/competidor.");
+            provNameInput.focus();
             return;
+        }
+        
+        if (!id) {
+            id = name.toLowerCase()
+                .replace(/[^a-z0-9]/g, "_")
+                .replace(/_+/g, "_")
+                .replace(/^_|_$/g, "");
+            provIdInput.value = id;
+        }
+        
+        if (!id) {
+            alert("Introduce un ID válido (solo letras, números o guiones bajos).");
+            provIdInput.focus();
+            return;
+        }
+
+        if (!rawText) {
+            alert("Pega un texto bruto de muestra en 'Texto Bruto de Muestra' para entrenar la plantilla.");
+            rawTrainText.focus();
+            return;
+        }
+
+        if (!labels || labels.length === 0) {
+            const wantAuto = confirm("Aún no has asignado etiquetas (producto, modelo, precio...). ¿Deseas que la IA las auto-sugiera ahora mismo?");
+            if (wantAuto && btnAutoSuggestLabels) {
+                btnAutoSuggestLabels.click();
+                return;
+            }
+            if (!labels || labels.length === 0) {
+                alert("Debes asignar al menos una etiqueta (sombrea el texto y pulsa una etiqueta como Producto, Modelo o Precio).");
+                return;
+            }
+        }
+        
+        let regex = (generatedRegexString.textContent || "").trim();
+        
+        // Si no se ha generado la regex todavía o sigue con el placeholder ^...$
+        if (!regex || regex === "^...$" || regex === ".*") {
+            try {
+                btnSaveProvider.disabled = true;
+                btnSaveProvider.textContent = "⏳ Generando regex...";
+                const resGen = await fetch("/api/regex/generate", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        raw_text: rawTrainText.value,
+                        labels: labels
+                    })
+                });
+                const dataGen = await resGen.json();
+                if (dataGen.regex) {
+                    regex = dataGen.regex;
+                    generatedRegexString.textContent = regex;
+                    regexResultsCard.style.display = "block";
+                }
+            } catch (err) {
+                console.warn("Fallo al autogenerar regex, usando fallback básico:", err);
+            }
+        }
+
+        if (!regex || regex === "^...$") {
+            regex = ".*";
         }
         
         const fields = labels.map(l => l.name);
@@ -1023,22 +1117,27 @@ document.addEventListener("DOMContentLoaded", () => {
             fields: fields,
             output_file: output_file,
             file_format: format,
-            sample_text: rawText,
+            sample_text: rawTrainText.value,
             labels: labels
         };
         
+        btnSaveProvider.disabled = true;
+        btnSaveProvider.textContent = "💾 Guardando plantilla...";
+
         try {
             const res = await fetch("/api/providers", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(providerData)
             });
+
             if (res.ok) {
                 const savedData = await res.json();
                 const savedId = savedData.provider?.id || id;
-                alert("¡Plantilla del proveedor guardada exitosamente!");
                 
-                // Limpiar formulario
+                alert(`¡Plantilla del proveedor '${name}' guardada y activada exitosamente!`);
+                
+                // Limpiar formulario para la siguiente plantilla
                 provNameInput.value = "";
                 provIdInput.value = "";
                 provIdInput.dataset.autogen = "true";
@@ -1049,18 +1148,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 labelingWorkspace.style.display = "none";
                 activeTagsSection.style.display = "none";
                 regexResultsCard.style.display = "none";
-                btnSaveProvider.disabled = true;
+                generatedRegexString.textContent = "^...$";
                 
-                // Recargar la lista y preseleccionar el proveedor recién guardado
-                await loadProviders();
-                if (savedId) {
-                    providerSelect.value = savedId;
-                }
+                // Recargar lista y seleccionar/activar automáticamente el proveedor recién guardado
+                await loadProviders(savedId);
+                await activateProvider(savedId);
             } else {
-                alert("Error al guardar la plantilla en el servidor.");
+                const errData = await res.json().catch(() => ({}));
+                const msg = errData.detail || errData.message || `Error HTTP ${res.status}`;
+                alert(`Error al guardar la plantilla en el servidor: ${msg}`);
             }
         } catch (err) {
             console.error("Error guardando proveedor:", err);
+            alert(`Error de conexión al intentar guardar la plantilla: ${err.message || err}`);
+        } finally {
+            btnSaveProvider.disabled = false;
+            btnSaveProvider.textContent = "Guardar Proveedor";
         }
     });
 

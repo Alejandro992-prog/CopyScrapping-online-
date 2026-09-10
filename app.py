@@ -1565,11 +1565,11 @@ except Exception:
     pass
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Modelos Pydantic
 class LabelModel(BaseModel):
     name: str
-    start: int
-    end: int
+    start: int = 0
+    end: int = 0
+    text: Optional[str] = None
 
 class RegexGenerateRequest(BaseModel):
     raw_text: str
@@ -1578,12 +1578,12 @@ class RegexGenerateRequest(BaseModel):
 class ProviderModel(BaseModel):
     id: str
     name: str
-    regex: str
-    fields: List[str]
-    output_file: str
-    file_format: str
-    sample_text: str
-    labels: List[LabelModel]
+    regex: Optional[str] = ""
+    fields: Optional[List[str]] = []
+    output_file: Optional[str] = ""
+    file_format: Optional[str] = "xlsx"
+    sample_text: Optional[str] = ""
+    labels: Optional[List[LabelModel]] = []
 
 class SelectProviderRequest(BaseModel):
     provider_id: Optional[str] = None
@@ -1877,10 +1877,18 @@ async def save_provider(provider: ProviderModel):
     config = load_config()
     providers = config.get("providers", [])
     
+    provider_dict = provider.model_dump()
+    # Asegurar campos derivados por si no vinieran completos
+    if not provider_dict.get("file_format"):
+        provider_dict["file_format"] = "xlsx"
+    if not provider_dict.get("output_file"):
+        fmt = provider_dict["file_format"]
+        provider_dict["output_file"] = f"data/extractions/{provider.id}.{fmt}"
+    if not provider_dict.get("fields") and provider_dict.get("labels"):
+        provider_dict["fields"] = [l["name"] for l in provider_dict["labels"] if isinstance(l, dict) and "name" in l]
+
     # Buscar si ya existe y reemplazarlo, o añadirlo
     idx = next((i for i, p in enumerate(providers) if p["id"] == provider.id), -1)
-    
-    provider_dict = provider.model_dump()
     
     if idx >= 0:
         providers[idx] = provider_dict
@@ -1890,11 +1898,12 @@ async def save_provider(provider: ProviderModel):
         add_log("info", f"Nueva plantilla de proveedor '{provider.name}' creada.")
         
     config["providers"] = providers
+    config["active_provider_id"] = provider.id
     save_config(config)
     load_config() # Recargar global
     previous_clipboard = ""
     last_sequence_number = 0
-    return {"status": "success", "provider": provider_dict}
+    return {"status": "success", "provider": provider_dict, "active_provider_id": provider.id}
 
 @app.delete("/api/providers/{provider_id}")
 async def delete_provider(provider_id: str):
