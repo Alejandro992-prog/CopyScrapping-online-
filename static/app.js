@@ -63,12 +63,28 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnSaveProvider = document.getElementById("btn-save-provider");
     const regexResultsCard = document.getElementById("regex-results-card");
     const generatedRegexString = document.getElementById("generated-regex-string");
+    const btnTestCustomRegex = document.getElementById("btn-test-custom-regex");
     const regexMatchStatus = document.getElementById("regex-match-status");
     const extractedFieldsJson = document.getElementById("extracted-fields-json");
     const clearSelectionsBtn = document.getElementById("clear-selections");
     const btnAutoSuggestLabels = document.getElementById("btn-auto-suggest-labels");
     const multiCardPreviewSection = document.getElementById("multi-card-preview-section");
     const tagButtons = document.querySelectorAll(".tag-btn[data-tag]");
+
+    function getGeneratedRegex() {
+        const el = generatedRegexString || document.getElementById("generated-regex-string");
+        if (!el) return "";
+        return (el.value !== undefined ? el.value : el.textContent || "").trim();
+    }
+
+    function setGeneratedRegex(val) {
+        const el = generatedRegexString || document.getElementById("generated-regex-string");
+        if (!el) return;
+        if (el.value !== undefined) {
+            el.value = val;
+        }
+        el.textContent = val;
+    }
     
     // Tab 3 Elements
     const filesChecklist = document.getElementById("files-checklist");
@@ -779,14 +795,14 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         
         // Cargar regex existente si existe
-        if (p.regex) {
-            generatedRegexString.textContent = p.regex;
+        if (p.regex && p.regex !== "^...$") {
+            setGeneratedRegex(p.regex);
             regexResultsCard.style.display = "block";
             regexMatchStatus.className = "regex-match-status status-box-success";
             regexMatchStatus.textContent = "✓ Expresión regular cargada desde la plantilla.";
             extractedFieldsJson.textContent = "{}";
         } else {
-            generatedRegexString.textContent = "^...$";
+            setGeneratedRegex("^...$");
             regexResultsCard.style.display = "none";
         }
         
@@ -802,9 +818,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         btnSaveProvider.disabled = false;
         
-        // Si hay texto y etiquetas, validar regex en segundo plano
-        if (labels.length > 0 && sample) {
+        // Si no tiene regex previa y hay etiquetas y muestra, generar automáticamente
+        if ((!p.regex || p.regex === "^...$" || p.regex === ".*") && labels.length > 0 && sample) {
             generateAndTestRegex();
+        } else if (p.regex && p.regex !== "^...$" && p.regex !== ".*" && sample) {
+            // Probar la regex existente contra la muestra para actualizar vista previa
+            testCurrentRegex(false);
         }
     }
 
@@ -918,6 +937,7 @@ document.addEventListener("DOMContentLoaded", () => {
             currentSelection = null;
             
             renderInteractiveText();
+            btnSaveProvider.disabled = false;
         });
     });
 
@@ -926,7 +946,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentSelection = null;
         renderInteractiveText();
         regexResultsCard.style.display = "none";
-        btnSaveProvider.disabled = true;
+        btnSaveProvider.disabled = false;
     });
 
     function renderInteractiveText() {
@@ -1034,6 +1054,89 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    if (btnTestCustomRegex) {
+        btnTestCustomRegex.addEventListener("click", () => testCurrentRegex(true));
+    }
+
+    if (generatedRegexString) {
+        generatedRegexString.addEventListener("input", () => {
+            btnSaveProvider.disabled = false;
+        });
+    }
+
+    async function testCurrentRegex(showAlerts = true) {
+        const pattern = getGeneratedRegex();
+        const sample = (rawTrainText.value || "").trim();
+        if (!pattern || pattern === "^...$") {
+            if (showAlerts) alert("No hay ningún regex para probar. Genera uno primero o escríbelo en el campo.");
+            return;
+        }
+        if (!sample) {
+            if (showAlerts) alert("Introduce primero un texto de muestra en 'Texto Bruto de Muestra'.");
+            return;
+        }
+        
+        try {
+            const res = await fetch("/api/regex/test", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ regex: pattern, text: sample })
+            });
+            const data = await res.json();
+            
+            regexResultsCard.style.display = "block";
+            if (data.status === "success" && data.matches && data.matches.length > 0) {
+                regexMatchStatus.className = "regex-match-status status-box-success";
+                regexMatchStatus.textContent = `✓ ${data.message || `El regex coincide con ${data.matches.length} elemento(s).`}`;
+                extractedFieldsJson.textContent = JSON.stringify(data.extracted || {}, null, 2);
+                
+                // Renderizar preview multi-ficha
+                let multiHtml = `
+                    <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 14px; margin-top: 10px;">
+                        <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #818cf8; display: flex; align-items: center; justify-content: space-between;">
+                            <span>🎯 Coincidencias del Regex:</span>
+                            <span style="background: #6366f1; color: white; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">${data.matches.length} Encontrados</span>
+                        </h4>
+                        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto;">
+                `;
+                data.matches.forEach((item, idx) => {
+                    multiHtml += `
+                        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 10px;">
+                            <div style="font-weight: 600; font-size: 12px; color: #94a3b8; margin-bottom: 6px;">Coincidencia #${idx + 1}:</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                    `;
+                    for (const [k, v] of Object.entries(item)) {
+                        if (v) multiHtml += `<span class="tag-badge badge-${k}" style="font-size: 11px; padding: 3px 8px;">${translateKey(k)}: <strong>${escapeHtml(String(v))}</strong></span>`;
+                    }
+                    multiHtml += `</div></div>`;
+                });
+                multiHtml += `</div></div>`;
+                multiCardPreviewSection.innerHTML = multiHtml;
+                multiCardPreviewSection.style.display = "block";
+            } else if (data.status === "warning") {
+                regexMatchStatus.className = "regex-match-status status-box-warning";
+                regexMatchStatus.textContent = `⚠ ${data.message || "El regex no coincide con el texto de muestra actual."}`;
+                if (showAlerts) {
+                    extractedFieldsJson.textContent = "{}";
+                    multiCardPreviewSection.style.display = "none";
+                }
+            } else {
+                regexMatchStatus.className = "regex-match-status status-box-error";
+                regexMatchStatus.textContent = `✗ ${data.message || "Error al validar la expresión regular"}`;
+                if (showAlerts) {
+                    extractedFieldsJson.textContent = "{}";
+                    multiCardPreviewSection.style.display = "none";
+                }
+            }
+        } catch (e) {
+            console.error("Error al probar regex:", e);
+            if (showAlerts) {
+                regexMatchStatus.className = "regex-match-status status-box-error";
+                regexMatchStatus.textContent = `✗ Error de conexión al validar regex: ${e.message}`;
+            }
+        }
+    }
+
     btnGenerateRegex.addEventListener("click", generateAndTestRegex);
 
     async function generateAndTestRegex() {
@@ -1054,7 +1157,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             
             regexResultsCard.style.display = "block";
-            generatedRegexString.textContent = data.regex;
+            setGeneratedRegex(data.regex || "");
             
             if (data.status === "success" || data.status === "warning") {
                 if (data.status === "success") {
@@ -1100,7 +1203,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } else {
                 regexMatchStatus.className = "regex-match-status status-box-error";
-                regexMatchStatus.textContent = `✗ Error: ${data.message}`;
+                regexMatchStatus.textContent = `✗ Error: ${data.message || 'No se pudo generar la expresión regular'}`;
                 extractedFieldsJson.textContent = "{}";
                 multiCardPreviewSection.style.display = "none";
                 btnSaveProvider.disabled = false;
@@ -1138,47 +1241,60 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        if (!rawText) {
-            alert("Pega un texto bruto de muestra en 'Texto Bruto de Muestra' para entrenar la plantilla.");
+        let regex = getGeneratedRegex();
+        const hasValidRegex = Boolean(regex && regex !== "^...$" && regex !== ".*");
+
+        if (!rawText && !hasValidRegex) {
+            alert("Pega un texto bruto de muestra en 'Texto Bruto de Muestra' o introduce una expresión regular.");
             rawTrainText.focus();
             return;
         }
 
-        if (!labels || labels.length === 0) {
-            const wantAuto = confirm("Aún no has asignado etiquetas (producto, modelo, precio...). ¿Deseas que la IA las auto-sugiera ahora mismo?");
-            if (wantAuto && btnAutoSuggestLabels) {
-                btnAutoSuggestLabels.click();
-                return;
-            }
-            if (!labels || labels.length === 0) {
-                alert("Debes asignar al menos una etiqueta (sombrea el texto y pulsa una etiqueta como Producto, Modelo o Precio).");
-                return;
-            }
-        }
-        
-        let regex = (generatedRegexString.textContent || "").trim();
-        
         // Si no se ha generado la regex todavía o sigue con el placeholder ^...$
-        if (!regex || regex === "^...$" || regex === ".*") {
-            try {
+        if (!hasValidRegex) {
+            // Si no hay etiquetas pero hay texto de muestra, auto-sugerir primero
+            if ((!labels || labels.length === 0) && rawText) {
                 btnSaveProvider.disabled = true;
-                btnSaveProvider.textContent = "⏳ Generando regex...";
-                const resGen = await fetch("/api/regex/generate", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        raw_text: rawTrainText.value,
-                        labels: labels
-                    })
-                });
-                const dataGen = await resGen.json();
-                if (dataGen.regex) {
-                    regex = dataGen.regex;
-                    generatedRegexString.textContent = regex;
-                    regexResultsCard.style.display = "block";
+                btnSaveProvider.textContent = "⏳ Analizando con IA...";
+                try {
+                    const resSugg = await fetch("/api/regex/suggest-labels", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ raw_text: rawTrainText.value })
+                    });
+                    const dataSugg = await resSugg.json();
+                    if (dataSugg.status === "success" && dataSugg.labels && dataSugg.labels.length > 0) {
+                        labels = dataSugg.labels;
+                        labelingWorkspace.style.display = "block";
+                        activeTagsSection.style.display = "block";
+                        renderInteractiveText();
+                    }
+                } catch (suggErr) {
+                    console.warn("Fallo al auto-sugerir etiquetas:", suggErr);
                 }
-            } catch (err) {
-                console.warn("Fallo al autogenerar regex, usando fallback básico:", err);
+            }
+
+            if (labels && labels.length > 0 && rawText) {
+                try {
+                    btnSaveProvider.disabled = true;
+                    btnSaveProvider.textContent = "⏳ Generando regex...";
+                    const resGen = await fetch("/api/regex/generate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            raw_text: rawTrainText.value,
+                            labels: labels
+                        })
+                    });
+                    const dataGen = await resGen.json();
+                    if (dataGen.regex) {
+                        regex = dataGen.regex;
+                        setGeneratedRegex(regex);
+                        regexResultsCard.style.display = "block";
+                    }
+                } catch (err) {
+                    console.warn("Fallo al autogenerar regex, usando fallback básico:", err);
+                }
             }
         }
 
@@ -1186,7 +1302,13 @@ document.addEventListener("DOMContentLoaded", () => {
             regex = ".*";
         }
         
-        const fields = [...new Set(labels.map(l => l.name))];
+        // Extraer campos de las etiquetas y de los grupos nombrados del regex
+        const fieldsSet = new Set(labels.map(l => l.name));
+        const namedGroupMatches = [...regex.matchAll(/\(\?P?<([a-zA-Z_][a-zA-Z0-9_]*)>/g)];
+        for (const m of namedGroupMatches) {
+            if (m[1]) fieldsSet.add(m[1]);
+        }
+        const fields = fieldsSet.size > 0 ? Array.from(fieldsSet) : ["product", "model", "price", "attributes"];
         const output_file = `data/extractions/${id}.${format}`;
         
         const providerData = {
@@ -1236,6 +1358,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     btnSaveProvider.textContent = "Guardar Proveedor";
                     btnSaveProvider.style.background = "";
                     btnSaveProvider.style.color = "";
+                    btnSaveProvider.disabled = false;
                 }, 3000);
                 
                 // Recargar lista y seleccionar/activar automáticamente el proveedor recién guardado
@@ -1272,7 +1395,8 @@ document.addEventListener("DOMContentLoaded", () => {
             labelingWorkspace.style.display = "none";
             activeTagsSection.style.display = "none";
             regexResultsCard.style.display = "none";
-            generatedRegexString.textContent = "^...$";
+            setGeneratedRegex("^...$");
+            btnSaveProvider.disabled = false;
             provNameInput.focus();
         });
     }

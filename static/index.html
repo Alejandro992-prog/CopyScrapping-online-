@@ -271,10 +271,13 @@
 
                         <!-- Regex results -->
                         <div class="regex-results-card mt-20" id="regex-results-card" style="display:none;">
-                            <h3 class="section-title">Resultado de Generación</h3>
+                            <h3 class="section-title">Expresión Regular de la Plantilla</h3>
                             <div class="regex-pattern-box">
-                                <strong>Regex Generado:</strong>
-                                <code id="generated-regex-string">^...$</code>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <strong>Patrón Regex (Generado / Editable):</strong>
+                                    <button type="button" id="btn-test-custom-regex" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;" title="Testear el regex actual contra el texto de muestra">🧪 Probar Regex</button>
+                                </div>
+                                <textarea id="generated-regex-string" class="form-textarea" rows="3" style="font-family: monospace; font-size: 12px; width: 100%; resize: vertical; border-radius: 6px; padding: 8px; background: rgba(0,0,0,0.3); color: #818cf8;">^...$</textarea>
                             </div>
                             <div class="regex-match-status" id="regex-match-status">
                                 <!-- Success or warning status -->

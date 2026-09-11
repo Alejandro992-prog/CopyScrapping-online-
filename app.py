@@ -1095,50 +1095,21 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
         prov_name = provider.get("name", "")
         sample_text = provider.get("sample_text", "")
 
-        if regex_pattern:
-            required_keywords = set()
-            for w in _RE_WORDS_4.findall(prov_name.lower()):
-                required_keywords.add(w)
-                
-            labels = provider.get("labels", [])
-            for label in labels:
-                name_lbl = label.get("name", "").lower()
-                if any(term in name_lbl for term in ["product", "producto", "marca", "brand"]):
-                    start = label.get("start", 0)
-                    end = label.get("end", 0)
-                    if 0 <= start < end <= len(sample_text):
-                        for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text[start:end].lower()):
-                            required_keywords.add(w)
-                            
-            if not required_keywords and sample_text:
-                for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text.lower()):
-                    if w not in ["carga", "frontal", "para", "sobre", "este"]:
-                        required_keywords.add(w)
-                        
-            if required_keywords and not is_ocr:
-                text_lower = text.lower()
-                has_any_match = any(kw in text_lower for kw in required_keywords)
-                
-                # Permitir si contiene una estructura clara de producto (modelo + precio)
-                has_product_structure = False
-                model_match = _RE_MODEL_LOOSE.search(text)
-                clean_text_no_attr = _RE_ATTR_KG_RPM.sub('', text)
-                price_match = _RE_PRICE_EUR.search(text) or re.search(r'\b\d{1,5}(?:[\.,]\d{2})\b', clean_text_no_attr)
-                if model_match and price_match:
-                    has_product_structure = True
-                    
-                if not has_any_match and not has_product_structure:
-                    add_log("info", f"Texto ignorado: no contiene palabras clave de '{provider['name']}' ni estructura de producto.")
-                    return
-                    
-            pattern = regex_pattern
+        if regex_pattern and regex_pattern.strip() and regex_pattern.strip() != ".*":
+            pattern = regex_pattern.strip()
             if pattern.startswith("^"):
                 pattern = pattern[1:]
             if pattern.endswith("$"):
                 pattern = pattern[:-1]
                 
-            matches = list(re.finditer(pattern, text))
-            max_match_len = max(1000, len(sample_text) * 10, len(text) // 3)
+            matches = []
+            try:
+                matches = list(re.finditer(pattern, text))
+            except Exception as rx_err:
+                add_log("warning", f"Error ejecutando regex de '{provider.get('name')}': {str(rx_err)}. Derivando a extractor adaptativo.")
+                matches = []
+                
+            max_match_len = max(15000, len(text))
             matched_intervals = []
             
             if matches:
@@ -1162,8 +1133,45 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
                 segment = text[last_idx:].strip()
                 if segment:
                     unmatched_segments.append(segment)
-        else:
-            # Si no hay expresión regular entrenada, todo el texto pasa a extracción adaptativa
+
+        # Si no hubo coincidencias exactas por regex, comprobar palabras clave o estructura antes de la extracción adaptativa
+        if not valid_matches:
+            if not is_ocr:
+                required_keywords = set()
+                for w in _RE_WORDS_4.findall(prov_name.lower()):
+                    required_keywords.add(w)
+                    
+                labels = provider.get("labels", [])
+                for label in labels:
+                    name_lbl = label.get("name", "").lower()
+                    if any(term in name_lbl for term in ["product", "producto", "marca", "brand"]):
+                        start = label.get("start", 0)
+                        end = label.get("end", 0)
+                        if 0 <= start < end <= len(sample_text):
+                            for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text[start:end].lower()):
+                                required_keywords.add(w)
+                                
+                if not required_keywords and sample_text:
+                    for w in re.findall(r'[a-zA-ZáéíóúÁÉÍÓÚñÑ]{4,}', sample_text.lower()):
+                        if w not in ["carga", "frontal", "para", "sobre", "este"]:
+                            required_keywords.add(w)
+                            
+                if required_keywords:
+                    text_lower = text.lower()
+                    has_any_match = any(kw in text_lower for kw in required_keywords)
+                    
+                    # Permitir si contiene una estructura clara de producto (modelo + precio)
+                    has_product_structure = False
+                    model_match = _RE_MODEL_LOOSE.search(text)
+                    clean_text_no_attr = _RE_ATTR_KG_RPM.sub('', text)
+                    price_match = _RE_PRICE_EUR.search(text) or re.search(r'\b\d{1,5}(?:[\.,]\d{2})\b', clean_text_no_attr)
+                    if model_match and price_match:
+                        has_product_structure = True
+                        
+                    if not has_any_match and not has_product_structure:
+                        add_log("info", f"Texto ignorado: no contiene palabras clave de '{provider['name']}' ni estructura de producto.")
+                        return
+            
             if text.strip():
                 unmatched_segments = [text.strip()]
 
@@ -1606,6 +1614,10 @@ class RegexGenerateRequest(BaseModel):
     raw_text: str
     labels: List[LabelModel]
 
+class RegexTestRequest(BaseModel):
+    regex: str
+    text: str
+
 class ProviderModel(BaseModel):
     id: str
     name: str
@@ -1925,7 +1937,7 @@ async def get_providers():
 
 @app.post("/api/providers")
 async def save_provider(provider: ProviderModel):
-    global previous_clipboard, last_sequence_number
+    global active_provider, previous_clipboard, last_sequence_number
     config = load_config()
     providers = config.get("providers", [])
     
@@ -1936,14 +1948,35 @@ async def save_provider(provider: ProviderModel):
     if not provider_dict.get("output_file"):
         fmt = provider_dict["file_format"]
         provider_dict["output_file"] = f"data/extractions/{provider.id}.{fmt}"
-    # Sincronizar fields siempre a partir de las etiquetas definidas
+        
+    # Asegurar regex no nulo ni vacío
+    clean_regex = (provider_dict.get("regex") or "").strip()
+    if not clean_regex or clean_regex == "^...$":
+        clean_regex = ".*"
+    provider_dict["regex"] = clean_regex
+    
+    # Validar compilabilidad de la expresión regular
+    try:
+        re.compile(clean_regex)
+    except Exception as rx_err:
+        add_log("warning", f"El regex para '{provider.name}' tiene sintaxis especial o inválida: {str(rx_err)}")
+        
+    # Sincronizar fields a partir de las etiquetas definidas y de los grupos nombrados del regex
+    extracted_fields = []
     if provider_dict.get("labels"):
-        lbl_fields = []
         for l in provider_dict["labels"]:
-            if isinstance(l, dict) and "name" in l and l["name"] not in lbl_fields:
-                lbl_fields.append(l["name"])
-        if lbl_fields:
-            provider_dict["fields"] = lbl_fields
+            if isinstance(l, dict) and "name" in l and l["name"] not in extracted_fields:
+                extracted_fields.append(l["name"])
+                
+    # Extraer grupos nombrados del regex si los tiene (ej: (?P<modelo>...) o (?<modelo>...))
+    if clean_regex and clean_regex != ".*":
+        group_names = re.findall(r'\(\?P<([a-zA-Z_][a-zA-Z0-9_]*)>', clean_regex) or re.findall(r'\(\?<([a-zA-Z_][a-zA-Z0-9_]*)>', clean_regex)
+        for g in group_names:
+            if g not in extracted_fields:
+                extracted_fields.append(g)
+                
+    if extracted_fields:
+        provider_dict["fields"] = extracted_fields
     elif not provider_dict.get("fields"):
         provider_dict["fields"] = ["product", "model", "price", "attributes"]
 
@@ -1977,6 +2010,7 @@ async def save_provider(provider: ProviderModel):
     except Exception as se:
         add_log("warning", f"No se pudo sincronizar providers_seed.json: {str(se)}")
 
+    active_provider = provider_dict
     load_config() # Recargar global
     previous_clipboard = ""
     last_sequence_number = 0
@@ -2171,14 +2205,14 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
             # - El símbolo de moneda es opcional tanto antes como después
             return r"\b(?:€|EUR|eur|usd|\$|GBP|gbp)?\s*\d+(?:[.,]\d{1,3})*\s*(?:€|EUR|eur|usd|\$|GBP|gbp)?(?!\s*(?:rpm|r\.p\.m\.?|r/min|rev/min|revoluciones|rev|kg|kilos|db|dba|w|kw|kwh|l|litros|lts|hz|v|cm|mm|m3/h|bar|cubiertos|servicios|pulgadas|programas|ciclos)\b)(?!\w)"
             
-        # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura
-        if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[A-Za-z0-9-]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
+        # Si es un modelo/SKU: es alfanumérico y tiene cierta estructura (admite guiones y barras)
+        if "modelo" in name_lower or "sku" in name_lower or (re.match(r'^[-A-Za-z0-9/]+$', val_clean) and any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean)):
             if any(c.isdigit() for c in val_clean) and any(c.isalpha() for c in val_clean):
-                return r"\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\b"
+                return r"\b(?=[-A-Za-z0-9/]*\d)(?=[-A-Za-z0-9/]*[A-Za-z])[-A-Za-z0-9/]{4,25}\b"
             elif val_clean.isdigit():
                 return r"\b\d{3,25}\b"
             else:
-                return r"\b[A-Za-z0-9-]{3,25}\b"
+                return r"\b[-A-Za-z0-9/]{3,25}\b"
             
         # Si es producto/marca o atributos:
         # Si es el último campo de la línea o del bloque, capturamos toda la línea para evitar truncamiento
@@ -2191,24 +2225,32 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         if not literal:
             return ""
         
-        _RE_MODEL_TOKEN = re.compile(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{3,25}\b')
+        _RE_MODEL_TOKEN = re.compile(r'\b(?=[-A-Za-z0-9/]*\d)(?=[-A-Za-z0-9/]*[A-Za-z])[-A-Za-z0-9/]{3,25}\b')
         
         words = literal.split()
         if not words:
+            # Si contiene saltos de línea, reflejarlo
+            if "\n" in literal:
+                return r"\s*[\r\n]+\s*"
             return r"\s+"
             
         word_pats = []
         for w in words:
             w_clean = re.sub(r'^[^\w]+|[^\w]+$', '', w)
-            prefix = w[:w.find(w_clean)] if w_clean and w_clean in w else ""
-            suffix = w[w.find(w_clean)+len(w_clean):] if w_clean and w_clean in w else ""
+            if not w_clean:
+                # El token completo está formado por signos de puntuación (ej: ',', '-', '/', ':')
+                word_pats.append(re.escape(w))
+                continue
+                
+            prefix = w[:w.find(w_clean)] if w_clean in w else ""
+            suffix = w[w.find(w_clean)+len(w_clean):] if w_clean in w else ""
             
             # 1. Números aislados (ej. indicadores de stock M 4 S 6 P 0) -> \d+
             if w_clean.isdigit():
                 pat = r"\d+"
-            # 2. Tokens de modelo / SKU en texto de transición -> [A-Za-z0-9-]+
+            # 2. Tokens de modelo / SKU en texto de transición -> [-A-Za-z0-9/]+
             elif _RE_MODEL_TOKEN.match(w_clean):
-                pat = r"[A-Za-z0-9-]+"
+                pat = r"[-A-Za-z0-9/]+"
             # 3. Código/letra variante única (ej. "B" en "Lineal B") -> [A-Za-z0-9]+
             elif len(w_clean) == 1 and w_clean.isupper():
                 pat = r"[A-Za-z0-9]+"
@@ -2222,9 +2264,16 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         
     # Construir la expresión regular iterando sobre las etiquetas y los textos intermedios
     last_idx = 0
+    used_group_names = set()
+    label_to_group_name = []
+    
     for i, label in enumerate(sorted_labels):
-        start = label.start
-        end = label.end
+        start = max(0, min(label.start, len(raw_text)))
+        end = max(start, min(label.end, len(raw_text)))
+        if start < last_idx:
+            start = last_idx
+            end = max(start, end)
+            
         name = label.name
         val = raw_text[start:end]
         
@@ -2237,9 +2286,18 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
         is_last_on_line = "\n" in lit_after_this or i == len(sorted_labels) - 1
         is_last_overall = i == len(sorted_labels) - 1
                 
+        # Garantizar nombre de grupo único en Python regex
+        group_name = name
+        counter = 1
+        while group_name in used_group_names:
+            counter += 1
+            group_name = f"{name}_{counter}"
+        used_group_names.add(group_name)
+        label_to_group_name.append((label, group_name))
+        
         # Añadir el grupo de captura genérico
         group_pattern = get_generic_pattern(name, val, is_last_on_line, is_last_overall)
-        parts.append(f"(?P<{name}>{group_pattern})")
+        parts.append(f"(?P<{group_name}>{group_pattern})")
         last_idx = end
         
     pattern = "".join(parts)
@@ -2248,22 +2306,37 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
     try:
         match = re.search(pattern, raw_text)
         if match:
-            extracted = match.groupdict()
-            # Validar que los valores extraídos coincidan exactamente con lo que se seleccionó
+            raw_extracted = match.groupdict()
+            # Mapear de nombres únicos a nombres de etiquetas originales
+            extracted = {}
+            for lbl, gname in label_to_group_name:
+                extracted[lbl.name] = raw_extracted.get(gname, "")
+                
+            # Validar que los valores extraídos coincidan aceptablemente con lo que se seleccionó
             mismatches = []
-            for label in sorted_labels:
-                name = label.name
-                expected_val = raw_text[label.start:label.end].strip()
-                actual_val = extracted.get(name, "").strip()
+            for lbl, gname in label_to_group_name:
+                name = lbl.name
+                expected_val = raw_text[lbl.start:lbl.end].strip()
+                actual_val = raw_extracted.get(gname, "").strip()
                 
                 # Normalizar símbolos de moneda para comparación limpia de precios
                 clean_exp = re.sub(r'[€$\s]|EUR|eur|usd|GBP|gbp', '', expected_val)
                 clean_act = re.sub(r'[€$\s]|EUR|eur|usd|GBP|gbp', '', actual_val)
                 if clean_exp != clean_act and expected_val != actual_val:
-                    mismatches.append(f"Campo '{name}': esperado '{expected_val}', obtenido '{actual_val}'")
+                    # Tolerar si la diferencia es solo una coma/guión inicial o final
+                    trim_act = actual_val.strip(" ,-:/;|")
+                    trim_exp = expected_val.strip(" ,-:/;|")
+                    if trim_act != trim_exp:
+                        mismatches.append(f"Campo '{name}': esperado '{expected_val}', obtenido '{actual_val}'")
             
             # Capturar todas las coincidencias multi-ficha en el texto de muestra
-            all_matches = [m.groupdict() for m in re.finditer(pattern, raw_text)]
+            all_matches = []
+            for m in re.finditer(pattern, raw_text):
+                gdict = m.groupdict()
+                row = {}
+                for lbl, gname in label_to_group_name:
+                    row[lbl.name] = gdict.get(gname, "")
+                all_matches.append(row)
             
             if mismatches:
                 return {
@@ -2272,7 +2345,7 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
                     "extracted": extracted,
                     "all_matches": all_matches,
                     "total_matched_cards": len(all_matches),
-                    "message": f"La expresión regular coincide pero los valores extraídos difieren: {'; '.join(mismatches)}"
+                    "message": f"La expresión regular coincide pero los valores extraídos difieren levemente: {'; '.join(mismatches)}"
                 }
             else:
                 return {
@@ -2297,6 +2370,53 @@ async def generate_regex_pattern(req: RegexGenerateRequest):
             "all_matches": [],
             "total_matched_cards": 0,
             "message": f"Error compilando la expresión regular: {str(e)}"
+        }
+
+@app.post("/api/regex/test")
+async def test_regex_endpoint(req: RegexTestRequest):
+    pattern = (req.regex or "").strip()
+    text = (req.text or "").strip()
+    if not pattern or pattern == "^...$":
+        return {"status": "error", "message": "No se proporcionó un regex válido.", "matches": [], "count": 0}
+    if not text:
+        return {"status": "error", "message": "No se proporcionó texto de muestra.", "matches": [], "count": 0}
+
+    pat_clean = pattern
+    if pat_clean.startswith("^"):
+        pat_clean = pat_clean[1:]
+    if pat_clean.endswith("$"):
+        pat_clean = pat_clean[:-1]
+
+    try:
+        compiled = re.compile(pat_clean)
+    except Exception as e:
+        return {"status": "error", "message": f"Error de sintaxis en el Regex: {str(e)}", "matches": [], "count": 0}
+
+    matches = []
+    try:
+        for m in compiled.finditer(text):
+            gdict = m.groupdict()
+            if not gdict:
+                gdict = {"coincidencia": m.group(0)}
+            matches.append(gdict)
+    except Exception as e:
+        return {"status": "error", "message": f"Error durante la ejecución del Regex: {str(e)}", "matches": [], "count": 0}
+
+    if matches:
+        return {
+            "status": "success",
+            "count": len(matches),
+            "matches": matches,
+            "extracted": matches[0],
+            "message": f"¡Éxito! El regex coincide con {len(matches)} elemento(s) en el texto de muestra."
+        }
+    else:
+        return {
+            "status": "warning",
+            "count": 0,
+            "matches": [],
+            "extracted": {},
+            "message": "El regex actual no coincide con el texto de muestra."
         }
 
 class SuggestLabelsRequest(BaseModel):
