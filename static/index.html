@@ -73,9 +73,12 @@
                                 <option value="">-- Seleccionar Proveedor --</option>
                             </select>
                         </div>
-                        <div class="control-row mt-10" style="width: 100%;">
-                            <button id="btn-paste-clipboard" class="btn btn-primary btn-block" style="width: 100%;">
+                        <div class="control-row mt-10" style="width: 100%; display: flex; gap: 8px;">
+                            <button id="btn-paste-clipboard" class="btn btn-primary" style="flex: 1.2;">
                                 📋 Pegar Portapapeles
+                            </button>
+                            <button id="btn-extract-text-ai" class="btn btn-secondary" style="flex: 1; border-color: rgba(99, 102, 241, 0.5); background: rgba(99, 102, 241, 0.15); color: #c7d2fe;" title="Extrae productos usando IA Gemini directamente del texto o portapapeles">
+                                ✨ Extraer con IA
                             </button>
                         </div>
                         <div class="control-row mt-10" style="display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 6px;">
@@ -115,6 +118,18 @@
                                 <button id="btn-save-gemini-key" class="btn btn-primary btn-sm" style="padding: 4px 12px; font-size: 12px;">Guardar</button>
                             </div>
                             <div id="gemini-config-msg" style="font-size: 11px; margin-top: 6px;"></div>
+
+                            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    <label for="gemini-fallback-checkbox" style="font-size: 12px; font-weight: 600; color: #e0e0e0; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                                        <input type="checkbox" id="gemini-fallback-checkbox" checked style="cursor: pointer; accent-color: #6366f1;">
+                                        <span>🛡️ Rescate Automático con IA en Portapapeles</span>
+                                    </label>
+                                    <div style="font-size: 10px; color: var(--text-muted); margin-left: 20px;">
+                                        Si el texto copiado (Ctrl+C) no coincide con ninguna regex, Gemini extraerá los productos automáticamente.
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="control-row mt-10" style="width: 100%;">

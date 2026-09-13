@@ -30,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnDownloadRaw = document.getElementById("btn-download-raw");
     const btnClearCaptures = document.getElementById("btn-clear-captures");
     const btnPasteClipboard = document.getElementById("btn-paste-clipboard");
+    const btnExtractTextAi = document.getElementById("btn-extract-text-ai");
     const pasteInputArea = document.getElementById("paste-input-area");
     const imageOcrDropzone = document.getElementById("image-ocr-dropzone");
     const imageFileInput = document.getElementById("image-file-input");
@@ -49,6 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnToggleShowKey = document.getElementById("btn-toggle-show-key");
     const btnSaveGeminiKey = document.getElementById("btn-save-gemini-key");
     const geminiConfigMsg = document.getElementById("gemini-config-msg");
+    const geminiFallbackCheckbox = document.getElementById("gemini-fallback-checkbox");
     // Tab 2 Elements
     const savedProvidersList = document.getElementById("saved-providers-list");
     const provNameInput = document.getElementById("prov-name");
@@ -2656,6 +2658,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (imageEngineSelect && data.image_engine) {
                     imageEngineSelect.value = data.image_engine;
                 }
+                if (geminiFallbackCheckbox && data.gemini_auto_fallback !== undefined) {
+                    geminiFallbackCheckbox.checked = Boolean(data.gemini_auto_fallback);
+                }
                 if (geminiKeyStatus) {
                     if (data.has_key) {
                         geminiKeyStatus.textContent = "✨ Gemini Conectado";
@@ -2674,6 +2679,97 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (e) {
             console.warn("Error cargando configuración de Gemini:", e);
         }
+    }
+
+    if (geminiFallbackCheckbox) {
+        geminiFallbackCheckbox.addEventListener("change", async () => {
+            const val = geminiFallbackCheckbox.checked;
+            try {
+                await fetch("/api/gemini-config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ gemini_auto_fallback: val })
+                });
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "info",
+                    message: `Modo Rescate IA Gemini en portapapeles: ${val ? 'Activado' : 'Desactivado'}`
+                });
+            } catch (e) {
+                console.error("Error actualizando modo rescate Gemini:", e);
+            }
+        });
+    }
+
+    if (btnExtractTextAi) {
+        btnExtractTextAi.addEventListener("click", async () => {
+            if (!activeProviderId) {
+                alert("Por favor, selecciona un proveedor activo antes de extraer con IA.");
+                return;
+            }
+
+            let text = pasteInputArea ? pasteInputArea.value.trim() : "";
+            if (!text) {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    try {
+                        text = (await navigator.clipboard.readText()).trim();
+                    } catch (err) {
+                        console.warn("No se pudo leer automáticamente del portapapeles:", err);
+                    }
+                }
+            }
+
+            if (!text) {
+                alert("Pega texto en la 'Caja de Pegado Rápido' o copia texto al portapapeles antes de pulsar 'Extraer con IA'.");
+                return;
+            }
+
+            const originalHtml = btnExtractTextAi.innerHTML;
+            btnExtractTextAi.disabled = true;
+            btnExtractTextAi.innerHTML = '⏳ Extrayendo con IA...';
+
+            appendLog({
+                timestamp: new Date().toLocaleTimeString(),
+                type: "info",
+                message: "Enviando texto a Google Gemini para extracción estructurada directa..."
+            });
+
+            try {
+                const res = await fetch("/api/process-text-ai", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: text, provider_id: activeProviderId })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === "success") {
+                    const count = data.count || (data.items ? data.items.length : 0);
+                    appendLog({
+                        timestamp: new Date().toLocaleTimeString(),
+                        type: "success",
+                        message: `IA Gemini extrajo y guardó con éxito ${count} producto(s).`
+                    });
+                    if (pasteInputArea) pasteInputArea.value = "";
+                    await loadProviderExtractions(activeProviderId);
+                } else {
+                    appendLog({
+                        timestamp: new Date().toLocaleTimeString(),
+                        type: "error",
+                        message: `Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`
+                    });
+                    alert(`Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`);
+                }
+            } catch (err) {
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "error",
+                    message: `Error de conexión con el servidor: ${err.message}`
+                });
+                alert("Error de conexión al enviar el texto para análisis con IA.");
+            } finally {
+                btnExtractTextAi.disabled = false;
+                btnExtractTextAi.innerHTML = originalHtml;
+            }
+        });
     }
 
     if (imageEngineSelect) {

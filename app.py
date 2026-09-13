@@ -1285,6 +1285,22 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
         if extracted_data_list:
             save_extracted_items_to_provider(extracted_data_list, provider, source_label="portapapeles")
         else:
+            # Fallback inteligente con IA Gemini si no hubo coincidencias y está habilitado
+            cfg_curr = load_config()
+            gemini_key = (cfg_curr.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+            auto_fallback = cfg_curr.get("gemini_auto_fallback", True)
+            if auto_fallback and gemini_key and not is_ocr:
+                add_log("info", f"Sin coincidencias en '{provider.get('name')}'. Activando Modo Rescate con IA Gemini...")
+                res_ai = extract_products_from_text_with_gemini(text, provider)
+                if res_ai.get("success") and res_ai.get("items"):
+                    ai_items = res_ai["items"]
+                    save_extracted_items_to_provider(ai_items, provider, source_label="IA Gemini (portapapeles)")
+                    add_log("success", f"IA Gemini rescató y guardó {len(ai_items)} producto(s) del texto copiado.")
+                    return
+                else:
+                    err = res_ai.get("error") or "No se identificaron productos con IA."
+                    add_log("info", f"Modo Rescate IA: {err}")
+
             # Ignorar de forma pasiva, pero registrar en el log informativo local
             add_log("info", f"Texto copiado ignorado (no coincide con la plantilla de '{provider['name']}')")
     except Exception as e:
@@ -1545,10 +1561,10 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
                         item[field] = str(raw_attr).strip()
                     elif any(term in f_norm for term in pvp_terms):
                         item[field] = p_highest
-                    elif any(term in f_norm for term in vat_terms):
-                        item[field] = p_middle
                     elif any(term in f_norm for term in no_vat_terms):
                         item[field] = p_lowest
+                    elif any(term in f_norm for term in vat_terms) and not any(nv in f_norm for nv in ["novat", "siniva"]):
+                        item[field] = p_middle
                     elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
                         # Por defecto el campo principal de precio siempre almacena el neto sin IVA (menor valor)
                         item[field] = p_lowest
@@ -1573,6 +1589,206 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
         }
     except Exception as e:
         return {"success": False, "error": f"Error procesando JSON de Gemini: {str(e)}", "items": []}
+
+
+def extract_products_from_text_with_gemini(text: str, provider: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrae productos comerciales directamente de un texto no estructurado usando Google Gemini."""
+    if not text or not text.strip():
+        return {"success": False, "error": "El texto proporcionado está vacío", "items": []}
+
+    config = load_config()
+    api_key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "No se ha configurado la clave API de Gemini", "items": []}
+    
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        return {"success": False, "error": "Librería google-genai no está instalada en el entorno", "items": []}
+
+    expected_fields = provider.get("fields", [])
+    fields_desc = ", ".join(expected_fields) if expected_fields else "producto, modelo, precio, atributos"
+    provider_name = provider.get("name", "General")
+
+    # Limitar tamaño de texto de seguridad (máximo 25.000 caracteres)
+    sample_text = text[:25000].strip()
+
+    prompt = f"""Eres un asistente experto en extracción estructurada de catálogos de electrodomésticos, electrónica y retail para '{provider_name}'.
+
+Analiza minuciosamente el siguiente texto plano copiado de una web comercial, ficha técnica o catálogo de productos.
+Debes identificar y extraer con la máxima fidelidad TODOS y cada uno de los productos comerciales que aparezcan.
+
+REGLA DE PRECIOS (Neto / Pr, Pv, PVP):
+- 'price_neto': Precio de compra neto o precio sin IVA (el importe MÁS BAJO de la ficha, ej: 241,46 € o 241.46).
+- 'pv_intermedio': Precio intermedio con IVA o profesional (ej: 292,17 €).
+- 'pvp_alto': Precio de venta al público recomendado o el precio mayor/tachado (ej: 349,00 €).
+- 'all_prices': Lista con todos los valores numéricos de precio que figuren para ese producto.
+
+REGLA DE MODELO Y PRODUCTO:
+- 'model': Código o referencia técnica EXACTA del fabricante/SKU (ej: '3TS994BT', 'KGN39VWEA', 'TQ55Q60D', 'WGG2440XES'). NUNCA lo dejes vacío si hay un código.
+- 'product': Nombre descriptivo completo del artículo (ej: 'Lavadora carga frontal Balay', 'Frigorífico Combi Bosch').
+- 'attributes': Especificaciones o atributos clave (ej: '9 kg, 1400 rpm, Clase A, Blanco', 'No Frost, 203 cm, Inox').
+
+Campos esperados por el sistema: [{fields_desc}]
+
+Texto a analizar:
+\"\"\"
+{sample_text}
+\"\"\"
+
+Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto previo ni markdown envolvente:
+{{
+  "productos": [
+    {{
+      "product": "Nombre descriptivo",
+      "model": "Código de modelo exacto",
+      "price_neto": "Precio neto o menor",
+      "pv_intermedio": "Precio intermedio",
+      "pvp_alto": "PVP más alto",
+      "all_prices": ["...", "..."],
+      "attributes": "Atributos o especificaciones"
+    }}
+  ]
+}}
+"""
+
+    client = genai.Client(api_key=api_key)
+    candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]
+    last_error = None
+    response_text = ""
+
+    for model_name in candidate_models:
+        try:
+            add_log("info", f"Enviando texto a Gemini ({model_name}) para rescate inteligente...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1
+                )
+            )
+            response_text = (response.text or "").strip()
+            if response_text:
+                break
+        except Exception as e:
+            last_error = e
+            add_log("warning", f"Gemini ({model_name}) no disponible ({str(e)}), probando siguiente modelo...")
+
+    if not response_text:
+        return {"success": False, "error": f"Fallo al conectar con Gemini: {str(last_error)}", "items": []}
+
+    try:
+        clean_json_str = response_text
+        if clean_json_str.startswith("```"):
+            clean_json_str = re.sub(r'^```(?:json)?\s*', '', clean_json_str)
+            clean_json_str = re.sub(r'\s*```$', '', clean_json_str)
+
+        data_json = json.loads(clean_json_str)
+        raw_items = []
+        if isinstance(data_json, list):
+            raw_items = data_json
+        elif isinstance(data_json, dict):
+            raw_items = data_json.get("productos") or data_json.get("items") or data_json.get("products") or [data_json]
+
+        if not raw_items:
+            return {"success": True, "count": 0, "items": [], "raw_json": response_text}
+
+        def _fmt_price(val: Any) -> str:
+            if val is None or val == "":
+                return ""
+            if isinstance(val, (int, float)):
+                return f"{val:.2f} €".replace(".", ",")
+            s = str(val).strip()
+            if s and not any(c in s for c in ["€", "EUR", "$", "eur"]):
+                try:
+                    num = float(s.replace(",", "."))
+                    return f"{num:.2f} €".replace(".", ",")
+                except Exception:
+                    pass
+            return s
+
+        structured_items = []
+        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva", "neto", "pr"}
+        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pv"}
+        pvp_terms = {"pvp", "precio_pvp", "preciopvp", "p_pvp"}
+
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            item = {}
+            raw_attr = raw.get("attributes") or raw.get("atributos") or ""
+            if isinstance(raw_attr, dict):
+                raw_attr = ", ".join(f"{k}: {v}" for k, v in raw_attr.items())
+
+            candidates = []
+            for p_cand in [
+                raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
+                raw.get("price"), raw.get("precio"), raw.get("pv_intermedio"), raw.get("pv"),
+                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp_alto"), raw.get("pvp")
+            ]:
+                if p_cand:
+                    p_num = clean_price(str(p_cand))
+                    if p_num > 0 and not any(abs(p_num - c[0]) < 0.001 for c in candidates):
+                        candidates.append((p_num, _fmt_price(p_cand)))
+
+            if isinstance(raw.get("all_prices"), list):
+                for p_cand in raw.get("all_prices"):
+                    p_num = clean_price(str(p_cand))
+                    if p_num > 0 and not any(abs(p_num - c[0]) < 0.001 for c in candidates):
+                        candidates.append((p_num, _fmt_price(p_cand)))
+
+            candidates.sort(key=lambda x: x[0])
+
+            if candidates:
+                p_lowest = candidates[0][1]
+                p_middle = candidates[1][1] if len(candidates) >= 2 else p_lowest
+                p_highest = candidates[-1][1] if len(candidates) >= 2 else p_lowest
+            else:
+                p_lowest = _fmt_price(raw.get("price") or "")
+                p_middle = p_lowest
+                p_highest = p_lowest
+
+            if expected_fields:
+                for field in expected_fields:
+                    f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
+                    if any(term in f_norm for term in ["product", "producto", "nombre", "articulo", "desc"]):
+                        item[field] = str(raw.get("product") or raw.get("producto") or "").strip()
+                    elif any(term in f_norm for term in ["model", "modelo", "sku", "ref", "referencia", "cod"]):
+                        item[field] = str(raw.get("model") or raw.get("modelo") or "").strip()
+                    elif any(term in f_norm for term in ["attribute", "atributo", "spec", "caracteristica"]):
+                        item[field] = str(raw_attr).strip()
+                    elif any(term in f_norm for term in pvp_terms):
+                        item[field] = p_highest
+                    elif any(term in f_norm for term in no_vat_terms):
+                        item[field] = p_lowest
+                    elif any(term in f_norm for term in vat_terms) and not any(nv in f_norm for nv in ["novat", "siniva"]):
+                        item[field] = p_middle
+                    elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
+                        item[field] = p_lowest
+                    else:
+                        item[field] = str(raw.get(field, "")).strip()
+            else:
+                item = {
+                    "product": str(raw.get("product") or raw.get("producto") or "").strip(),
+                    "model": str(raw.get("model") or raw.get("modelo") or "").strip(),
+                    "pvp": p_highest or p_lowest,
+                    "attributes": str(raw_attr).strip()
+                }
+
+            normalize_and_reorder_product_prices(item)
+            if item.get("model") or item.get("modelo") or item.get("product") or item.get("producto"):
+                structured_items.append(item)
+
+        return {
+            "success": True,
+            "count": len(structured_items),
+            "items": structured_items,
+            "raw_json": response_text
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Error procesando JSON de texto con Gemini: {str(e)}", "items": []}
 
 
 @asynccontextmanager
@@ -1655,6 +1871,38 @@ async def process_text_endpoint(req: ProcessTextRequest):
     process_text(req.text, active_provider)
     return {"status": "success"}
 
+class ProcessTextAIRequest(BaseModel):
+    text: str
+    provider_id: Optional[str] = None
+
+@app.post("/api/process-text-ai")
+async def process_text_ai_endpoint(req: ProcessTextAIRequest, username: str = Depends(check_authentication)):
+    global active_provider
+    if not req.text or not req.text.strip():
+        raise HTTPException(status_code=400, detail="El texto a procesar está vacío.")
+    
+    target_provider = active_provider
+    if req.provider_id:
+        cfg = load_config()
+        for p in cfg.get("providers", []):
+            if p.get("id") == req.provider_id:
+                target_provider = p
+                break
+    if not target_provider:
+        cfg = load_config()
+        provs = cfg.get("providers", [])
+        target_provider = provs[0] if provs else {"name": "General", "fields": ["product", "model", "pvp", "attributes"]}
+    
+    res = extract_products_from_text_with_gemini(req.text, target_provider)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Error extrayendo con Gemini"))
+    
+    items = res.get("items", [])
+    if items:
+        save_extracted_items_to_provider(items, target_provider, source_label="IA Gemini (manual)")
+        add_log("success", f"IA Gemini extrajo y guardó {len(items)} producto(s) desde texto manual.")
+    return {"status": "success", "count": len(items), "items": items}
+
 @app.get("/api/users")
 async def get_users(username: str = Depends(require_root)):
     users = load_users()
@@ -1698,6 +1946,7 @@ async def delete_user_route(username_to_delete: str, username: str = Depends(req
 class GeminiConfigRequest(BaseModel):
     gemini_api_key: Optional[str] = None
     image_engine: Optional[str] = None
+    gemini_auto_fallback: Optional[bool] = None
 
 @app.get("/api/gemini-config")
 async def get_gemini_config(username: str = Depends(check_authentication)):
@@ -1709,7 +1958,8 @@ async def get_gemini_config(username: str = Depends(check_authentication)):
     return {
         "has_key": bool(key),
         "key_preview": key_preview,
-        "image_engine": config.get("image_engine", "gemini")
+        "image_engine": config.get("image_engine", "gemini"),
+        "gemini_auto_fallback": config.get("gemini_auto_fallback", True)
     }
 
 @app.post("/api/gemini-config")
@@ -1722,11 +1972,16 @@ async def update_gemini_config(req: GeminiConfigRequest, username: str = Depends
     if req.image_engine in ["gemini", "ocr", "auto"]:
         config["image_engine"] = req.image_engine
         add_log("info", f"Motor de análisis de imagen configurado a: {req.image_engine}")
+    if req.gemini_auto_fallback is not None:
+        config["gemini_auto_fallback"] = bool(req.gemini_auto_fallback)
+        st_desc = "activado" if req.gemini_auto_fallback else "desactivado"
+        add_log("info", f"Modo Rescate IA Gemini en portapapeles {st_desc} por '{username}'.")
     save_config(config)
     return {
         "status": "success",
         "has_key": bool(config.get("gemini_api_key")),
-        "image_engine": config.get("image_engine", "gemini")
+        "image_engine": config.get("image_engine", "gemini"),
+        "gemini_auto_fallback": config.get("gemini_auto_fallback", True)
     }
 
 @app.post("/api/parse-image")
