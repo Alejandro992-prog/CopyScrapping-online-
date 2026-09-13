@@ -561,6 +561,12 @@ tr:hover td {
     border-radius: 4px;
 }
 
+.highlight-expensive {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: #f87171 !important;
+    border-radius: 4px;
+}
+
 /* TAB 2: No-Code Visual Labeler */
 .grid-sidebar-layout {
     display: grid;

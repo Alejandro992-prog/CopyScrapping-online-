@@ -1567,10 +1567,9 @@ document.addEventListener("DOMContentLoaded", () => {
         result.data.forEach(row => {
             const tr = document.createElement("tr");
             
-            // Determinar los precios mínimos independientes por cada categoría de precio
-            let minGeneral = Infinity;
-            let generalCols = [];
+            // Determinar los precios mínimos y máximos sobre Precio Sin IVA
             let minNoVat = Infinity;
+            let maxNoVat = -Infinity;
             let noVatCols = [];
             let minVat = Infinity;
             let vatCols = [];
@@ -1579,15 +1578,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (col.startsWith("Precio ")) {
                     const val = parseFloat(row[col]);
                     if (!isNaN(val) && val > 0) {
-                        if (col.endsWith(" Sin IVA (€)")) {
+                        if (col.includes("Sin IVA")) {
                             noVatCols.push(col);
                             if (val < minNoVat) minNoVat = val;
-                        } else if (col.endsWith(" Con IVA (€)")) {
+                            if (val > maxNoVat) maxNoVat = val;
+                        } else if (col.includes("Con IVA")) {
                             vatCols.push(col);
                             if (val < minVat) minVat = val;
-                        } else if (col.endsWith(" (€)")) {
-                            generalCols.push(col);
-                            if (val < minGeneral) minGeneral = val;
                         }
                     }
                 }
@@ -1608,15 +1605,17 @@ document.addEventListener("DOMContentLoaded", () => {
                     td.textContent = val !== null ? val : "";
                 }
                 
-                // Destacar precio mínimo en base a su grupo
+                // Destacar precio líder (más barato) y el más caro en base a Sin IVA
                 if (col.startsWith("Precio ")) {
                     const priceVal = parseFloat(val);
                     if (!isNaN(priceVal) && priceVal > 0) {
-                        if (col.endsWith(" Sin IVA (€)") && priceVal === minNoVat && noVatCols.length > 1) {
-                            td.className = "highlight-cheap";
-                        } else if (col.endsWith(" Con IVA (€)") && priceVal === minVat && vatCols.length > 1) {
-                            td.className = "highlight-cheap";
-                        } else if (col.endsWith(" (€)") && !col.endsWith(" Sin IVA (€)") && !col.endsWith(" Con IVA (€)") && priceVal === minGeneral && generalCols.length > 1) {
+                        if (col.includes("Sin IVA") && noVatCols.length > 1) {
+                            if (priceVal === minNoVat) {
+                                td.className = "highlight-cheap";
+                            } else if (priceVal === maxNoVat && maxNoVat > minNoVat) {
+                                td.className = "highlight-expensive";
+                            }
+                        } else if (col.includes("Con IVA") && vatCols.length > 1 && priceVal === minVat) {
                             td.className = "highlight-cheap";
                         }
                     }

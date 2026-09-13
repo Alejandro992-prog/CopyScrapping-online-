@@ -433,6 +433,9 @@ def format_excel_file(filepath: str):
         cheap_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid") # Soft green
         cheap_font = Font(name="Segoe UI", size=10, bold=True, color="155724")
         
+        expensive_fill = PatternFill(start_color="FCE8E6", end_color="FCE8E6", fill_type="solid") # Soft red/coral
+        expensive_font = Font(name="Segoe UI", size=10, bold=False, color="C5221F")
+        
         thin_border = Border(
             left=Side(style='thin', color='E2E8F0'),
             right=Side(style='thin', color='E2E8F0'),
@@ -451,22 +454,23 @@ def format_excel_file(filepath: str):
             
         # Classify price columns by suffix
         price_cols_by_cat = {
-            'general': [],
             'no_vat': [],
             'vat': [],
-            'pvp': []
+            'pvp': [],
+            'general': []
         }
         
         for idx, header in enumerate(headers):
-            if header and header.startswith("Precio "):
+            if header and str(header).startswith("Precio "):
                 col_letter = get_column_letter(idx + 1)
-                if header.endswith(" Sin IVA (€)"):
+                h_str = str(header)
+                if "Sin IVA" in h_str:
                     price_cols_by_cat['no_vat'].append((col_letter, idx + 1))
-                elif header.endswith(" Con IVA (€)"):
+                elif "Con IVA" in h_str:
                     price_cols_by_cat['vat'].append((col_letter, idx + 1))
-                elif header.endswith(" PVP (€)"):
+                elif "PVP" in h_str:
                     price_cols_by_cat['pvp'].append((col_letter, idx + 1))
-                elif header.endswith(" (€)"):
+                else:
                     price_cols_by_cat['general'].append((col_letter, idx + 1))
                     
         # Style rows
@@ -478,47 +482,64 @@ def format_excel_file(filepath: str):
                 cell.font = body_font
                 cell.border = thin_border
                 
-                # Align center for non-text columns
-                if col_idx > 2:
-                    cell.alignment = Alignment(horizontal="center")
+                header_val = str(headers[col_idx - 1] or '')
+                if header_val.startswith("Diferencia / Oportunidad"):
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                elif col_idx > 2:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
                 else:
-                    cell.alignment = Alignment(horizontal="left")
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
                     
-            # Highlight minimum price cell for each category
+            # Highlight minimum price and maximum price cell
             for cat, cols in price_cols_by_cat.items():
                 if len(cols) <= 1:
                     continue # No competition, no need to highlight
                     
                 min_val = float('inf')
                 min_cell = None
+                max_val = float('-inf')
+                max_cell = None
+                valid_count = 0
                 
                 for col_letter, col_idx in cols:
                     cell = ws.cell(row=row_idx, column=col_idx)
                     val = cell.value
                     if val is not None:
                         try:
-                            f_val = float(val)
-                            if f_val > 0 and f_val < min_val:
-                                min_val = f_val
-                                min_cell = cell
+                            f_val = float(clean_price(str(val)) if not isinstance(val, (int, float)) else val)
+                            if f_val > 0:
+                                valid_count += 1
+                                if f_val < min_val:
+                                    min_val = f_val
+                                    min_cell = cell
+                                if f_val > max_val:
+                                    max_val = f_val
+                                    max_cell = cell
                         except (ValueError, TypeError):
                             pass
                             
-                if min_cell is not None and min_val != float('inf'):
+                if min_cell is not None and min_val != float('inf') and valid_count > 1:
                     min_cell.fill = cheap_fill
                     min_cell.font = cheap_font
-                    
+                    if max_cell is not None and max_cell != min_cell and max_val > min_val and cat == 'no_vat':
+                        max_cell.fill = expensive_fill
+                        max_cell.font = expensive_font
+                        
         # Auto-adjust column widths
         for col in ws.columns:
             max_len = 0
             col_letter = get_column_letter(col[0].column)
+            header_name = str(col[0].value or '')
             for cell in col:
                 val_str = str(cell.value or '')
                 lines = val_str.split('\n')
                 for line in lines:
                     if len(line) > max_len:
                         max_len = len(line)
-            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+            if header_name.startswith("Diferencia / Oportunidad"):
+                ws.column_dimensions[col_letter].width = max(max_len + 4, 55)
+            else:
+                ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 40)
             
         wb.save(filepath)
         wb.close()
@@ -3093,25 +3114,49 @@ async def merge_extractions(req: MergeRequest):
         if not key_col:
             key_col = df.columns[0] # Fallback a primera columna
             
-        # Detectar columnas de precios (General, Sin IVA, Con IVA, PVP)
+        # Detectar columnas de precios (Sin IVA, Con IVA, PVP o General)
         general_price_col = None
         no_vat_price_col = None
         vat_price_col = None
         pvp_price_col = None
         
         for col in df.columns:
-            col_lower = col.lower()
+            col_lower = col.lower().strip()
             col_norm = re.sub(r'[^a-z0-9]', '', col_lower)
-            if any(term in col_norm for term in ['price', 'precio', 'pvp', 'cifra', 'importe', 'iva', 'vat']):
-                if any(term in col_norm for term in ['siniva', 'novat']):
-                    no_vat_price_col = col
-                elif any(term in col_norm for term in ['coniva', 'pricevat', 'withvat', 'vat']) or col_norm.endswith('vat'):
-                    if 'novat' not in col_norm and 'siniva' not in col_norm:
-                        vat_price_col = col
-                elif 'pvp' in col_norm:
-                    pvp_price_col = col
-                else:
-                    general_price_col = col
+            
+            is_no_vat = (
+                col_norm in ['pr', 'coste', 'costo', 'neto', 'siniva', 'novat', 'precioneto', 'priceneto']
+                or any(t in col_norm for t in ['siniva', 'novat', 'sin_iva', 'preciosiniva', 'pricesiniva', 'pricenovat', 'psiniva', 'sinivaeur'])
+            )
+            is_vat = (
+                col_norm in ['pv', 'vat', 'coniva', 'precioconiva', 'pricevat']
+                or any(t in col_norm for t in ['coniva', 'pricevat', 'withvat', 'precioconiva', 'pconiva'])
+                or (col_norm.endswith('vat') and 'novat' not in col_norm and len(col_norm) <= 8)
+            )
+            is_pvp = (
+                col_norm in ['pvp', 'pvpalto', 'pvpprecio', 'preciopvp', 'pricepvp']
+                or 'pvp' in col_norm
+                or 'precioventa' in col_norm
+            )
+            is_general = (
+                col_norm in ['price', 'precio', 'importe', 'cifra', 'valor']
+                or any(t in col_norm for t in ['precio', 'price', 'importe'])
+            )
+            
+            if is_no_vat:
+                no_vat_price_col = col
+            elif is_vat:
+                vat_price_col = col
+            elif is_pvp:
+                pvp_price_col = col
+            elif is_general:
+                general_price_col = col
+                
+        # Si no hay columna explícita 'Sin IVA', pero sí una columna de precio general o única:
+        # En la comparativa, la métrica base universal entre competidores es siempre el Precio Sin IVA.
+        if not no_vat_price_col and general_price_col:
+            no_vat_price_col = general_price_col
+            general_price_col = None
                     
         # Limpieza de clave con normalización difusa (remueve espacios, guiones y barras)
         df = df.dropna(subset=[key_col])
@@ -3125,20 +3170,17 @@ async def merge_extractions(req: MergeRequest):
         
         provider_name = filename.replace('.csv', '').replace('.xlsx', '').replace('_', ' ').title()
         
-        # Detectar columnas de categoría y marca si existen
+        # Detectar columnas de categoría, marca y descripción si existen
         cat_src_col = next((c for c in df.columns if c.lower().strip() in ['tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']), None)
         brand_src_col = next((c for c in df.columns if c.lower().strip() in ['marca', 'brand']), None)
+        desc_src_col = next((c for c in df.columns if c.lower().strip() in ['descripción', 'descripcion', 'product', 'producto', 'articulo']), None)
         if cat_src_col and cat_src_col not in selected_cols:
             selected_cols.append(cat_src_col)
         if brand_src_col and brand_src_col not in selected_cols:
             selected_cols.append(brand_src_col)
+        if desc_src_col and desc_src_col not in selected_cols:
+            selected_cols.append(desc_src_col)
 
-        if general_price_col:
-            df['_price_clean'] = df[general_price_col].apply(lambda x: clean_price(str(x)) if pd.notnull(x) else 0.0)
-            col_name = f'Precio {provider_name} (€)'
-            rename_dict['_price_clean'] = col_name
-            selected_cols.append(col_name)
-            
         if no_vat_price_col:
             df['_price_no_vat_clean'] = df[no_vat_price_col].apply(lambda x: clean_price(str(x)) if pd.notnull(x) else 0.0)
             col_name_no_vat = f'Precio {provider_name} Sin IVA (€)'
@@ -3156,25 +3198,32 @@ async def merge_extractions(req: MergeRequest):
             col_name_pvp = f'Precio {provider_name} PVP (€)'
             rename_dict['_price_pvp_clean'] = col_name_pvp
             selected_cols.append(col_name_pvp)
+
+        if general_price_col:
+            df['_price_clean'] = df[general_price_col].apply(lambda x: clean_price(str(x)) if pd.notnull(x) else 0.0)
+            col_name = f'Precio {provider_name} (€)'
+            rename_dict['_price_clean'] = col_name
+            selected_cols.append(col_name)
             
         # Desduplicar de forma inteligente manteniendo el registro con más información
         df_clean = deduplicate_by_completeness(df, key_col)
         df_clean = df_clean.rename(columns=rename_dict)
         
         dfs.append((provider_name, df_clean[[c for c in selected_cols if c in df_clean.columns]], {
-            'has_general': general_price_col is not None,
             'has_no_vat': no_vat_price_col is not None,
             'has_vat': vat_price_col is not None,
-            'has_pvp': pvp_price_col is not None
+            'has_pvp': pvp_price_col is not None,
+            'has_general': general_price_col is not None
         }))
         
     if not dfs:
         raise HTTPException(status_code=400, detail="No se encontraron datos procesables en los archivos seleccionados")
         
-    # Obtener todas las claves únicas junto a categoría y marca
+    # Obtener todas las claves únicas junto a categoría, marca y descripción
     keys_dict = {}
     cat_dict = {}
     brand_dict = {}
+    desc_dict = {}
     for _, df, _ in dfs:
         for _, row in df.iterrows():
             k = row['_merge_key_clean']
@@ -3188,23 +3237,26 @@ async def merge_extractions(req: MergeRequest):
                 if b_col in row and pd.notnull(row[b_col]) and str(row[b_col]).strip() and k not in brand_dict:
                     brand_dict[k] = str(row[b_col]).strip()
                     break
+            for d_col in ['Descripción', 'descripcion', 'product', 'producto', 'articulo']:
+                if d_col in row and pd.notnull(row[d_col]) and str(row[d_col]).strip() and k not in desc_dict:
+                    desc_dict[k] = str(row[d_col]).strip()
+                    break
             
     merged_df = pd.DataFrame(list(keys_dict.items()), columns=['_merge_key_clean', key_col_title])
     
     # Inyectar Tipo de Aparato y Marca
-    config_now = load_config()
     def resolve_cat(row):
         k = row['_merge_key_clean']
         if k in cat_dict:
             return cat_dict[k]
-        p_str = str(row.get(key_col_title) or '')
-        return classify_product_category_and_gama(p_str, 0, config_now)[0] if p_str else 'Otros'
+        full_text = (str(row.get(key_col_title) or '') + ' ' + str(desc_dict.get(k, ''))).strip()
+        return classify_product_category(full_text) if full_text else 'Otros'
 
     def resolve_brand(row):
         k = row['_merge_key_clean']
         if k in brand_dict:
             return brand_dict[k]
-        p_str = (str(row.get(key_col_title) or '') + ' ' + str(k)).lower()
+        p_str = (str(row.get(key_col_title) or '') + ' ' + str(desc_dict.get(k, '')) + ' ' + str(k)).lower()
         for b in ["Balay", "Bosch", "Siemens", "Teka", "Beko", "LG", "Samsung", "Whirlpool", "Indesit", "Candy", "Haier", "Hisense", "Infiniton", "Newpol", "TCL", "Midea", "Zanussi", "AEG", "Electrolux"]:
             if b.lower() in p_str:
                 return b
@@ -3213,17 +3265,12 @@ async def merge_extractions(req: MergeRequest):
     merged_df.insert(1, 'Tipo de Aparato', merged_df.apply(resolve_cat, axis=1))
     merged_df.insert(2, 'Marca', merged_df.apply(resolve_brand, axis=1))
 
-    price_cols = []
     price_no_vat_cols = []
     price_vat_cols = []
     price_pvp_cols = []
+    price_cols = []
     
     for provider_name, df, flags in dfs:
-        if flags['has_general']:
-            col_name = f'Precio {provider_name} (€)'
-            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
-            price_cols.append(col_name)
-            
         if flags['has_no_vat']:
             col_name = f'Precio {provider_name} Sin IVA (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
@@ -3238,59 +3285,72 @@ async def merge_extractions(req: MergeRequest):
             col_name = f'Precio {provider_name} PVP (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
             price_pvp_cols.append(col_name)
+
+        if flags.get('has_general'):
+            col_name = f'Precio {provider_name} (€)'
+            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
+            price_cols.append(col_name)
             
     merged_df = merged_df.drop(columns=['_merge_key_clean'])
     
-    # Calcular diferencia / oportunidad por categoría de precio
-    def calculate_opportunity_for_cols(row, cols, label_suffix):
+    # Calcular diferencia / oportunidad estricta sobre el Precio Sin IVA
+    def calculate_opportunity_sin_iva(row, cols):
         prices = {}
         for col in cols:
-            val = row[col]
-            if pd.notnull(val) and val > 0:
-                prices[col] = val
+            val = row.get(col)
+            if pd.notnull(val):
+                p_clean = clean_price(str(val)) if not isinstance(val, (int, float)) else float(val)
+                if p_clean > 0:
+                    prices[col] = p_clean
                 
         if len(prices) == 0:
             return "Sin precios"
+            
         if len(prices) == 1:
-            prov = list(prices.keys())[0].replace('Precio ', '').replace(label_suffix, '').replace(' (€)', '').strip()
-            return f"Solo en {prov}"
+            prov = list(prices.keys())[0].replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
+            p_val = list(prices.values())[0]
+            return f"Solo en {prov} ({p_val:.2f} € Sin IVA)"
             
         sorted_prices = sorted(prices.items(), key=lambda x: x[1])
-        cheapest_provider, cheapest_price = sorted_prices[0]
-        second_provider, second_price = sorted_prices[1]
+        cheapest_col, cheapest_price = sorted_prices[0]
+        cheapest_name = cheapest_col.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
         
-        cheapest_name = cheapest_provider.replace('Precio ', '').replace(label_suffix, '').replace(' (€)', '').strip()
-        
-        if cheapest_price == second_price:
-            second_name = second_provider.replace('Precio ', '').replace(label_suffix, '').replace(' (€)', '').strip()
-            return f"Empate ({cheapest_name} = {second_name})"
+        # Comprobar si todos los precios son exactamente iguales
+        if all(p == cheapest_price for _, p in sorted_prices):
+            names = " = ".join([c.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip() for c, _ in sorted_prices])
+            return f"Empate ({names} a {cheapest_price:.2f} € Sin IVA)"
             
-        diff_pct = ((second_price - cheapest_price) / second_price) * 100
-        savings = second_price - cheapest_price
-        return f"🏆 {cheapest_name} (-{diff_pct:.1f}% | Ahorras {savings:.2f} €)"
+        second_col, second_price = sorted_prices[1]
+        second_name = second_col.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
         
-    if price_cols:
-        merged_df['Diferencia / Oportunidad'] = merged_df.apply(
-            lambda r: calculate_opportunity_for_cols(r, price_cols, ''), axis=1
-        )
-    if price_no_vat_cols:
-        merged_df['Diferencia / Oportunidad Sin IVA'] = merged_df.apply(
-            lambda r: calculate_opportunity_for_cols(r, price_no_vat_cols, 'Sin IVA'), axis=1
-        )
-    if price_vat_cols:
-        merged_df['Diferencia / Oportunidad Con IVA'] = merged_df.apply(
-            lambda r: calculate_opportunity_for_cols(r, price_vat_cols, 'Con IVA'), axis=1
-        )
-    if price_pvp_cols:
-        merged_df['Diferencia / Oportunidad PVP'] = merged_df.apply(
-            lambda r: calculate_opportunity_for_cols(r, price_pvp_cols, 'PVP'), axis=1
-        )
+        diff_money = second_price - cheapest_price
+        diff_pct_cheaper = (diff_money / second_price) * 100
+        diff_pct_expensive = (diff_money / cheapest_price) * 100
         
-    if not price_cols and not price_no_vat_cols and not price_vat_cols and not price_pvp_cols:
-        merged_df['Diferencia / Oportunidad'] = "Sin precios cargados"
+        if len(sorted_prices) == 2:
+            return f"🏆 {cheapest_name} más barato (-{diff_pct_cheaper:.1f}% | -{diff_money:.2f} €) — {second_name} va +{diff_money:.2f} € más caro (+{diff_pct_expensive:.1f}%)"
+            
+        # Si hay 3 o más proveedores
+        most_expensive_col, max_price = sorted_prices[-1]
+        most_expensive_name = most_expensive_col.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
+        max_diff = max_price - cheapest_price
+        max_pct = (max_diff / cheapest_price) * 100
+        
+        if second_price == max_price:
+            return f"🏆 {cheapest_name} más barato (-{diff_pct_cheaper:.1f}% | -{diff_money:.2f} €) — {most_expensive_name} va +{max_diff:.2f} € más caro (+{max_pct:.1f}%)"
+        else:
+            return f"🏆 {cheapest_name} más barato (-{diff_pct_cheaper:.1f}% | -{diff_money:.2f} € vs {second_name}) — {most_expensive_name} el más caro (+{max_diff:.2f} € | +{max_pct:.1f}%)"
+        
+    target_comp_cols = price_no_vat_cols if price_no_vat_cols else price_cols
+    if target_comp_cols:
+        merged_df['Diferencia / Oportunidad (Sin IVA)'] = merged_df.apply(
+            lambda r: calculate_opportunity_sin_iva(r, target_comp_cols), axis=1
+        )
+    else:
+        merged_df['Diferencia / Oportunidad (Sin IVA)'] = "Sin precios cargados"
 
     # Calcular la Gama por producto basándonos en los límites de precio de su categoría
-    all_p_cols = price_no_vat_cols + price_vat_cols + price_cols + price_pvp_cols
+    all_p_cols = price_no_vat_cols + price_cols + price_vat_cols + price_pvp_cols
     config_now = load_config()
 
     def get_row_gama(row):
