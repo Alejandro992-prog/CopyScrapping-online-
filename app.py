@@ -337,6 +337,26 @@ def load_config() -> Dict[str, Any]:
                 default_providers = json.load(sf)
         except Exception:
             pass
+    if not default_providers:
+        default_providers = [
+            {
+                "id": "electrolider",
+                "name": "Electrolider",
+                "regex": r"Balay\s+(?P<model>\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{4,25}\b)\s+(?P<product>[^\n]+?)\s+Carga\s+frontal\s+(?P<attributes>[^\n]+?)\s+Blanco\s+(?P<price_no_vat>\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp))\s+(?P<price_vat>\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp))\s+(?P<pvp>\d+(?:[.,\d]*\d+)?\s*(?:€|EUR|eur|usd|\$|GBP|gbp))",
+                "fields": ["model", "product", "attributes", "price_no_vat", "price_vat", "pvp"],
+                "output_file": "data/extractions/electrolider.csv",
+                "file_format": "csv",
+                "sample_text": "Balay 3TS3107BD lavadora Carga frontal 10 kg 1400 RPM Blanco 100€ 200€ 300€",
+                "labels": [
+                    {"name": "model", "start": 6, "end": 15, "text": "3TS3107BD"},
+                    {"name": "product", "start": 16, "end": 24, "text": "lavadora"},
+                    {"name": "attributes", "start": 39, "end": 53, "text": "10 kg 1400 RPM"},
+                    {"name": "price_no_vat", "start": 61, "end": 65, "text": "100€"},
+                    {"name": "price_vat", "start": 66, "end": 70, "text": "200€"},
+                    {"name": "pvp", "start": 71, "end": 75, "text": "300€"}
+                ]
+            }
+        ]
 
     if not os.path.exists(CONFIG_FILE):
         default_active = default_providers[0]["id"] if default_providers else None
@@ -1034,8 +1054,148 @@ def deduplicate_by_completeness(df: pd.DataFrame, model_col: str) -> pd.DataFram
     
     return pd.concat([df_clean, df_invalid], ignore_index=True)
 
+def classify_product_category(product_text: str) -> str:
+    """Identifica la categoría canónica o tipo de aparato a partir del texto descriptivo o modelo."""
+    if not product_text:
+        return "Otros"
+    text_lower = str(product_text).lower()
+    
+    try:
+        dict_data = load_dictionary()
+        categories_dict = dict_data.get("categorias", {})
+        for cat_name, info in categories_dict.items():
+            synonyms = info.get("sinonimos", [])
+            if any(syn in text_lower for syn in synonyms):
+                return cat_name
+    except Exception:
+        pass
+        
+    if any(k in text_lower for k in ["lavadora", "washer", "carga frontal", "carga superior"]):
+        return "Lavadora"
+    elif any(k in text_lower for k in ["secadora", "dryer"]):
+        return "Secadora"
+    elif any(k in text_lower for k in ["lavavajillas", "dishwasher", "lavaplatos"]):
+        return "Lavavajillas"
+    elif any(k in text_lower for k in ["combi", "frigorifico", "frigorífico", "frigo", "refrigerador"]):
+        return "Frigorífico Combi" if "combi" in text_lower else "Frigorífico"
+    elif any(k in text_lower for k in ["induccion", "inducción"]):
+        return "Placa Inducción"
+    elif any(k in text_lower for k in ["vitroceramica", "vitrocerámica", "vitro"]):
+        return "Placa Vitrocerámica"
+    elif any(k in text_lower for k in ["placa gas", "cristal gas", "butano"]):
+        return "Placa de Gas"
+    elif any(k in text_lower for k in ["horno", "oven"]):
+        return "Horno Pirolítico" if "pirolit" in text_lower else "Horno"
+    elif any(k in text_lower for k in ["microondas", "microwave"]):
+        return "Microondas"
+    elif any(k in text_lower for k in ["campana", "extractor"]):
+        return "Campana"
+    elif any(k in text_lower for k in ["televisor", "tv", "smart tv", "qled", "oled", "led"]):
+        return "Televisor"
+    return "Otros"
+
+UNIVERSAL_COLUMNS = [
+    'Tipo de Aparato',
+    'Marca',
+    'Modelo',
+    'Descripción',
+    'Atributos',
+    'Sin IVA (€)',
+    'Con IVA (€)',
+    'PVP (€)',
+    'Fecha'
+]
+
+def standardize_product_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza y mapea cualquier conjunto de columnas a la estructura universal estándar."""
+    if df.empty:
+        return pd.DataFrame(columns=UNIVERSAL_COLUMNS)
+
+    df = df.copy()
+
+    # Mapeo de sinónimos históricos hacia las columnas universales estándar
+    col_synonyms = {
+        'Tipo de Aparato': ['category', 'categoria', 'tipo_aparato', 'tipo', 'tipo de aparato', 'aparato'],
+        'Marca': ['brand', 'marca', 'fabricante'],
+        'Modelo': ['model', 'modelo', 'sku', 'ref', 'referencia', 'cod', 'codigo'],
+        'Descripción': ['product', 'producto', 'descripcion', 'descripción', 'nombre', 'articulo', 'artículo'],
+        'Atributos': ['attributes', 'atributos', 'spec', 'specs', 'caracteristicas', 'especificaciones'],
+        'Sin IVA (€)': ['price_no_vat', 'precio_sin_iva', 'sin_iva', 'sin iva', 'no_vat', 'neto', 'price_neto', 'pr', 'coste'],
+        'Con IVA (€)': ['price_vat', 'precio_con_iva', 'con_iva', 'con iva', 'vat', 'pv', 'pv_intermedio', 'venta_profesional'],
+        'PVP (€)': ['pvp', 'precio_pvp', 'pvp_alto', 'pvp_precio', 'precio_venta'],
+        'Fecha': ['timestamp', 'fecha', 'fecha_hora', 'datetime']
+    }
+
+    rename_dict = {}
+    existing_cols_lower = {str(c).strip().lower(): c for c in df.columns}
+
+    for target_col, synonyms in col_synonyms.items():
+        if target_col in df.columns:
+            continue
+        for syn in synonyms:
+            if syn in existing_cols_lower:
+                orig_col = existing_cols_lower[syn]
+                if orig_col not in rename_dict and orig_col not in UNIVERSAL_COLUMNS:
+                    rename_dict[orig_col] = target_col
+                    break
+
+    # Si hay columna genérica 'price' o 'precio' y falta 'Sin IVA (€)'
+    for gen_p in ['price', 'precio', 'importe']:
+        if gen_p in existing_cols_lower and 'Sin IVA (€)' not in df.columns and 'Sin IVA (€)' not in rename_dict.values():
+            orig_col = existing_cols_lower[gen_p]
+            if orig_col not in rename_dict and orig_col not in UNIVERSAL_COLUMNS:
+                rename_dict[orig_col] = 'Sin IVA (€)'
+
+    if rename_dict:
+        df = df.rename(columns=rename_dict)
+
+    # Autocompletar Tipo de Aparato y Marca si están vacíos a partir de Descripción y Modelo
+    for col in UNIVERSAL_COLUMNS:
+        if col not in df.columns:
+            df[col] = ''
+
+    def _fill_missing_cat(row):
+        val = str(row.get('Tipo de Aparato') or '').strip()
+        if not val or val.lower() in ['nan', 'none', '']:
+            text = str(row.get('Descripción') or '') + ' ' + str(row.get('Modelo') or '')
+            if text.strip():
+                return classify_product_category(text)
+            return 'Otros'
+        return val
+
+    def _fill_missing_brand(row):
+        val = str(row.get('Marca') or '').strip()
+        if not val or val.lower() in ['nan', 'none', '']:
+            text = (str(row.get('Descripción') or '') + ' ' + str(row.get('Modelo') or '')).lower()
+            for b in ["Balay", "Bosch", "Siemens", "Teka", "Beko", "LG", "Samsung", "Whirlpool", "Indesit", "Candy", "Haier", "Hisense", "Infiniton", "Newpol", "TCL", "Midea", "Zanussi", "AEG", "Electrolux", "Cecotec", "Xiaomi"]:
+                if b.lower() in text:
+                    return b
+            return ''
+        return val
+
+    df['Tipo de Aparato'] = df.apply(_fill_missing_cat, axis=1)
+    df['Marca'] = df.apply(_fill_missing_brand, axis=1)
+
+    # Formatear columnas de precios numéricos homogéneamente si vienen sin símbolo €
+    def _clean_price_val(v):
+        if pd.isna(v) or v is None or v == '':
+            return ''
+        s = str(v).strip()
+        num = clean_price(s)
+        if num > 0:
+            return f"{num:.2f} €".replace(".", ",")
+        return s
+
+    for p_col in ['Sin IVA (€)', 'Con IVA (€)', 'PVP (€)']:
+        if p_col in df.columns:
+            df[p_col] = df[p_col].apply(_clean_price_val)
+
+    # Mantener cualquier columna adicional que pudiera haber, pero poniendo las estándar al inicio
+    extra_cols = [c for c in df.columns if c not in UNIVERSAL_COLUMNS]
+    return df[UNIVERSAL_COLUMNS + extra_cols]
+
 def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], provider: Dict[str, Any], source_label: str = "portapapeles") -> int:
-    """Guarda un lote de productos extraídos en el archivo del proveedor con deduplicación por modelo."""
+    """Guarda un lote de productos extraídos en el archivo del proveedor con deduplicación por modelo y columnas estandarizadas."""
     if not extracted_data_list:
         return 0
     try:
@@ -1045,10 +1205,13 @@ def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], 
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
         for data in extracted_data_list:
-            if "timestamp" not in data:
-                data["timestamp"] = ts_now
+            if "timestamp" not in data and "Fecha" not in data:
+                data["Fecha"] = ts_now
+            elif "timestamp" in data and "Fecha" not in data:
+                data["Fecha"] = data["timestamp"]
 
         df_new = pd.DataFrame(extracted_data_list)
+        df_new = standardize_product_dataframe(df_new)
 
         if os.path.exists(filepath):
             try:
@@ -1056,24 +1219,30 @@ def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], 
                     df_existing = pd.read_excel(filepath)
                 else:
                     df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
+                df_existing = standardize_product_dataframe(df_existing)
                 df_combined = pd.concat([df_existing, df_new], ignore_index=True)
             except Exception:
                 df_combined = df_new
         else:
             df_combined = df_new
 
+        df_combined = standardize_product_dataframe(df_combined)
+
         model_col = find_model_column(df_combined.columns, provider.get("fields", []))
+        if not model_col and "Modelo" in df_combined.columns:
+            model_col = "Modelo"
         if model_col:
             df_combined = deduplicate_by_completeness(df_combined, model_col)
 
         if file_format == "xlsx":
             df_combined.to_excel(filepath, index=False)
+            format_excel_file(filepath)
         else:
             df_combined.to_csv(filepath, index=False, encoding='utf-8-sig')
 
         added_count = len(extracted_data_list)
         for data in extracted_data_list:
-            product_name = data.get("product") or data.get("producto") or list(data.values())[0]
+            product_name = data.get("Descripción") or data.get("Modelo") or data.get("product") or data.get("producto") or list(data.values())[0]
             add_log("success", f"Capturado y guardado: {product_name}", data)
 
         if added_count > 1:
@@ -1407,36 +1576,35 @@ def extract_products_with_gemini(image_bytes: bytes, mime_type: str, provider: D
     prompt = f"""
 Eres un asistente experto en visión artificial para extracción de catálogos comerciales, plataformas de distribución mayorista/B2B de electrodomésticos, albaranes, tickets y tablas de precios del sector '{provider_name}'.
 
-Analiza minuciosamente la imagen adjunta y extrae TODOS y cada uno de los productos o tarjetas visibles.
+Analiza minuciosamente la imagen adjunta y extrae TODOS y cada uno de los productos o tarjetas comerciales visibles.
+Debes estructurar cada producto obligatoriamente en las COLUMNAS UNIVERSALES ESTÁNDAR para permitir cruces y comparativas automáticas en Excel.
 
-REGLA FUNDAMENTAL DE PRECIOS (PVP, Pv, Pr):
-En estas fichas comerciales suelen figurar hasta 3 precios distintos:
-1. 'Pr': Precio de compra neto / coste sin IVA. Es SIEMPRE el importe MÁS BAJO / MENOR de todos los precios de la tarjeta (ej: 241,46 € o 274,92 €).
-2. 'Pv': Precio intermedio de venta o profesional (ej: 365,21 €).
-3. 'PVP': Precio Venta al Público recomendado (el importe MÁS ALTO de los tres, ej: 423,62 €).
-
-Para cada producto extrae obligatoriamente:
-- "product": nombre descriptivo completo del artículo (ej: 'Induccion Balay 3EB865XR')
-- "model": código de modelo exacto, referencia, SKU o código de fabricante (ej: '3EB865XR', '3EB965LR')
-- "price_neto": el precio NETO SIN IVA (el valor de 'Pr', es decir, la cifra MÁS BAJA de toda la ficha)
-- "pv_intermedio": el precio de venta intermedio ('Pv')
-- "pvp_alto": el precio de venta al público recomendado ('PVP', el más alto)
-- "all_prices": lista con todos los importes de precio que figuren en la ficha
-- "attributes": características técnicas relevantes (ej: '3 zonas, Inox', 'XL 28cm, 7,4kW')
-
-Campos esperados por el usuario: [{fields_desc}]
+DIRECTRICES INTERNAS DE CLASIFICACIÓN Y EXTRACCIÓN:
+1. "category" (Tipo de Aparato): Identifica exactamente qué electrodoméstico es:
+   Ejemplos canónicos: 'Lavadora', 'Secadora', 'Lavavajillas', 'Frigorífico Combi', 'Frigorífico Americano', 'Placa Inducción', 'Placa de Gas', 'Horno Pirolítico', 'Horno Multifunción', 'Microondas', 'Campana', 'Televisor', 'Otros'.
+2. "brand" (Marca): Marca del fabricante (ej: 'Balay', 'Bosch', 'LG', 'Samsung', 'Beko', 'Teka', 'Infiniton', 'Siemens', 'TCL', 'Midea', 'AEG', etc.). Si no está explícita, dedúcela del modelo o descripción.
+3. "model" (Modelo / SKU - Clave de cruce): La referencia técnica exacta y limpia de fábrica (ej: '3TS994BT', 'KGN39VWEA', 'TQ55Q60D', '3EB865XR'). NUNCA lo dejes vacío si existe un código ni incluyas texto publicitario en él.
+4. "description" (Descripción / Producto): Nombre comercial descriptivo limpio sin ruido de marketing (ej: 'Lavadora de carga frontal 9kg', 'Frigorífico Combi No Frost').
+5. "attributes" (Atributos): Especificaciones técnicas clave (ej: '9 kg, 1400 rpm, Clase A, Blanco', '203x60 cm, Inox').
+6. PRECIOS (Normalizados en euros con 2 decimales):
+   - "price_no_vat" (Sin IVA (€)): Precio de compra neto / coste sin IVA (el valor MÁS BAJO de la ficha / 'Pr', ej: '329,75 €').
+   - "price_vat" (Con IVA (€)): Precio intermedio con IVA o venta profesional ('Pv', ej: '399,00 €').
+   - "pvp" (PVP (€)): Precio Venta al Público recomendado o precio tachado más alto ('PVP', ej: '549,00 €').
+   - "all_prices": lista con todas las cifras de precio encontradas en la ficha.
 
 Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto previo ni markdown envolvente:
 {{
   "productos": [
     {{
-      "product": "Nombre descriptivo",
-      "model": "Modelo",
-      "price_neto": "Precio neto sin IVA (el más bajo)",
-      "pv_intermedio": "Precio intermedio",
-      "pvp_alto": "PVP más alto",
-      "all_prices": ["...", "..."],
-      "attributes": "Atributos o especificaciones"
+      "category": "Tipo de electrodoméstico",
+      "brand": "Marca",
+      "model": "Modelo / SKU exacto de fábrica",
+      "description": "Descripción comercial limpia",
+      "attributes": "Atributos o especificaciones",
+      "price_no_vat": "Precio neto sin IVA (el más bajo)",
+      "price_vat": "Precio intermedio con IVA",
+      "pvp": "PVP recomendado más alto",
+      "all_prices": ["...", "..."]
     }}
   ]
 }}
@@ -1505,9 +1673,6 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             return s
 
         structured_items = []
-        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva", "neto", "pr"}
-        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pv"}
-        pvp_terms = {"pvp", "precio_pvp", "preciopvp", "p_pvp"}
 
         for raw in raw_items:
             if not isinstance(raw, dict):
@@ -1520,9 +1685,9 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             # Recopilar todos los importes numéricos encontrados en la ficha
             candidates = []
             for p_candidate in [
-                raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
-                raw.get("price"), raw.get("precio"), raw.get("pv_intermedio"), raw.get("pv"),
-                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp_alto"), raw.get("pvp")
+                raw.get("price_no_vat"), raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
+                raw.get("price"), raw.get("precio"), raw.get("price_vat"), raw.get("pv_intermedio"), raw.get("pv"),
+                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp"), raw.get("pvp_alto")
             ]:
                 if p_candidate:
                     p_num = clean_price(str(p_candidate))
@@ -1537,10 +1702,6 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 
             candidates.sort(key=lambda x: x[0])
             
-            # Asignación jerárquica estricta:
-            # p_lowest = El importe menor (Pr / Neto sin IVA)
-            # p_middle = El intermedio (Pv)
-            # p_highest = El mayor (PVP)
             if candidates:
                 p_lowest = candidates[0][1]
                 p_middle = candidates[1][1] if len(candidates) >= 2 else p_lowest
@@ -1550,33 +1711,40 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
                 p_middle = p_lowest
                 p_highest = p_lowest
 
-            if expected_fields:
-                for field in expected_fields:
-                    f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
-                    if any(term in f_norm for term in ["product", "producto", "nombre", "articulo", "desc"]):
-                        item[field] = str(raw.get("product") or raw.get("producto") or "").strip()
-                    elif any(term in f_norm for term in ["model", "modelo", "sku", "ref", "referencia", "cod"]):
-                        item[field] = str(raw.get("model") or raw.get("modelo") or "").strip()
-                    elif any(term in f_norm for term in ["attribute", "atributo", "spec", "caracteristica"]):
-                        item[field] = str(raw_attr).strip()
-                    elif any(term in f_norm for term in pvp_terms):
-                        item[field] = p_highest
-                    elif any(term in f_norm for term in no_vat_terms):
-                        item[field] = p_lowest
-                    elif any(term in f_norm for term in vat_terms) and not any(nv in f_norm for nv in ["novat", "siniva"]):
-                        item[field] = p_middle
-                    elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
-                        # Por defecto el campo principal de precio siempre almacena el neto sin IVA (menor valor)
-                        item[field] = p_lowest
-                    else:
-                        item[field] = str(raw.get(field, "")).strip()
-            else:
-                item = {
-                    "Producto": str(raw.get("product") or raw.get("producto") or "").strip(),
-                    "Modelo": str(raw.get("model") or raw.get("modelo") or "").strip(),
-                    "Precio": p_lowest,
-                    "Atributos": str(raw_attr).strip()
-                }
+            # Extraer y asegurar category y brand canónicos
+            cat_val = str(raw.get("category") or raw.get("categoria") or "").strip()
+            desc_val = str(raw.get("description") or raw.get("descripcion") or raw.get("product") or raw.get("producto") or "").strip()
+            model_val = str(raw.get("model") or raw.get("modelo") or raw.get("sku") or "").strip()
+
+            if not cat_val:
+                cat_val = classify_product_category_and_gama(desc_val + " " + model_val, 0)[0] if (desc_val or model_val) else "Otros"
+
+            brand_val = str(raw.get("brand") or raw.get("marca") or "").strip()
+            if not brand_val:
+                for b in ["Balay", "Bosch", "Siemens", "Teka", "Beko", "LG", "Samsung", "Whirlpool", "Indesit", "Candy", "Haier", "Hisense", "Infiniton", "Newpol", "TCL", "Midea", "Zanussi", "AEG", "Electrolux", "Cecotec", "Xiaomi"]:
+                    if b.lower() in (desc_val + " " + model_val).lower():
+                        brand_val = b
+                        break
+
+            # 1. Asignar columnas universales estándar
+            item["Tipo de Aparato"] = cat_val
+            item["Marca"] = brand_val
+            item["Modelo"] = model_val
+            item["Descripción"] = desc_val
+            item["Atributos"] = str(raw_attr).strip()
+            item["Sin IVA (€)"] = p_lowest
+            item["Con IVA (€)"] = p_middle
+            item["PVP (€)"] = p_highest
+
+            # 2. Claves de compatibilidad interna
+            item["product"] = desc_val
+            item["model"] = model_val
+            item["category"] = cat_val
+            item["brand"] = brand_val
+            item["price_no_vat"] = p_lowest
+            item["price_vat"] = p_middle
+            item["pvp"] = p_highest
+            item["attributes"] = str(raw_attr).strip()
 
             normalize_and_reorder_product_prices(item)
             structured_items.append(item)
@@ -1618,19 +1786,20 @@ def extract_products_from_text_with_gemini(text: str, provider: Dict[str, Any]) 
 
 Analiza minuciosamente el siguiente texto plano copiado de una web comercial, ficha técnica o catálogo de productos.
 Debes identificar y extraer con la máxima fidelidad TODOS y cada uno de los productos comerciales que aparezcan.
+Cada producto debe dividirse obligatoriamente en estas COLUMNAS UNIVERSALES ESTÁNDAR para cruce y comparativas en Excel:
 
-REGLA DE PRECIOS (Neto / Pr, Pv, PVP):
-- 'price_neto': Precio de compra neto o precio sin IVA (el importe MÁS BAJO de la ficha, ej: 241,46 € o 241.46).
-- 'pv_intermedio': Precio intermedio con IVA o profesional (ej: 292,17 €).
-- 'pvp_alto': Precio de venta al público recomendado o el precio mayor/tachado (ej: 349,00 €).
-- 'all_prices': Lista con todos los valores numéricos de precio que figuren para ese producto.
-
-REGLA DE MODELO Y PRODUCTO:
-- 'model': Código o referencia técnica EXACTA del fabricante/SKU (ej: '3TS994BT', 'KGN39VWEA', 'TQ55Q60D', 'WGG2440XES'). NUNCA lo dejes vacío si hay un código.
-- 'product': Nombre descriptivo completo del artículo (ej: 'Lavadora carga frontal Balay', 'Frigorífico Combi Bosch').
-- 'attributes': Especificaciones o atributos clave (ej: '9 kg, 1400 rpm, Clase A, Blanco', 'No Frost, 203 cm, Inox').
-
-Campos esperados por el sistema: [{fields_desc}]
+DIRECTRICES INTERNAS DE EXTRACCIÓN Y CLASIFICACIÓN:
+1. "category" (Tipo de Aparato): Identifica exactamente qué electrodoméstico es:
+   Ejemplos canónicos: 'Lavadora', 'Secadora', 'Lavavajillas', 'Frigorífico Combi', 'Frigorífico Americano', 'Placa Inducción', 'Placa de Gas', 'Horno Pirolítico', 'Horno Multifunción', 'Microondas', 'Campana', 'Televisor', 'Otros'.
+2. "brand" (Marca): Marca del fabricante (ej: 'Balay', 'Bosch', 'LG', 'Samsung', 'Beko', 'Teka', 'Siemens', 'Infiniton', 'TCL', 'Midea', 'AEG', etc.). Si no está explícita, dedúcela del modelo o descripción.
+3. "model" (Modelo / SKU - Clave de cruce): La referencia técnica exacta y limpia de fábrica (ej: '3TS994BT', 'KGN39VWEA', 'TQ55Q60D', 'WGG2440XES'). NUNCA lo dejes vacío si existe un código.
+4. "description" (Descripción / Producto): Nombre comercial descriptivo limpio sin ruido de marketing (ej: 'Lavadora de carga frontal 9kg', 'Frigorífico Combi No Frost').
+5. "attributes" (Atributos): Especificaciones clave (ej: '9 kg, 1400 rpm, Clase A, Blanco', 'No Frost, 203 cm, Inox').
+6. REGLA DE PRECIOS (Normalizados en euros con 2 decimales):
+   - "price_no_vat" (Sin IVA (€)): Precio de compra neto o precio sin IVA (el importe MÁS BAJO de la ficha, ej: '329,75 €').
+   - "price_vat" (Con IVA (€)): Precio intermedio con IVA o profesional (ej: '399,00 €').
+   - "pvp" (PVP (€)): Precio de venta al público recomendado o el precio mayor/tachado (ej: '549,00 €').
+   - "all_prices": Lista con todos los valores numéricos de precio que figuren para ese producto.
 
 Texto a analizar:
 \"\"\"
@@ -1641,13 +1810,15 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 {{
   "productos": [
     {{
-      "product": "Nombre descriptivo",
+      "category": "Tipo de electrodoméstico",
+      "brand": "Marca",
       "model": "Código de modelo exacto",
-      "price_neto": "Precio neto o menor",
-      "pv_intermedio": "Precio intermedio",
-      "pvp_alto": "PVP más alto",
-      "all_prices": ["...", "..."],
-      "attributes": "Atributos o especificaciones"
+      "description": "Nombre comercial limpio",
+      "attributes": "Atributos o especificaciones",
+      "price_no_vat": "Precio neto sin IVA (el menor)",
+      "price_vat": "Precio intermedio con IVA",
+      "pvp": "PVP más alto",
+      "all_prices": ["...", "..."]
     }}
   ]
 }}
@@ -1710,9 +1881,6 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             return s
 
         structured_items = []
-        no_vat_terms = {"siniva", "no_vat", "novat", "sin_iva", "pricesiniva", "preciosiniva", "p_sin_iva", "neto", "pr"}
-        vat_terms = {"coniva", "vat", "con_iva", "pricevat", "precioconiva", "p_con_iva", "pv"}
-        pvp_terms = {"pvp", "precio_pvp", "preciopvp", "p_pvp"}
 
         for raw in raw_items:
             if not isinstance(raw, dict):
@@ -1724,9 +1892,9 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 
             candidates = []
             for p_cand in [
-                raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
-                raw.get("price"), raw.get("precio"), raw.get("pv_intermedio"), raw.get("pv"),
-                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp_alto"), raw.get("pvp")
+                raw.get("price_no_vat"), raw.get("price_neto"), raw.get("pr"), raw.get("price_sin_iva"), raw.get("precio_sin_iva"),
+                raw.get("price"), raw.get("precio"), raw.get("price_vat"), raw.get("pv_intermedio"), raw.get("pv"),
+                raw.get("price_con_iva"), raw.get("precio_con_iva"), raw.get("pvp"), raw.get("pvp_alto")
             ]:
                 if p_cand:
                     p_num = clean_price(str(p_cand))
@@ -1750,35 +1918,43 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
                 p_middle = p_lowest
                 p_highest = p_lowest
 
-            if expected_fields:
-                for field in expected_fields:
-                    f_norm = re.sub(r'[^a-z0-9]', '', field.lower())
-                    if any(term in f_norm for term in ["product", "producto", "nombre", "articulo", "desc"]):
-                        item[field] = str(raw.get("product") or raw.get("producto") or "").strip()
-                    elif any(term in f_norm for term in ["model", "modelo", "sku", "ref", "referencia", "cod"]):
-                        item[field] = str(raw.get("model") or raw.get("modelo") or "").strip()
-                    elif any(term in f_norm for term in ["attribute", "atributo", "spec", "caracteristica"]):
-                        item[field] = str(raw_attr).strip()
-                    elif any(term in f_norm for term in pvp_terms):
-                        item[field] = p_highest
-                    elif any(term in f_norm for term in no_vat_terms):
-                        item[field] = p_lowest
-                    elif any(term in f_norm for term in vat_terms) and not any(nv in f_norm for nv in ["novat", "siniva"]):
-                        item[field] = p_middle
-                    elif any(term in f_norm for term in ["price", "precio", "importe", "coste", "eur"]):
-                        item[field] = p_lowest
-                    else:
-                        item[field] = str(raw.get(field, "")).strip()
-            else:
-                item = {
-                    "product": str(raw.get("product") or raw.get("producto") or "").strip(),
-                    "model": str(raw.get("model") or raw.get("modelo") or "").strip(),
-                    "pvp": p_highest or p_lowest,
-                    "attributes": str(raw_attr).strip()
-                }
+            # Extraer y asegurar category y brand canónicos
+            cat_val = str(raw.get("category") or raw.get("categoria") or "").strip()
+            desc_val = str(raw.get("description") or raw.get("descripcion") or raw.get("product") or raw.get("producto") or "").strip()
+            model_val = str(raw.get("model") or raw.get("modelo") or raw.get("sku") or "").strip()
+
+            if not cat_val:
+                cat_val = classify_product_category_and_gama(desc_val + " " + model_val, 0)[0] if (desc_val or model_val) else "Otros"
+
+            brand_val = str(raw.get("brand") or raw.get("marca") or "").strip()
+            if not brand_val:
+                for b in ["Balay", "Bosch", "Siemens", "Teka", "Beko", "LG", "Samsung", "Whirlpool", "Indesit", "Candy", "Haier", "Hisense", "Infiniton", "Newpol", "TCL", "Midea", "Zanussi", "AEG", "Electrolux", "Cecotec", "Xiaomi"]:
+                    if b.lower() in (desc_val + " " + model_val).lower():
+                        brand_val = b
+                        break
+
+            # 1. Asignar columnas universales estándar
+            item["Tipo de Aparato"] = cat_val
+            item["Marca"] = brand_val
+            item["Modelo"] = model_val
+            item["Descripción"] = desc_val
+            item["Atributos"] = str(raw_attr).strip()
+            item["Sin IVA (€)"] = p_lowest
+            item["Con IVA (€)"] = p_middle
+            item["PVP (€)"] = p_highest
+
+            # 2. Claves de compatibilidad interna
+            item["product"] = desc_val
+            item["model"] = model_val
+            item["category"] = cat_val
+            item["brand"] = brand_val
+            item["price_no_vat"] = p_lowest
+            item["price_vat"] = p_middle
+            item["pvp"] = p_highest
+            item["attributes"] = str(raw_attr).strip()
 
             normalize_and_reorder_product_prices(item)
-            if item.get("model") or item.get("modelo") or item.get("product") or item.get("producto"):
+            if item.get("Modelo") or item.get("model") or item.get("Descripción") or item.get("product"):
                 structured_items.append(item)
 
         return {
@@ -2340,7 +2516,7 @@ async def get_provider_data(provider_id: str):
         
     filepath = get_provider_filepath(provider)
     if not os.path.exists(filepath):
-        return {"columns": provider.get("fields", []) + ["timestamp"], "records": []}
+        return {"columns": UNIVERSAL_COLUMNS, "records": []}
         
     try:
         file_format = provider.get("file_format", "csv")
@@ -2348,9 +2524,14 @@ async def get_provider_data(provider_id: str):
             df = pd.read_excel(filepath)
         else:
             df = pd.read_csv(filepath, encoding='utf-8-sig')
+
+        # Estandarizar columnas a la estructura universal
+        df = standardize_product_dataframe(df)
             
         # Deduplicación al vuelo para limpiar cualquier duplicado residual en el archivo físico
         model_col = find_model_column(df.columns, provider.get("fields", []))
+        if not model_col and "Modelo" in df.columns:
+            model_col = "Modelo"
         if model_col:
             df_clean = deduplicate_by_completeness(df, model_col)
             if len(df_clean) < len(df):
@@ -2358,6 +2539,7 @@ async def get_provider_data(provider_id: str):
                 # Guardar el archivo de datos limpio de vuelta
                 if file_format == "xlsx":
                     df.to_excel(filepath, index=False)
+                    format_excel_file(filepath)
                 else:
                     df.to_csv(filepath, index=False, encoding='utf-8-sig')
             
@@ -2937,11 +3119,20 @@ async def merge_extractions(req: MergeRequest):
         df = df[~df['_merge_key_clean'].isin(['', 'nan', 'none'])]
         
         # Limpieza de precios si existen
-        rename_dict = {key_col: 'Producto / Modelo'}
-        selected_cols = ['_merge_key_clean', 'Producto / Modelo']
+        key_col_title = 'Modelo' if any(m in req.merge_key.lower() for m in ['model', 'sku', 'ref']) else ('Descripción' if any(p in req.merge_key.lower() for p in ['product', 'desc']) else 'Producto / Modelo')
+        rename_dict = {key_col: key_col_title}
+        selected_cols = ['_merge_key_clean', key_col_title]
         
         provider_name = filename.replace('.csv', '').replace('.xlsx', '').replace('_', ' ').title()
         
+        # Detectar columnas de categoría y marca si existen
+        cat_src_col = next((c for c in df.columns if c.lower().strip() in ['tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']), None)
+        brand_src_col = next((c for c in df.columns if c.lower().strip() in ['marca', 'brand']), None)
+        if cat_src_col and cat_src_col not in selected_cols:
+            selected_cols.append(cat_src_col)
+        if brand_src_col and brand_src_col not in selected_cols:
+            selected_cols.append(brand_src_col)
+
         if general_price_col:
             df['_price_clean'] = df[general_price_col].apply(lambda x: clean_price(str(x)) if pd.notnull(x) else 0.0)
             col_name = f'Precio {provider_name} (€)'
@@ -2970,7 +3161,7 @@ async def merge_extractions(req: MergeRequest):
         df_clean = deduplicate_by_completeness(df, key_col)
         df_clean = df_clean.rename(columns=rename_dict)
         
-        dfs.append((provider_name, df_clean[selected_cols], {
+        dfs.append((provider_name, df_clean[[c for c in selected_cols if c in df_clean.columns]], {
             'has_general': general_price_col is not None,
             'has_no_vat': no_vat_price_col is not None,
             'has_vat': vat_price_col is not None,
@@ -2980,36 +3171,70 @@ async def merge_extractions(req: MergeRequest):
     if not dfs:
         raise HTTPException(status_code=400, detail="No se encontraron datos procesables en los archivos seleccionados")
         
-    # Obtener todas las claves únicas
+    # Obtener todas las claves únicas junto a categoría y marca
     keys_dict = {}
+    cat_dict = {}
+    brand_dict = {}
     for _, df, _ in dfs:
         for _, row in df.iterrows():
-            keys_dict[row['_merge_key_clean']] = row['Producto / Modelo']
+            k = row['_merge_key_clean']
+            if k not in keys_dict:
+                keys_dict[k] = row[key_col_title]
+            for c_col in ['Tipo de Aparato', 'tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']:
+                if c_col in row and pd.notnull(row[c_col]) and str(row[c_col]).strip() and k not in cat_dict:
+                    cat_dict[k] = str(row[c_col]).strip()
+                    break
+            for b_col in ['Marca', 'marca', 'brand']:
+                if b_col in row and pd.notnull(row[b_col]) and str(row[b_col]).strip() and k not in brand_dict:
+                    brand_dict[k] = str(row[b_col]).strip()
+                    break
             
-    merged_df = pd.DataFrame(list(keys_dict.items()), columns=['_merge_key_clean', 'Producto / Modelo'])
+    merged_df = pd.DataFrame(list(keys_dict.items()), columns=['_merge_key_clean', key_col_title])
     
+    # Inyectar Tipo de Aparato y Marca
+    config_now = load_config()
+    def resolve_cat(row):
+        k = row['_merge_key_clean']
+        if k in cat_dict:
+            return cat_dict[k]
+        p_str = str(row.get(key_col_title) or '')
+        return classify_product_category_and_gama(p_str, 0, config_now)[0] if p_str else 'Otros'
+
+    def resolve_brand(row):
+        k = row['_merge_key_clean']
+        if k in brand_dict:
+            return brand_dict[k]
+        p_str = (str(row.get(key_col_title) or '') + ' ' + str(k)).lower()
+        for b in ["Balay", "Bosch", "Siemens", "Teka", "Beko", "LG", "Samsung", "Whirlpool", "Indesit", "Candy", "Haier", "Hisense", "Infiniton", "Newpol", "TCL", "Midea", "Zanussi", "AEG", "Electrolux"]:
+            if b.lower() in p_str:
+                return b
+        return ''
+
+    merged_df.insert(1, 'Tipo de Aparato', merged_df.apply(resolve_cat, axis=1))
+    merged_df.insert(2, 'Marca', merged_df.apply(resolve_brand, axis=1))
+
     price_cols = []
     price_no_vat_cols = []
     price_vat_cols = []
     price_pvp_cols = []
     
-    for provider_name, df, col_flags in dfs:
-        if col_flags['has_general']:
+    for provider_name, df, flags in dfs:
+        if flags['has_general']:
             col_name = f'Precio {provider_name} (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
             price_cols.append(col_name)
             
-        if col_flags['has_no_vat']:
+        if flags['has_no_vat']:
             col_name = f'Precio {provider_name} Sin IVA (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
             price_no_vat_cols.append(col_name)
             
-        if col_flags['has_vat']:
+        if flags['has_vat']:
             col_name = f'Precio {provider_name} Con IVA (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
             price_vat_cols.append(col_name)
             
-        if col_flags.get('has_pvp'):
+        if flags.get('has_pvp'):
             col_name = f'Precio {provider_name} PVP (€)'
             merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
             price_pvp_cols.append(col_name)
@@ -3038,10 +3263,11 @@ async def merge_extractions(req: MergeRequest):
         
         if cheapest_price == second_price:
             second_name = second_provider.replace('Precio ', '').replace(label_suffix, '').replace(' (€)', '').strip()
-            return f"{cheapest_name} empata con {second_name}"
+            return f"Empate ({cheapest_name} = {second_name})"
             
         diff_pct = ((second_price - cheapest_price) / second_price) * 100
-        return f"{cheapest_name} ({diff_pct:.1f}% más barato)"
+        savings = second_price - cheapest_price
+        return f"🏆 {cheapest_name} (-{diff_pct:.1f}% | Ahorras {savings:.2f} €)"
         
     if price_cols:
         merged_df['Diferencia / Oportunidad'] = merged_df.apply(

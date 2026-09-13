@@ -31,6 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnClearCaptures = document.getElementById("btn-clear-captures");
     const btnPasteClipboard = document.getElementById("btn-paste-clipboard");
     const btnExtractTextAi = document.getElementById("btn-extract-text-ai");
+    const btnModeGemini = document.getElementById("btn-mode-gemini");
+    const btnModeRegex = document.getElementById("btn-mode-regex");
+    const clipboardModeBadge = document.getElementById("clipboard-mode-badge");
+    const clipboardModeDesc = document.getElementById("clipboard-mode-desc");
     const pasteInputArea = document.getElementById("paste-input-area");
     const imageOcrDropzone = document.getElementById("image-ocr-dropzone");
     const imageFileInput = document.getElementById("image-file-input");
@@ -531,24 +535,41 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function translateKey(key) {
         const mappings = {
-            "product": "Producto",
-            "producto": "Producto",
+            "Tipo de Aparato": "Tipo de Aparato",
+            "Marca": "Marca",
+            "Modelo": "Modelo / SKU",
+            "Descripción": "Descripción / Producto",
+            "Atributos": "Atributos Técnicos",
+            "Sin IVA (€)": "Sin IVA (€)",
+            "Con IVA (€)": "Con IVA (€)",
+            "PVP (€)": "PVP (€)",
+            "Fecha": "Fecha / Hora",
+            "category": "Tipo de Aparato",
+            "categoria": "Tipo de Aparato",
+            "tipo_aparato": "Tipo de Aparato",
+            "tipo": "Tipo de Aparato",
+            "brand": "Marca",
+            "marca": "Marca",
+            "product": "Descripción",
+            "producto": "Descripción",
+            "descripcion": "Descripción",
             "model": "Modelo / SKU",
             "modelo": "Modelo / SKU",
-            "price": "Precio",
-            "precio": "Precio",
-            "price_no_vat": "Precio Sin IVA",
-            "precio_sin_iva": "Precio Sin IVA",
-            "sin_iva": "Precio Sin IVA",
-            "no_vat": "Precio Sin IVA",
-            "price_vat": "Precio Con IVA",
-            "precio_con_iva": "Precio Con IVA",
-            "con_iva": "Precio Con IVA",
-            "vat": "Precio Con IVA",
-            "pvp": "PVP",
-            "precio_pvp": "PVP",
+            "price": "Sin IVA (€)",
+            "precio": "Sin IVA (€)",
+            "price_no_vat": "Sin IVA (€)",
+            "precio_sin_iva": "Sin IVA (€)",
+            "sin_iva": "Sin IVA (€)",
+            "no_vat": "Sin IVA (€)",
+            "price_vat": "Con IVA (€)",
+            "precio_con_iva": "Con IVA (€)",
+            "con_iva": "Con IVA (€)",
+            "vat": "Con IVA (€)",
+            "pvp": "PVP (€)",
+            "precio_pvp": "PVP (€)",
             "attributes": "Atributos Técnicos",
-            "atributos": "Atributos Técnicos"
+            "atributos": "Atributos Técnicos",
+            "timestamp": "Fecha / Hora"
         };
         return mappings[key] || key;
     }
@@ -576,7 +597,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/providers/${activeProviderId}/data`);
             if (!res.ok) {
                 recentCapturesBody.innerHTML = `<tr><td class="table-empty" colspan="100%">El archivo de extracción aún no existe. Comienza a copiar datos para crearlo.</td></tr>`;
-                recentCapturesHeaders.innerHTML = `<th>Producto / Modelo</th><th>Precio</th><th>Atributos</th><th>Fecha</th><th>Acciones</th>`;
+                recentCapturesHeaders.innerHTML = `<th>Tipo de Aparato</th><th>Marca</th><th>Modelo</th><th>Descripción</th><th>Atributos</th><th>Sin IVA (€)</th><th>Con IVA (€)</th><th>PVP (€)</th><th>Fecha</th><th>Acciones</th>`;
                 btnClearCaptures.style.display = "none";
                 btnDownloadRaw.style.display = "none";
                 return;
@@ -587,7 +608,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 // Render headers
                 recentCapturesHeaders.innerHTML = "";
                 data.columns.forEach(col => {
-                    if (col.toLowerCase() === 'pvp' || col.toLowerCase() === 'precio_pvp') return;
                     const th = document.createElement("th");
                     th.textContent = translateKey(col);
                     recentCapturesHeaders.appendChild(th);
@@ -611,9 +631,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     displayData.forEach(row => {
                         const tr = document.createElement("tr");
                         data.columns.forEach(col => {
-                            if (col.toLowerCase() === 'pvp' || col.toLowerCase() === 'precio_pvp') return;
                             const td = document.createElement("td");
-                            td.textContent = row[col] !== null ? row[col] : "";
+                            td.textContent = row[col] !== null && row[col] !== undefined ? row[col] : "";
                             tr.appendChild(td);
                         });
                         
@@ -1712,33 +1731,178 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Auto-read clipboard when tab/window recovers focus
+    // ----------------------------------------------------
+    // SELECTOR DE MODO DE PORTAPAPELES (IA vs REGEX)
+    // ----------------------------------------------------
+    let currentClipboardMode = localStorage.getItem("garde_clipboard_mode") || "gemini";
+
+    function updateClipboardModeUI() {
+        if (currentClipboardMode === "gemini") {
+            if (btnModeGemini) {
+                btnModeGemini.style.background = "#4f46e5";
+                btnModeGemini.style.color = "#ffffff";
+                btnModeGemini.style.fontWeight = "600";
+            }
+            if (btnModeRegex) {
+                btnModeRegex.style.background = "transparent";
+                btnModeRegex.style.color = "var(--text-muted)";
+                btnModeRegex.style.fontWeight = "500";
+            }
+            if (clipboardModeBadge) {
+                clipboardModeBadge.textContent = "🤖 Modo: IA Gemini";
+                clipboardModeBadge.className = "badge badge-success";
+            }
+            if (clipboardModeDesc) {
+                clipboardModeDesc.innerHTML = "✨ <strong>Modo IA Activo:</strong> El monitoreo automático y las capturas extraerán <em>Tipo de Aparato, Marca, Modelo, Descripción y Precios</em> estándar para comparar en Excel.";
+                clipboardModeDesc.style.borderLeftColor = "#6366f1";
+                clipboardModeDesc.style.color = "#c7d2fe";
+            }
+            if (btnExtractTextAi) {
+                btnExtractTextAi.className = "btn btn-primary";
+            }
+            if (btnPasteClipboard) {
+                btnPasteClipboard.className = "btn btn-secondary";
+            }
+        } else {
+            if (btnModeGemini) {
+                btnModeGemini.style.background = "transparent";
+                btnModeGemini.style.color = "var(--text-muted)";
+                btnModeGemini.style.fontWeight = "500";
+            }
+            if (btnModeRegex) {
+                btnModeRegex.style.background = "#0284c7";
+                btnModeRegex.style.color = "#ffffff";
+                btnModeRegex.style.fontWeight = "600";
+            }
+            if (clipboardModeBadge) {
+                clipboardModeBadge.textContent = "🎯 Modo: Plantilla Regex";
+                clipboardModeBadge.className = "badge badge-info";
+            }
+            if (clipboardModeDesc) {
+                clipboardModeDesc.innerHTML = "🎯 <strong>Modo Regex Activo:</strong> El monitoreo automático y las capturas aplicarán la regla regex y etiquetas específicas configuradas para esta tienda.";
+                clipboardModeDesc.style.borderLeftColor = "#0284c7";
+                clipboardModeDesc.style.color = "#bae6fd";
+            }
+            if (btnExtractTextAi) {
+                btnExtractTextAi.className = "btn btn-secondary";
+            }
+            if (btnPasteClipboard) {
+                btnPasteClipboard.className = "btn btn-primary";
+            }
+        }
+    }
+
+    if (btnModeGemini) {
+        btnModeGemini.addEventListener("click", () => {
+            currentClipboardMode = "gemini";
+            localStorage.setItem("garde_clipboard_mode", "gemini");
+            updateClipboardModeUI();
+        });
+    }
+
+    if (btnModeRegex) {
+        btnModeRegex.addEventListener("click", () => {
+            currentClipboardMode = "regex";
+            localStorage.setItem("garde_clipboard_mode", "regex");
+            updateClipboardModeUI();
+        });
+    }
+
+    // Inicializar visualmente el modo seleccionado
+    updateClipboardModeUI();
+
+    async function processTextWithAi(text) {
+        if (!activeProviderId) {
+            alert("Por favor, selecciona un proveedor activo antes de extraer con IA.");
+            return;
+        }
+
+        lastProcessedClipboard = text;
+
+        if (btnExtractTextAi) {
+            btnExtractTextAi.disabled = true;
+            btnExtractTextAi.innerHTML = '⏳ Extrayendo con IA...';
+        }
+
+        appendLog({
+            timestamp: new Date().toLocaleTimeString(),
+            type: "info",
+            message: "Enviando texto a Google Gemini para extracción estructurada directa..."
+        });
+
+        try {
+            const res = await fetch("/api/process-text-ai", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: text, provider_id: activeProviderId })
+            });
+            const data = await res.json();
+            if (res.ok && data.status === "success") {
+                const count = data.count || (data.items ? data.items.length : 0);
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "success",
+                    message: `IA Gemini extrajo y guardó con éxito ${count} producto(s) en columnas universales.`
+                });
+                if (pasteInputArea) pasteInputArea.value = "";
+                await loadRecentCaptures();
+            } else {
+                appendLog({
+                    timestamp: new Date().toLocaleTimeString(),
+                    type: "error",
+                    message: `Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`
+                });
+                alert(`Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`);
+            }
+        } catch (err) {
+            appendLog({
+                timestamp: new Date().toLocaleTimeString(),
+                type: "error",
+                message: `Error de conexión con Gemini: ${err.message}`
+            });
+        } finally {
+            if (btnExtractTextAi) {
+                btnExtractTextAi.disabled = false;
+                btnExtractTextAi.innerHTML = `
+                    <span style="font-size: 12px; font-weight: 700;">🤖 Extraer con IA</span>
+                    <span style="font-size: 10px; opacity: 0.85; margin-top: 2px;">Columnas comparables</span>
+                `;
+            }
+        }
+    }
+
+    function routeClipboardText(text) {
+        if (!text || !text.trim()) return;
+        if (currentClipboardMode === "gemini") {
+            processTextWithAi(text.trim());
+        } else {
+            sendTextToProcess(text.trim());
+        }
+    }
+
+    // Auto-leer portapapeles cuando la pestaña/ventana recupera el enfoque
     async function checkClipboardOnFocus() {
         if (!monitorToggle.checked || !activeProviderId) {
             return;
         }
         
-        // Safeguard for insecure contexts (HTTP) or older browsers where Clipboard API is not available
         if (!navigator.clipboard || !navigator.clipboard.readText) {
-            console.log("El portapapeles no está disponible (requiere conexión segura HTTPS o localhost).");
             return;
         }
         
         try {
-            // Attempt to read text directly from system clipboard
             const text = await navigator.clipboard.readText();
             if (text && text.trim()) {
                 if (text !== lastProcessedClipboard) {
-                    sendTextToProcess(text);
+                    routeClipboardText(text);
                 }
             }
         } catch (err) {
-            // Silently handle exceptions, e.g. before clipboard permissions are granted
-            console.log("No se pudo auto-leer el portapapeles al enfocar (puede requerir permisos en el navegador):", err);
+            console.log("No se pudo auto-leer el portapapeles al enfocar:", err);
         }
     }
 
-    // Bind focus and visibility events
+    // Eventos de foco y visibilidad
     window.addEventListener("focus", checkClipboardOnFocus);
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") {
@@ -1746,41 +1910,59 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Intercept manual copy-paste (Ctrl+V) globally on the document
+    // Interceptar Ctrl+V global en el documento
     document.addEventListener("paste", (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
         const text = e.clipboardData.getData("text");
         if (text && text.trim()) {
-            sendTextToProcess(text);
+            routeClipboardText(text);
         }
     });
 
-    // Button to manually trigger paste from clipboard
+    // Botón manual: Forzar extracción con Regex
     btnPasteClipboard.addEventListener("click", async () => {
-        if (!navigator.clipboard || !navigator.clipboard.readText) {
-            alert("El portapapeles no está disponible en este navegador o requiere una conexión segura (HTTPS).");
-            return;
-        }
-        try {
-            const text = await navigator.clipboard.readText();
-            if (text && text.trim()) {
-                sendTextToProcess(text);
+        let text = pasteInputArea ? pasteInputArea.value.trim() : "";
+        if (!text) {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                    text = (await navigator.clipboard.readText()).trim();
+                } catch (err) {
+                    alert("No se pudo acceder al portapapeles. Asegúrate de dar permisos en el navegador o pega el texto en la caja.");
+                    return;
+                }
+            } else {
+                alert("El portapapeles no está disponible. Pega el texto directamente en la caja.");
+                return;
             }
-        } catch (err) {
-            alert("No se pudo acceder al portapapeles. Asegúrate de dar permisos de portapapeles en el navegador.");
+        }
+        if (text) {
+            sendTextToProcess(text);
+            if (pasteInputArea) pasteInputArea.value = "";
+        } else {
+            alert("No hay texto copiado en el portapapeles ni en la caja de pegado rápido.");
         }
     });
 
-    // Process pasted text in the quick-paste textbox
-    pasteInputArea.addEventListener("paste", () => {
-        setTimeout(() => {
-            const text = pasteInputArea.value;
-            if (text && text.trim()) {
-                sendTextToProcess(text);
-                pasteInputArea.value = "";
+    // Botón manual: Forzar extracción con IA Gemini
+    if (btnExtractTextAi) {
+        btnExtractTextAi.addEventListener("click", async () => {
+            let text = pasteInputArea ? pasteInputArea.value.trim() : "";
+            if (!text) {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    try {
+                        text = (await navigator.clipboard.readText()).trim();
+                    } catch (err) {
+                        console.warn("No se pudo leer automáticamente del portapapeles:", err);
+                    }
+                }
             }
-        }, 50);
-    });
+            if (!text) {
+                alert("Pega texto en la 'Caja de Pegado Rápido' o copia texto al portapapeles antes de pulsar 'Extraer con IA'.");
+                return;
+            }
+            await processTextWithAi(text);
+        });
+    }
 
     // ----------------------------------------------------
     // 6. USER MANAGEMENT (Root Only)
@@ -2701,76 +2883,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    if (btnExtractTextAi) {
-        btnExtractTextAi.addEventListener("click", async () => {
-            if (!activeProviderId) {
-                alert("Por favor, selecciona un proveedor activo antes de extraer con IA.");
-                return;
-            }
 
-            let text = pasteInputArea ? pasteInputArea.value.trim() : "";
-            if (!text) {
-                if (navigator.clipboard && navigator.clipboard.readText) {
-                    try {
-                        text = (await navigator.clipboard.readText()).trim();
-                    } catch (err) {
-                        console.warn("No se pudo leer automáticamente del portapapeles:", err);
-                    }
-                }
-            }
-
-            if (!text) {
-                alert("Pega texto en la 'Caja de Pegado Rápido' o copia texto al portapapeles antes de pulsar 'Extraer con IA'.");
-                return;
-            }
-
-            const originalHtml = btnExtractTextAi.innerHTML;
-            btnExtractTextAi.disabled = true;
-            btnExtractTextAi.innerHTML = '⏳ Extrayendo con IA...';
-
-            appendLog({
-                timestamp: new Date().toLocaleTimeString(),
-                type: "info",
-                message: "Enviando texto a Google Gemini para extracción estructurada directa..."
-            });
-
-            try {
-                const res = await fetch("/api/process-text-ai", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ text: text, provider_id: activeProviderId })
-                });
-                const data = await res.json();
-                if (res.ok && data.status === "success") {
-                    const count = data.count || (data.items ? data.items.length : 0);
-                    appendLog({
-                        timestamp: new Date().toLocaleTimeString(),
-                        type: "success",
-                        message: `IA Gemini extrajo y guardó con éxito ${count} producto(s).`
-                    });
-                    if (pasteInputArea) pasteInputArea.value = "";
-                    await loadProviderExtractions(activeProviderId);
-                } else {
-                    appendLog({
-                        timestamp: new Date().toLocaleTimeString(),
-                        type: "error",
-                        message: `Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`
-                    });
-                    alert(`Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`);
-                }
-            } catch (err) {
-                appendLog({
-                    timestamp: new Date().toLocaleTimeString(),
-                    type: "error",
-                    message: `Error de conexión con el servidor: ${err.message}`
-                });
-                alert("Error de conexión al enviar el texto para análisis con IA.");
-            } finally {
-                btnExtractTextAi.disabled = false;
-                btnExtractTextAi.innerHTML = originalHtml;
-            }
-        });
-    }
 
     if (imageEngineSelect) {
         imageEngineSelect.addEventListener("change", async () => {

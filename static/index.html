@@ -73,17 +73,45 @@
                                 <option value="">-- Seleccionar Proveedor --</option>
                             </select>
                         </div>
-                        <div class="control-row mt-10" style="width: 100%; display: flex; gap: 8px;">
-                            <button id="btn-paste-clipboard" class="btn btn-primary" style="flex: 1.2;">
-                                📋 Pegar Portapapeles
-                            </button>
-                            <button id="btn-extract-text-ai" class="btn btn-secondary" style="flex: 1; border-color: rgba(99, 102, 241, 0.5); background: rgba(99, 102, 241, 0.15); color: #c7d2fe;" title="Extrae productos usando IA Gemini directamente del texto o portapapeles">
-                                ✨ Extraer con IA
-                            </button>
+                        <!-- SELECTOR DE MÉTODO DE EXTRACCIÓN (PORTAPAPELES) -->
+                        <div class="control-row mt-10" style="width: 100%; display: flex; flex-direction: column; gap: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); padding: 12px 14px; border-radius: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-size: 12px; font-weight: 700; color: #f1f5f9;">📋 Motor de Portapapeles:</span>
+                                <span id="clipboard-mode-badge" class="badge badge-success" style="font-size: 11px;">🤖 Modo: IA Gemini</span>
+                            </div>
+
+                            <!-- Selector de Modo Activo tipo Segmented Pill -->
+                            <div style="display: flex; background: rgba(0,0,0,0.3); padding: 3px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); gap: 4px;">
+                                <button type="button" id="btn-mode-gemini" class="btn btn-sm" style="flex: 1; font-size: 12px; font-weight: 600; padding: 6px 8px; border-radius: 5px; border: none; cursor: pointer; transition: all 0.2s; background: #4f46e5; color: #ffffff;" title="IA Gemini extrae y clasifica automáticamente en columnas estándar (Tipo, Marca, Modelo, Precios) para comparar catálogos">
+                                    🤖 IA Gemini (Recomendado)
+                                </button>
+                                <button type="button" id="btn-mode-regex" class="btn btn-sm" style="flex: 1; font-size: 12px; font-weight: 500; padding: 6px 8px; border-radius: 5px; border: none; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--text-muted);" title="Usa la plantilla con expresiones regulares configurada para esta tienda">
+                                    🎯 Plantilla Regex
+                                </button>
+                            </div>
+
+                            <!-- Mensaje contextual explicativo -->
+                            <div id="clipboard-mode-desc" style="font-size: 11px; color: #c7d2fe; background: rgba(99, 102, 241, 0.12); border-left: 3px solid #6366f1; padding: 6px 10px; border-radius: 4px; line-height: 1.4;">
+                                ✨ <strong>Modo IA Activo:</strong> El monitoreo automático y las capturas extraerán <em>Tipo de Aparato, Marca, Modelo, Descripción y Precios</em> estándar para comparar en Excel.
+                            </div>
+                            
+                            <!-- Botones de Acción Directa -->
+                            <div style="display: flex; gap: 8px; width: 100%;">
+                                <button id="btn-extract-text-ai" class="btn btn-primary" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 9px 8px; text-align: center; border-radius: 6px; cursor: pointer;" title="Extrae el portapapeles o texto usando IA Gemini">
+                                    <span style="font-size: 12px; font-weight: 700;">🤖 Extraer con IA</span>
+                                    <span style="font-size: 10px; opacity: 0.85; margin-top: 2px;">Columnas comparables</span>
+                                </button>
+
+                                <button id="btn-paste-clipboard" class="btn btn-secondary" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 9px 8px; text-align: center; border-radius: 6px; cursor: pointer;" title="Extrae el portapapeles o texto usando la plantilla Regex de esta tienda">
+                                    <span style="font-size: 12px; font-weight: 700;">🎯 Extraer con Regex</span>
+                                    <span style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Plantilla de la tienda</span>
+                                </button>
+                            </div>
                         </div>
+
                         <div class="control-row mt-10" style="display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 6px;">
-                            <label for="paste-input-area" style="font-size: 13px; color: var(--text-muted); align-self: flex-start;">Caja de Pegado Rápido:</label>
-                            <textarea id="paste-input-area" placeholder="Pega texto aquí (Ctrl+V) para procesar..." class="form-textarea" style="height: 60px; font-size: 12px;"></textarea>
+                            <label for="paste-input-area" style="font-size: 12px; color: var(--text-muted); align-self: flex-start;">Caja de Pegado Rápido (o pulsa un botón para procesar directo del portapapeles):</label>
+                            <textarea id="paste-input-area" placeholder="Pega texto aquí (Ctrl+V) o pulsa directamente '🤖 Extraer con IA' o '🎯 Extraer con Regex'..." class="form-textarea" style="height: 60px; font-size: 12px;"></textarea>
                         </div>
 
                         <div class="control-row mt-10" style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); width: 100%;">
@@ -338,8 +366,8 @@
                             <div class="form-group">
                                 <label for="merge-key">Clave de Unión (Columna):</label>
                                 <select id="merge-key" class="form-select">
-                                    <option value="model">Modelo / SKU</option>
-                                    <option value="product">Producto / Nombre</option>
+                                    <option value="model" selected>Modelo / SKU (Recomendado - Clave universal)</option>
+                                    <option value="product">Descripción / Producto</option>
                                 </select>
                             </div>
                             <div class="form-group">
