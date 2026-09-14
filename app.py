@@ -10,6 +10,7 @@ import threading
 import webbrowser
 import hashlib
 import secrets
+import copy
 from collections import deque
 from datetime import datetime
 try:
@@ -141,15 +142,56 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 DICTIONARY_FILE = os.path.join(DATA_DIR, "dictionary.json")
 
+_dict_cache: Dict[str, Any] = {}
+_dict_cache_ts: float = 0.0
+_dict_cache_lock = threading.Lock()
+
 def load_dictionary() -> Dict[str, Any]:
+    global _dict_cache, _dict_cache_ts
+    now = time.monotonic()
+    with _dict_cache_lock:
+        if _dict_cache and (now - _dict_cache_ts) < 20.0:
+            return _dict_cache
     if not os.path.exists(DICTIONARY_FILE):
         return {"categorias": {}, "marcas": {}}
     try:
         with open(DICTIONARY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            with _dict_cache_lock:
+                _dict_cache = data
+                _dict_cache_ts = time.monotonic()
+            return data
     except Exception as e:
         add_log("error", f"Error cargando dictionary.json: {str(e)}")
         return {"categorias": {}, "marcas": {}}
+
+# Lista negra en memoria de elementos eliminados recientemente para evitar rescate accidental
+_deleted_items_blacklist: Dict[str, float] = {}
+_deleted_items_lock = threading.Lock()
+
+def add_to_deleted_blacklist(text_or_model: str):
+    if not text_or_model or not str(text_or_model).strip():
+        return
+    norm = str(text_or_model).strip().lower()
+    with _deleted_items_lock:
+        _deleted_items_blacklist[norm] = time.time()
+        if len(_deleted_items_blacklist) > 500:
+            cutoff = time.time() - 1800
+            for k in [k for k, v in _deleted_items_blacklist.items() if v < cutoff]:
+                _deleted_items_blacklist.pop(k, None)
+
+def is_deleted_or_suppressed(text: str) -> bool:
+    if not text:
+        return False
+    norm = str(text).strip().lower()
+    with _deleted_items_lock:
+        now = time.time()
+        if norm in _deleted_items_blacklist and (now - _deleted_items_blacklist[norm]) < 1800:
+            return True
+        for k, ts in list(_deleted_items_blacklist.items()):
+            if (now - ts) < 1800 and len(k) >= 4 and k in norm:
+                return True
+    return False
 
 def get_provider_filepath(provider: Dict[str, Any]) -> str:
     """Obtiene la ruta absoluta para el archivo de salida de un proveedor."""
@@ -525,12 +567,14 @@ def format_excel_file(filepath: str):
                         max_cell.fill = expensive_fill
                         max_cell.font = expensive_font
                         
-        # Auto-adjust column widths
+        # Auto-adjust column widths (muestreo rápido para evitar congelamientos en catálogos grandes)
         for col in ws.columns:
-            max_len = 0
             col_letter = get_column_letter(col[0].column)
             header_name = str(col[0].value or '')
-            for cell in col:
+            max_len = len(header_name)
+            # Muestrear hasta 50 celdas por columna para máxima velocidad
+            sample_cells = col[:50]
+            for cell in sample_cells:
                 val_str = str(cell.value or '')
                 lines = val_str.split('\n')
                 for line in lines:
@@ -1480,6 +1524,9 @@ def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
             gemini_key = (cfg_curr.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
             auto_fallback = cfg_curr.get("gemini_auto_fallback", True)
             if auto_fallback and gemini_key and not is_ocr:
+                if is_deleted_or_suppressed(text):
+                    add_log("info", "Texto copiado coincide con una captura eliminada recientemente. Omitiendo llamada a Gemini para ahorrar tokens.")
+                    return
                 add_log("info", f"Sin coincidencias en '{provider.get('name')}'. Activando Modo Rescate con IA Gemini...")
                 res_ai = extract_products_from_text_with_gemini(text, provider)
                 if res_ai.get("success") and res_ai.get("items"):
@@ -1637,7 +1684,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
     client = genai.Client(api_key=api_key)
     
     # Modelos prioritarios activos y compatibles según la API de Gemini
-    candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]
+    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -1780,10 +1827,27 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
         return {"success": False, "error": f"Error procesando JSON de Gemini: {str(e)}", "items": []}
 
 
+_gemini_text_cache: Dict[str, Any] = {}
+_gemini_text_cache_lock = threading.Lock()
+_GEMINI_CACHE_MAX_SIZE = 300
+
 def extract_products_from_text_with_gemini(text: str, provider: Dict[str, Any]) -> Dict[str, Any]:
-    """Extrae productos comerciales directamente de un texto no estructurado usando Google Gemini."""
+    """Extrae productos comerciales directamente de un texto no estructurado usando Google Gemini con caché de respuestas."""
     if not text or not text.strip():
         return {"success": False, "error": "El texto proporcionado está vacío", "items": []}
+
+    # Comprobar caché en memoria para no repetir peticiones ni gastar tokens innecesarios
+    prov_name_key = (provider.get("name") or "General").strip().lower()
+    clean_text = text.strip()
+    cache_raw = f"{prov_name_key}::{clean_text}".encode('utf-8')
+    cache_key = hashlib.sha256(cache_raw).hexdigest()
+
+    with _gemini_text_cache_lock:
+        if cache_key in _gemini_text_cache:
+            cached_res, cached_time = _gemini_text_cache[cache_key]
+            if (time.time() - cached_time) < 7200:  # 2 horas de vigencia
+                add_log("info", f"Extracción de IA reutilizada desde caché local (0 tokens de Gemini consumidos).")
+                return copy.deepcopy(cached_res)
 
     config = load_config()
     api_key = config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
@@ -1846,7 +1910,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 """
 
     client = genai.Client(api_key=api_key)
-    candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]
+    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -1978,12 +2042,22 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             if item.get("Modelo") or item.get("model") or item.get("Descripción") or item.get("product"):
                 structured_items.append(item)
 
-        return {
+        final_res = {
             "success": True,
             "count": len(structured_items),
             "items": structured_items,
             "raw_json": response_text
         }
+
+        # Guardar en memoria caché para evitar consumos duplicados
+        with _gemini_text_cache_lock:
+            if len(_gemini_text_cache) >= _GEMINI_CACHE_MAX_SIZE:
+                oldest_keys = sorted(_gemini_text_cache.keys(), key=lambda k: _gemini_text_cache[k][1])[:60]
+                for ok in oldest_keys:
+                    _gemini_text_cache.pop(ok, None)
+            _gemini_text_cache[cache_key] = (copy.deepcopy(final_res), time.time())
+
+        return final_res
     except Exception as e:
         return {"success": False, "error": f"Error procesando JSON de texto con Gemini: {str(e)}", "items": []}
 
@@ -2090,6 +2164,10 @@ async def process_text_ai_endpoint(req: ProcessTextAIRequest, username: str = De
         provs = cfg.get("providers", [])
         target_provider = provs[0] if provs else {"name": "General", "fields": ["product", "model", "pvp", "attributes"]}
     
+    if is_deleted_or_suppressed(req.text):
+        add_log("info", "Texto coincide con una captura eliminada recientemente. Omitiendo llamada a Gemini para ahorrar tokens.")
+        return {"status": "success", "count": 0, "items": []}
+
     res = extract_products_from_text_with_gemini(req.text, target_provider)
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("error", "Error extrayendo con Gemini"))
@@ -2595,6 +2673,7 @@ async def clear_provider_data(provider_id: str):
     if os.path.exists(filepath):
         try:
             os.remove(filepath)
+            add_to_deleted_blacklist(f"cleared::{provider_id}")
             add_log("success", f"Se han eliminado todas las capturas del proveedor '{provider['name']}'.")
             return {"status": "success", "message": "Datos eliminados correctamente"}
         except Exception as e:
@@ -2623,6 +2702,15 @@ async def delete_provider_row(provider_id: str, req: DeleteRowRequest):
         if req.index not in df.index:
             raise HTTPException(status_code=400, detail="Índice de fila no encontrado en el archivo")
             
+        # Registrar datos del elemento eliminado para no re-capturarlo si persiste en portapapeles
+        try:
+            deleted_row = df.loc[req.index].to_dict()
+            for col_name, val in deleted_row.items():
+                if val and str(val).strip() and len(str(val).strip()) >= 3:
+                    add_to_deleted_blacklist(str(val))
+        except Exception:
+            pass
+
         df = df.drop(index=req.index)
         
         if len(df) == 0:
@@ -3076,7 +3164,7 @@ def classify_product_category_and_gama(product_text: str, price: float, config: 
         return "Premium"
 
 @app.post("/api/extractions/merge")
-async def merge_extractions(req: MergeRequest):
+def merge_extractions(req: MergeRequest):
     if not req.files:
         raise HTTPException(status_code=400, detail="Debe seleccionar al menos un archivo")
         
@@ -3103,12 +3191,12 @@ async def merge_extractions(req: MergeRequest):
         # Buscar columna de clave (Key)
         key_col = None
         for col in df.columns:
-            if col.lower() == req.merge_key.lower():
+            if str(col).lower() == req.merge_key.lower():
                 key_col = col
                 break
         if not key_col:
             for col in df.columns:
-                if req.merge_key.lower() in col.lower():
+                if req.merge_key.lower() in str(col).lower():
                     key_col = col
                     break
         if not key_col:
@@ -3121,7 +3209,7 @@ async def merge_extractions(req: MergeRequest):
         pvp_price_col = None
         
         for col in df.columns:
-            col_lower = col.lower().strip()
+            col_lower = str(col).lower().strip()
             col_norm = re.sub(r'[^a-z0-9]', '', col_lower)
             
             is_no_vat = (
@@ -3153,12 +3241,11 @@ async def merge_extractions(req: MergeRequest):
                 general_price_col = col
                 
         # Si no hay columna explícita 'Sin IVA', pero sí una columna de precio general o única:
-        # En la comparativa, la métrica base universal entre competidores es siempre el Precio Sin IVA.
         if not no_vat_price_col and general_price_col:
             no_vat_price_col = general_price_col
             general_price_col = None
                     
-        # Limpieza de clave con normalización difusa (remueve espacios, guiones y barras)
+        # Limpieza de clave con normalización difusa
         df = df.dropna(subset=[key_col])
         df['_merge_key_clean'] = df[key_col].astype(str).apply(normalize_model_key)
         df = df[~df['_merge_key_clean'].isin(['', 'nan', 'none'])]
@@ -3168,12 +3255,18 @@ async def merge_extractions(req: MergeRequest):
         rename_dict = {key_col: key_col_title}
         selected_cols = ['_merge_key_clean', key_col_title]
         
-        provider_name = filename.replace('.csv', '').replace('.xlsx', '').replace('_', ' ').title()
+        base_prov_name = filename.replace('.csv', '').replace('.xlsx', '').replace('_', ' ').title()
+        provider_name = base_prov_name
+        prov_counter = 2
+        existing_prov_names = [p[0] for p in dfs]
+        while provider_name in existing_prov_names:
+            provider_name = f"{base_prov_name} ({prov_counter})"
+            prov_counter += 1
         
         # Detectar columnas de categoría, marca y descripción si existen
-        cat_src_col = next((c for c in df.columns if c.lower().strip() in ['tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']), None)
-        brand_src_col = next((c for c in df.columns if c.lower().strip() in ['marca', 'brand']), None)
-        desc_src_col = next((c for c in df.columns if c.lower().strip() in ['descripción', 'descripcion', 'product', 'producto', 'articulo']), None)
+        cat_src_col = next((c for c in df.columns if str(c).lower().strip() in ['tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']), None)
+        brand_src_col = next((c for c in df.columns if str(c).lower().strip() in ['marca', 'brand']), None)
+        desc_src_col = next((c for c in df.columns if str(c).lower().strip() in ['descripción', 'descripcion', 'product', 'producto', 'articulo']), None)
         if cat_src_col and cat_src_col not in selected_cols:
             selected_cols.append(cat_src_col)
         if brand_src_col and brand_src_col not in selected_cols:
@@ -3209,6 +3302,9 @@ async def merge_extractions(req: MergeRequest):
         df_clean = deduplicate_by_completeness(df, key_col)
         df_clean = df_clean.rename(columns=rename_dict)
         
+        # BLINDAJE CRÍTICO: Garantizar unicidad estricta por '_merge_key_clean'
+        df_clean = df_clean.drop_duplicates(subset=['_merge_key_clean'], keep='first')
+        
         dfs.append((provider_name, df_clean[[c for c in selected_cols if c in df_clean.columns]], {
             'has_no_vat': no_vat_price_col is not None,
             'has_vat': vat_price_col is not None,
@@ -3219,27 +3315,33 @@ async def merge_extractions(req: MergeRequest):
     if not dfs:
         raise HTTPException(status_code=400, detail="No se encontraron datos procesables en los archivos seleccionados")
         
-    # Obtener todas las claves únicas junto a categoría, marca y descripción
+    # Obtener todas las claves únicas junto a categoría, marca y descripción (ultra rápido con to_dict)
     keys_dict = {}
     cat_dict = {}
     brand_dict = {}
     desc_dict = {}
     for _, df, _ in dfs:
-        for _, row in df.iterrows():
-            k = row['_merge_key_clean']
+        records = df.to_dict(orient='records')
+        for row in records:
+            k = row.get('_merge_key_clean')
+            if not k:
+                continue
             if k not in keys_dict:
-                keys_dict[k] = row[key_col_title]
+                keys_dict[k] = row.get(key_col_title) or k
             for c_col in ['Tipo de Aparato', 'tipo de aparato', 'category', 'categoria', 'tipo_aparato', 'tipo']:
-                if c_col in row and pd.notnull(row[c_col]) and str(row[c_col]).strip() and k not in cat_dict:
-                    cat_dict[k] = str(row[c_col]).strip()
+                val = row.get(c_col)
+                if val is not None and str(val).strip() and k not in cat_dict:
+                    cat_dict[k] = str(val).strip()
                     break
             for b_col in ['Marca', 'marca', 'brand']:
-                if b_col in row and pd.notnull(row[b_col]) and str(row[b_col]).strip() and k not in brand_dict:
-                    brand_dict[k] = str(row[b_col]).strip()
+                val = row.get(b_col)
+                if val is not None and str(val).strip() and k not in brand_dict:
+                    brand_dict[k] = str(val).strip()
                     break
             for d_col in ['Descripción', 'descripcion', 'product', 'producto', 'articulo']:
-                if d_col in row and pd.notnull(row[d_col]) and str(row[d_col]).strip() and k not in desc_dict:
-                    desc_dict[k] = str(row[d_col]).strip()
+                val = row.get(d_col)
+                if val is not None and str(val).strip() and k not in desc_dict:
+                    desc_dict[k] = str(val).strip()
                     break
             
     merged_df = pd.DataFrame(list(keys_dict.items()), columns=['_merge_key_clean', key_col_title])
@@ -3270,26 +3372,33 @@ async def merge_extractions(req: MergeRequest):
     price_pvp_cols = []
     price_cols = []
     
+    # UN SOLO MERGE POR PROVEEDOR
     for provider_name, df, flags in dfs:
+        prov_cols_to_add = []
         if flags['has_no_vat']:
             col_name = f'Precio {provider_name} Sin IVA (€)'
-            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
+            prov_cols_to_add.append(col_name)
             price_no_vat_cols.append(col_name)
             
         if flags['has_vat']:
             col_name = f'Precio {provider_name} Con IVA (€)'
-            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
+            prov_cols_to_add.append(col_name)
             price_vat_cols.append(col_name)
             
         if flags.get('has_pvp'):
             col_name = f'Precio {provider_name} PVP (€)'
-            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
+            prov_cols_to_add.append(col_name)
             price_pvp_cols.append(col_name)
 
         if flags.get('has_general'):
             col_name = f'Precio {provider_name} (€)'
-            merged_df = pd.merge(merged_df, df[['_merge_key_clean', col_name]], on='_merge_key_clean', how='left')
+            prov_cols_to_add.append(col_name)
             price_cols.append(col_name)
+
+        existing_prov_cols = [c for c in prov_cols_to_add if c in df.columns]
+        if existing_prov_cols:
+            merge_subset = df[['_merge_key_clean'] + existing_prov_cols].drop_duplicates(subset=['_merge_key_clean'])
+            merged_df = pd.merge(merged_df, merge_subset, on='_merge_key_clean', how='left')
             
     merged_df = merged_df.drop(columns=['_merge_key_clean'])
     
@@ -3324,8 +3433,8 @@ async def merge_extractions(req: MergeRequest):
         second_name = second_col.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
         
         diff_money = second_price - cheapest_price
-        diff_pct_cheaper = (diff_money / second_price) * 100
-        diff_pct_expensive = (diff_money / cheapest_price) * 100
+        diff_pct_cheaper = (diff_money / second_price * 100) if second_price > 0 else 0.0
+        diff_pct_expensive = (diff_money / cheapest_price * 100) if cheapest_price > 0 else 0.0
         
         if len(sorted_prices) == 2:
             return f"🏆 {cheapest_name} más barato (-{diff_pct_cheaper:.1f}% | -{diff_money:.2f} €) — {second_name} va +{diff_money:.2f} € más caro (+{diff_pct_expensive:.1f}%)"
@@ -3334,7 +3443,7 @@ async def merge_extractions(req: MergeRequest):
         most_expensive_col, max_price = sorted_prices[-1]
         most_expensive_name = most_expensive_col.replace('Precio ', '').replace(' Sin IVA (€)', '').replace(' (€)', '').strip()
         max_diff = max_price - cheapest_price
-        max_pct = (max_diff / cheapest_price) * 100
+        max_pct = (max_diff / cheapest_price * 100) if cheapest_price > 0 else 0.0
         
         if second_price == max_price:
             return f"🏆 {cheapest_name} más barato (-{diff_pct_cheaper:.1f}% | -{diff_money:.2f} €) — {most_expensive_name} va +{max_diff:.2f} € más caro (+{max_pct:.1f}%)"
@@ -3362,24 +3471,40 @@ async def merge_extractions(req: MergeRequest):
                 if n > 0:
                     valid_prices.append(n)
         ref_p = min(valid_prices) if valid_prices else 0.0
-        prod_title = str(row.get('Producto / Modelo') or '')
+        prod_title = str(row.get(key_col_title) or row.get('Descripción') or row.get('Modelo') or '')
         return classify_product_category_and_gama(prod_title, ref_p, config_now)
 
     gamas = merged_df.apply(get_row_gama, axis=1)
     merged_df.insert(1, 'Gama', gamas)
         
-    # Guardar fusión consolidada
-    out_filename = req.output_filename
+    # Guardar fusión consolidada con protección contra bloqueos por Excel abierto (Windows)
+    out_filename = req.output_filename.strip() if req.output_filename else "comparativa_precios.xlsx"
     if not out_filename.endswith('.xlsx') and not out_filename.endswith('.csv'):
         out_filename += ".xlsx"
         
     out_filepath = os.path.join(CONSOLIDATED_DIR, out_filename)
     
-    if out_filepath.endswith('.xlsx'):
-        merged_df.to_excel(out_filepath, index=False)
-        format_excel_file(out_filepath)
-    else:
-        merged_df.to_csv(out_filepath, index=False, encoding='utf-8-sig')
+    try:
+        if out_filepath.endswith('.xlsx'):
+            merged_df.to_excel(out_filepath, index=False)
+            format_excel_file(out_filepath)
+        else:
+            merged_df.to_csv(out_filepath, index=False, encoding='utf-8-sig')
+    except PermissionError:
+        # El archivo está abierto en Microsoft Excel u otra aplicación en Windows
+        base, ext = os.path.splitext(out_filename)
+        safe_filename = f"{base}_{get_now().strftime('%H%M%S')}{ext}"
+        safe_filepath = os.path.join(CONSOLIDATED_DIR, safe_filename)
+        if safe_filepath.endswith('.xlsx'):
+            merged_df.to_excel(safe_filepath, index=False)
+            format_excel_file(safe_filepath)
+        else:
+            merged_df.to_csv(safe_filepath, index=False, encoding='utf-8-sig')
+        add_log("warning", f"El archivo '{out_filename}' está abierto en Excel. Se guardó una copia automática como '{safe_filename}'.")
+        out_filename = safe_filename
+    except Exception as e:
+        add_log("error", f"Error al generar archivo consolidado: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al escribir archivo consolidado: {str(e)}")
         
     # Reemplazar NaN por None para JSON serialización limpia
     merged_df = merged_df.replace({pd.NA: None, float('nan'): None})

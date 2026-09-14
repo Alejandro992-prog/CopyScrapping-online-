@@ -5,10 +5,83 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentSelection = null;
     let eventSource = null;
     let activeProviderId = null;
-    let savedProviders = [];
     let lastProcessedClipboard = "";
+    let suppressClipboardAutoCheck = false;
+    let recentAiSentTexts = new Map();
+    let deletedItemsSet = new Set();
+    let currentRecentRecords = [];
     let currentStockData = null;
     let activeBatchPages = 0;
+
+    function isItemDeletedOrSuppressed(text) {
+        if (!text) return false;
+        const lower = text.trim().toLowerCase();
+        if (deletedItemsSet.has(lower)) return true;
+        for (const item of deletedItemsSet) {
+            if (item.length >= 4 && lower.includes(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async function syncClipboardTracking() {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+            try {
+                const currentText = await navigator.clipboard.readText();
+                if (currentText) {
+                    const clean = currentText.trim();
+                    lastProcessedClipboard = clean;
+                    deletedItemsSet.add(clean.toLowerCase());
+                }
+            } catch (e) {}
+        }
+    }
+
+    function showConfirmDialog(title, message, isDanger = true) {
+        return new Promise((resolve) => {
+            suppressClipboardAutoCheck = true;
+            const modal = document.getElementById("modal-confirm");
+            const titleEl = document.getElementById("modal-confirm-title");
+            const msgEl = document.getElementById("modal-confirm-message");
+            const btnOk = document.getElementById("modal-confirm-ok");
+            const btnCancel = document.getElementById("modal-confirm-cancel");
+            const btnClose = document.getElementById("modal-confirm-close");
+
+            if (!modal) {
+                const res = confirm(message);
+                syncClipboardTracking();
+                setTimeout(() => { suppressClipboardAutoCheck = false; }, 1500);
+                return resolve(res);
+            }
+
+            titleEl.textContent = title || "Confirmar acción";
+            msgEl.textContent = message || "¿Estás seguro de realizar esta acción?";
+            btnOk.className = isDanger ? "btn btn-danger btn-sm" : "btn btn-primary btn-sm";
+            btnOk.textContent = isDanger ? "Sí, eliminar" : "Aceptar";
+
+            modal.style.display = "flex";
+
+            async function finish(result) {
+                modal.style.display = "none";
+                btnOk.onclick = null;
+                btnCancel.onclick = null;
+                btnClose.onclick = null;
+                await syncClipboardTracking();
+                setTimeout(() => {
+                    suppressClipboardAutoCheck = false;
+                }, 3000);
+                resolve(result);
+            }
+
+            btnOk.onclick = async () => {
+                await syncClipboardTracking();
+                finish(true);
+            };
+            btnCancel.onclick = () => finish(false);
+            btnClose.onclick = () => finish(false);
+        });
+    }
 
     // Cached DOM Elements
     const statusDot = document.getElementById("status-dot");
@@ -272,7 +345,14 @@ document.addEventListener("DOMContentLoaded", () => {
         btnClearBatchImages.addEventListener("click", async (e) => {
             e.stopPropagation();
             if (!activeProviderId) return;
-            if (confirm("¿Estás seguro de que deseas vaciar y eliminar todas las capturas registradas de este lote/proveedor?")) {
+            const ok = await showConfirmDialog(
+                "Vaciar capturas del lote",
+                "¿Estás seguro de que deseas vaciar y eliminar todas las capturas registradas de este lote/proveedor?",
+                true
+            );
+            if (ok) {
+                suppressClipboardAutoCheck = true;
+                await syncClipboardTracking();
                 try {
                     const res = await fetch(`/api/providers/${activeProviderId}/clear`, {
                         method: "POST"
@@ -285,12 +365,15 @@ document.addEventListener("DOMContentLoaded", () => {
                             type: "info",
                             message: "🗑️ Listado de capturas vaciado correctamente."
                         });
-                        loadRecentCaptures();
+                        await loadRecentCaptures();
                     } else {
                         alert("Error al intentar limpiar las capturas del lote.");
                     }
                 } catch (err) {
                     console.error("Error al vaciar lote:", err);
+                } finally {
+                    await syncClipboardTracking();
+                    setTimeout(() => { suppressClipboardAutoCheck = false; }, 2000);
                 }
             }
         });
@@ -603,6 +686,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             const data = await res.json();
+            currentRecentRecords = data.records || [];
             
             if (data.columns && data.columns.length > 0) {
                 // Render headers
@@ -645,8 +729,17 @@ document.addEventListener("DOMContentLoaded", () => {
                         btnDel.innerHTML = "🗑️";
                         btnDel.title = "Borrar esta captura";
                         btnDel.onclick = async () => {
-                            if (confirm("¿Estás seguro de que deseas eliminar esta captura específica?")) {
-                                await deleteCaptureRow(row._index);
+                            suppressClipboardAutoCheck = true;
+                            await syncClipboardTracking();
+                            const ok = await showConfirmDialog(
+                                "Eliminar captura",
+                                "¿Estás seguro de que deseas eliminar esta captura específica de la lista?",
+                                true
+                            );
+                            if (ok) {
+                                await deleteCaptureRow(row._index, row);
+                            } else {
+                                setTimeout(() => { suppressClipboardAutoCheck = false; }, 2000);
                             }
                         };
                         
@@ -671,7 +764,16 @@ document.addEventListener("DOMContentLoaded", () => {
         btnClearCaptures.style.display = "none";
     }
 
-    async function deleteCaptureRow(index) {
+    async function deleteCaptureRow(index, rowData = null) {
+        suppressClipboardAutoCheck = true;
+        if (rowData) {
+            Object.values(rowData).forEach(v => {
+                if (v && typeof v === 'string' && v.trim().length >= 3) {
+                    deletedItemsSet.add(v.trim().toLowerCase());
+                }
+            });
+        }
+        await syncClipboardTracking();
         try {
             const res = await fetch(`/api/providers/${activeProviderId}/delete-row`, {
                 method: "POST",
@@ -679,30 +781,56 @@ document.addEventListener("DOMContentLoaded", () => {
                 body: JSON.stringify({ index: index })
             });
             if (res.ok) {
-                loadRecentCaptures();
+                await loadRecentCaptures();
             } else {
                 alert("Error al intentar eliminar la captura.");
             }
         } catch (err) {
             console.error("Error eliminando captura:", err);
+        } finally {
+            await syncClipboardTracking();
+            setTimeout(() => { suppressClipboardAutoCheck = false; }, 4000);
         }
     }
 
     btnClearCaptures.addEventListener("click", async () => {
         if (!activeProviderId) return;
-        if (confirm("¿Estás seguro de que deseas vaciar y eliminar todas las capturas de este proveedor? Esta acción no se puede deshacer.")) {
+        suppressClipboardAutoCheck = true;
+        await syncClipboardTracking();
+        const ok = await showConfirmDialog(
+            "Vaciar capturas del proveedor",
+            "¿Estás seguro de que deseas vaciar y eliminar todas las capturas de este proveedor? Esta acción no se puede deshacer.",
+            true
+        );
+        if (ok) {
+            suppressClipboardAutoCheck = true;
+            if (currentRecentRecords && currentRecentRecords.length) {
+                currentRecentRecords.forEach(row => {
+                    Object.values(row).forEach(v => {
+                        if (v && typeof v === 'string' && v.trim().length >= 3) {
+                            deletedItemsSet.add(v.trim().toLowerCase());
+                        }
+                    });
+                });
+            }
+            await syncClipboardTracking();
             try {
                 const res = await fetch(`/api/providers/${activeProviderId}/clear`, {
                     method: "POST"
                 });
                 if (res.ok) {
-                    loadRecentCaptures();
+                    await loadRecentCaptures();
                 } else {
                     alert("Error al intentar limpiar las capturas.");
                 }
             } catch (err) {
                 console.error("Error limpiando capturas:", err);
+            } finally {
+                await syncClipboardTracking();
+                setTimeout(() => { suppressClipboardAutoCheck = false; }, 4000);
             }
+        } else {
+            setTimeout(() => { suppressClipboardAutoCheck = false; }, 2000);
         }
     });
 
@@ -1564,7 +1692,11 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         
-        result.data.forEach(row => {
+        const maxDisplayRows = 150;
+        const totalRows = result.data.length;
+        const displayData = result.data.slice(0, maxDisplayRows);
+        
+        displayData.forEach(row => {
             const tr = document.createElement("tr");
             
             // Determinar los precios mínimos y máximos sobre Precio Sin IVA
@@ -1630,6 +1762,16 @@ document.addEventListener("DOMContentLoaded", () => {
             
             mergedResultsBody.appendChild(tr);
         });
+
+        if (totalRows > maxDisplayRows) {
+            const trNotice = document.createElement("tr");
+            trNotice.innerHTML = `
+                <td colspan="100%" style="text-align: center; padding: 14px; background: rgba(99, 102, 241, 0.12); color: #c7d2fe; font-size: 13px; font-weight: 500; border-top: 1px solid rgba(99, 102, 241, 0.3);">
+                    ✨ <strong>Mostrando 150 de ${totalRows} productos unificados en pantalla.</strong> El archivo completo con todas las comparativas está listo para descargar en Excel pulsando arriba en <em>"📥 Descargar Fichero"</em>.
+                </td>
+            `;
+            mergedResultsBody.appendChild(trNotice);
+        }
         
         // Hacer scroll suave hacia los resultados
         mergedResultsCard.scrollIntoView({ behavior: "smooth" });
@@ -1707,9 +1849,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function sendTextToProcess(text) {
+    async function sendTextToProcess(text, force = false) {
         if (!activeProviderId) {
             alert("Por favor, selecciona un proveedor activo antes de procesar.");
+            return;
+        }
+
+        if (!force && isItemDeletedOrSuppressed(text)) {
+            lastProcessedClipboard = text;
+            console.log("Omitiendo procesamiento regex para ítem recientemente eliminado.");
             return;
         }
         
@@ -1810,13 +1958,38 @@ document.addEventListener("DOMContentLoaded", () => {
     // Inicializar visualmente el modo seleccionado
     updateClipboardModeUI();
 
-    async function processTextWithAi(text) {
+    async function processTextWithAi(text, force = false) {
+        if (suppressClipboardAutoCheck) {
+            return;
+        }
         if (!activeProviderId) {
             alert("Por favor, selecciona un proveedor activo antes de extraer con IA.");
             return;
         }
 
-        lastProcessedClipboard = text;
+        const trimmed = (text || "").trim();
+        if (!trimmed) return;
+
+        if (!force && isItemDeletedOrSuppressed(trimmed)) {
+            lastProcessedClipboard = trimmed;
+            console.log("Texto pertenece a un ítem recientemente eliminado. Omitiendo petición Gemini para ahorrar tokens.");
+            return;
+        }
+
+        // Comprobación anti-bucle / duplicados en frontend (10 minutos)
+        const now = Date.now();
+        const cacheKey = `${activeProviderId}::${trimmed}`;
+        if (recentAiSentTexts.has(cacheKey) && (now - recentAiSentTexts.get(cacheKey) < 600000)) {
+            console.log("Texto idéntico procesado recientemente con Gemini. Omitiendo re-petición para ahorrar tokens.");
+            return;
+        }
+
+        lastProcessedClipboard = trimmed;
+        recentAiSentTexts.set(cacheKey, now);
+        if (recentAiSentTexts.size > 150) {
+            const firstKey = recentAiSentTexts.keys().next().value;
+            recentAiSentTexts.delete(firstKey);
+        }
 
         if (btnExtractTextAi) {
             btnExtractTextAi.disabled = true;
@@ -1833,7 +2006,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/process-text-ai", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: text, provider_id: activeProviderId })
+                body: JSON.stringify({ text: trimmed, provider_id: activeProviderId })
             });
             const data = await res.json();
             if (res.ok && data.status === "success") {
@@ -1871,16 +2044,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function routeClipboardText(text) {
+        if (suppressClipboardAutoCheck) return;
         if (!text || !text.trim()) return;
+        const clean = text.trim();
+        if (isItemDeletedOrSuppressed(clean)) {
+            lastProcessedClipboard = clean;
+            console.log("Portapapeles coincide con un ítem recientemente eliminado. Omitiendo petición para ahorrar tokens.");
+            return;
+        }
         if (currentClipboardMode === "gemini") {
-            processTextWithAi(text.trim());
+            processTextWithAi(clean);
         } else {
-            sendTextToProcess(text.trim());
+            sendTextToProcess(clean);
         }
     }
 
     // Auto-leer portapapeles cuando la pestaña/ventana recupera el enfoque
     async function checkClipboardOnFocus() {
+        if (suppressClipboardAutoCheck) {
+            return;
+        }
         if (!monitorToggle.checked || !activeProviderId) {
             return;
         }
@@ -1892,8 +2075,13 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const text = await navigator.clipboard.readText();
             if (text && text.trim()) {
-                if (text !== lastProcessedClipboard) {
-                    routeClipboardText(text);
+                const clean = text.trim();
+                if (isItemDeletedOrSuppressed(clean)) {
+                    lastProcessedClipboard = clean;
+                    return;
+                }
+                if (clean !== lastProcessedClipboard) {
+                    routeClipboardText(clean);
                 }
             }
         } catch (err) {
@@ -1935,7 +2123,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
         if (text) {
-            sendTextToProcess(text);
+            sendTextToProcess(text, true);
             if (pasteInputArea) pasteInputArea.value = "";
         } else {
             alert("No hay texto copiado en el portapapeles ni en la caja de pegado rápido.");
@@ -1959,7 +2147,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert("Pega texto en la 'Caja de Pegado Rápido' o copia texto al portapapeles antes de pulsar 'Extraer con IA'.");
                 return;
             }
-            await processTextWithAi(text);
+            await processTextWithAi(text, true);
         });
     }
 
