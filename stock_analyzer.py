@@ -138,25 +138,25 @@ def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[s
                     best_idx = idx
             df = pd.read_csv(filepath, header=best_idx if max_kw >= 2 else 0, encoding='utf-8-sig')
         else:
-            xl = pd.ExcelFile(filepath)
-            target_sheet = xl.sheet_names[0]
-            for s in xl.sheet_names:
-                slow = s.lower()
-                if any(k in slow for k in ['tarifa', 'precios', 'general', 'catalogo', 'articulos', 'productos']):
-                    target_sheet = s
-                    break
-            
-            df_raw = xl.parse(target_sheet, header=None, nrows=25)
-            best_idx = 0
-            max_kw = 0
-            for idx, row in df_raw.iterrows():
-                row_strs = [str(v).strip().lower() for v in row.values if pd.notna(v)]
-                matches = sum(1 for v in row_strs if any(k in v for k in kw_list))
-                if matches > max_kw:
-                    max_kw = matches
-                    best_idx = idx
-            
-            df = xl.parse(target_sheet, header=best_idx if max_kw >= 2 else 0)
+            with pd.ExcelFile(filepath) as xl:
+                target_sheet = xl.sheet_names[0]
+                for s in xl.sheet_names:
+                    slow = s.lower()
+                    if any(k in slow for k in ['tarifa', 'precios', 'general', 'catalogo', 'articulos', 'productos']):
+                        target_sheet = s
+                        break
+                
+                df_raw = xl.parse(target_sheet, header=None, nrows=25)
+                best_idx = 0
+                max_kw = 0
+                for idx, row in df_raw.iterrows():
+                    row_strs = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                    matches = sum(1 for v in row_strs if any(k in v for k in kw_list))
+                    if matches > max_kw:
+                        max_kw = matches
+                        best_idx = idx
+                
+                df = xl.parse(target_sheet, header=best_idx if max_kw >= 2 else 0)
     except Exception as e:
         print(f"Error leyendo archivo Excel de tarifa: {e}")
         return []
@@ -278,37 +278,38 @@ def parse_pdf_tariff(filepath: str, default_provider: str = "", api_key: Optiona
     items = []
     raw_text = ""
     try:
-        reader = pypdf.PdfReader(filepath)
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            raw_text += t + "\n"
-            for line in t.split("\n"):
-                line_str = line.strip()
-                if not line_str or len(line_str) < 5:
-                    continue
-                price_match = re.search(r'(\b\d{1,4}(?:[\.,]\d{2})\b)\s*(?:€|EUR)?', line_str)
-                model_match = re.search(r'\b(?=[A-Z0-9/-]*[0-9])(?=[A-Z0-9/-]*[A-Z])[A-Z0-9/-]{4,25}\b', line_str)
-                if price_match and model_match:
-                    model_str = model_match.group(0)
-                    p_raw = price_match.group(1)
-                    if '.' in p_raw and ',' in p_raw:
-                        p_raw = p_raw.replace('.', '').replace(',', '.')
-                    elif ',' in p_raw:
-                        p_raw = p_raw.replace(',', '.')
-                    try:
-                        p_val = float(p_raw)
-                    except Exception:
-                        p_val = 0.0
-                    desc_str = line_str.replace(model_str, "").replace(price_match.group(0), "").strip()
-                    if not desc_str:
-                        desc_str = f"{default_provider} {model_str}"
-                    items.append({
-                        "model": model_str,
-                        "product": desc_str,
-                        "price": p_val,
-                        "brand": default_provider,
-                        "attributes": ""
-                    })
+        with open(filepath, "rb") as f_pdf:
+            reader = pypdf.PdfReader(f_pdf)
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                raw_text += t + "\n"
+                for line in t.split("\n"):
+                    line_str = line.strip()
+                    if not line_str or len(line_str) < 5:
+                        continue
+                    price_match = re.search(r'(\b\d{1,4}(?:[\.,]\d{2})\b)\s*(?:€|EUR)?', line_str)
+                    model_match = re.search(r'\b(?=[A-Z0-9/-]*[0-9])(?=[A-Z0-9/-]*[A-Z])[A-Z0-9/-]{4,25}\b', line_str)
+                    if price_match and model_match:
+                        model_str = model_match.group(0)
+                        p_raw = price_match.group(1)
+                        if '.' in p_raw and ',' in p_raw:
+                            p_raw = p_raw.replace('.', '').replace(',', '.')
+                        elif ',' in p_raw:
+                            p_raw = p_raw.replace(',', '.')
+                        try:
+                            p_val = float(p_raw)
+                        except Exception:
+                            p_val = 0.0
+                        desc_str = line_str.replace(model_str, "").replace(price_match.group(0), "").strip()
+                        if not desc_str:
+                            desc_str = f"{default_provider} {model_str}"
+                        items.append({
+                            "model": model_str,
+                            "product": desc_str,
+                            "price": p_val,
+                            "brand": default_provider,
+                            "attributes": ""
+                        })
     except Exception as e:
         print(f"Error parseando PDF de tarifa: {e}")
 

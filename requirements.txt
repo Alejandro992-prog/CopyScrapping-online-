@@ -8,3 +8,5 @@ Pillow
 pytesseract
 easyocr
 google-genai
+httpx
+supabase

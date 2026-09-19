@@ -47,8 +47,10 @@ El sistema permite capturar productos desde el portapapeles del navegador (Ctrl+
 ```text
 CopyScrapping (online)/
 ├── app.py                  # Servidor FastAPI principal y lógica completa
+├── supabase_client.py      # Cliente resiliente de integración con Supabase (PostgREST)
+├── supabase_schema.sql     # Script SQL para creación de tablas en Supabase
 ├── static/                 # Interfaz de usuario (Frontend)
-│   ├── index.html          # Estructura del dashboard y modales
+│   ├── index.html          # Estructura del dashboard y modales (incluye modal Supabase)
 │   ├── style.css           # Estilos y tema visual oscuro
 │   └── app.js              # Lógica de cliente, portapapeles y eventos
 ├── data/                   # Directorio de persistencia de datos
@@ -130,6 +132,30 @@ docker build -t garde-clipboard-parser .
 docker run -p 8000:8000 -v $(pwd)/data:/app/data garde-clipboard-parser
 ```
 > **Nota de Persistencia**: Monta el volumen persistente en `/app/data` para conservar tus proveedores y archivos extraídos.
+
+---
+
+## ☁️ Conexión con Supabase (Nube PostgreSQL)
+
+Garde Clipboard Parser cuenta con una integración híbrida **Local-First**: tus capturas del portapapeles se guardan al instante en local (archivos `.csv` o `.xlsx`) y se sincronizan en segundo plano con tu base de datos en Supabase.
+
+### 1. Crear las tablas en Supabase
+1. Entra en tu panel de [Supabase](https://supabase.com).
+2. Ve a **SQL Editor** -> **New Query**.
+3. Copia y pega el contenido del archivo [`supabase_schema.sql`](supabase_schema.sql) y pulsa **Run**.
+   Esto creará las tablas `extractions`, `stock_items` y `providers` con índices y deduplicación automática.
+
+### 2. Configurar las credenciales en la App
+- Puedes pulsar el botón **☁️ Supabase** en la esquina superior del panel web e ingresar la **URL del proyecto** y la **Clave API** (Anon o Service Role).
+- También puedes definir las variables de entorno `SUPABASE_URL` y `SUPABASE_KEY` o editarlas directamente en `data/config.json`.
+
+### 3. Sincronización Automática y Manual
+- **Auto-sync en tiempo real**: Cada producto capturado con Ctrl+C / Ctrl+V o con IA Vision se envía automáticamente a la nube.
+- **Centro de Sincronización**: Desde el modal de Supabase puedes pulsar:
+  - *Subir Capturas*: Envía todos los archivos locales acumulados a Supabase.
+  - *Descargar Capturas*: Descarga las capturas de la nube a tus CSV locales.
+  - *Subir Stock*: Sube el inventario de almacén a Supabase.
+  - *Sincronizar Plantillas*: Sincroniza tus expresiones regulares y tiendas entrenadas.
 
 ---
 

@@ -3182,6 +3182,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const tariffNameInput = document.getElementById("tariff-name-input");
     const btnUploadTariff = document.getElementById("btn-upload-tariff");
     const tariffsListContainer = document.getElementById("tariffs-list-container");
+    const btnToggleUploadTariff = document.getElementById("btn-toggle-upload-tariff");
+    const panelUploadTariff = document.getElementById("panel-upload-tariff");
+    const btnCancelUploadTariff = document.getElementById("btn-cancel-upload-tariff");
+    const tariffSelectedInfoBox = document.getElementById("tariff-selected-info-box");
+    const tariffSelectedDetails = document.getElementById("tariff-selected-details");
+    const btnDeleteSelectedTariff = document.getElementById("btn-delete-selected-tariff");
+    const tariffsCountBadge = document.getElementById("tariffs-count-badge");
+    const activeTariffDisplay = document.getElementById("active-tariff-display");
 
     const selectDeltaOld = document.getElementById("select-delta-old");
     const selectDeltaNew = document.getElementById("select-delta-new");
@@ -3193,6 +3201,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnCloseGeminiCard = document.getElementById("btn-close-gemini-card");
 
     const btnExportAuditXlsx = document.getElementById("btn-export-audit-excel");
+
+    // Alternar visibilidad del panel de subida de nueva tarifa
+    if (btnToggleUploadTariff && panelUploadTariff) {
+        btnToggleUploadTariff.addEventListener("click", () => {
+            const isHidden = panelUploadTariff.style.display === "none" || !panelUploadTariff.style.display;
+            panelUploadTariff.style.display = isHidden ? "block" : "none";
+            if (isHidden && tariffProviderInput) {
+                tariffProviderInput.focus();
+            }
+        });
+    }
+
+    if (btnCancelUploadTariff && panelUploadTariff) {
+        btnCancelUploadTariff.addEventListener("click", () => {
+            panelUploadTariff.style.display = "none";
+        });
+    }
 
     // Sub-pestañas de tablas
     const auditSubtabBtns = document.querySelectorAll(".audit-subtab-btn");
@@ -3222,6 +3247,57 @@ document.addEventListener("DOMContentLoaded", () => {
         await loadAuditBrands();
     }
 
+    function syncActiveTariffDisplay() {
+        const selVal = selectAuditProvider ? selectAuditProvider.value : null;
+        if (!selVal) {
+            if (activeTariffDisplay) {
+                activeTariffDisplay.innerHTML = `<span style="color: var(--text-muted);">📁 Selecciona una tarifa en el Paso 1</span>`;
+            }
+            if (tariffSelectedInfoBox) tariffSelectedInfoBox.style.display = "none";
+            return;
+        }
+
+        const selectedOption = selectAuditProvider.options[selectAuditProvider.selectedIndex];
+        const label = selectedOption ? selectedOption.textContent : selVal;
+
+        if (activeTariffDisplay) {
+            activeTariffDisplay.innerHTML = `<span style="color: #a5b4fc; font-weight: 600;">${escapeHtml(label)}</span>`;
+        }
+
+        if (tariffSelectedInfoBox) {
+            tariffSelectedInfoBox.style.display = "flex";
+            if (tariffSelectedDetails) {
+                tariffSelectedDetails.textContent = label;
+            }
+        }
+    }
+
+    if (selectAuditProvider) {
+        selectAuditProvider.addEventListener("change", syncActiveTariffDisplay);
+    }
+
+    if (btnDeleteSelectedTariff) {
+        btnDeleteSelectedTariff.addEventListener("click", async () => {
+            const tid = selectAuditProvider ? selectAuditProvider.value : null;
+            if (!tid) {
+                alert("Selecciona una tarifa para eliminar.");
+                return;
+            }
+            if (confirm("¿Estás seguro de que deseas eliminar la tarifa actualmente seleccionada?")) {
+                try {
+                    const delRes = await fetch(`/api/tariffs/${encodeURIComponent(tid)}`, { method: "DELETE" });
+                    if (delRes.ok) {
+                        await loadSavedTariffs();
+                    } else {
+                        alert("Error al eliminar la tarifa.");
+                    }
+                } catch (err) {
+                    alert(`Error al eliminar: ${err.message}`);
+                }
+            }
+        });
+    }
+
     // Cargar tarifas registradas en data/tariffs/ y actualizar tanto la lista visual como el selector de cruce
     async function loadSavedTariffs(selectedTariffId = null) {
         if (!tariffsListContainer && !selectAuditProvider) return;
@@ -3229,13 +3305,17 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/tariffs/list");
             const tariffs = await res.json();
 
+            if (tariffsCountBadge) {
+                tariffsCountBadge.textContent = tariffs ? tariffs.length : 0;
+            }
+
             // 1. Renderizar lista en la tarjeta de Tarifas
             if (tariffsListContainer) {
                 tariffsListContainer.innerHTML = "";
                 if (!tariffs || tariffs.length === 0) {
                     tariffsListContainer.innerHTML = `
                         <div style="font-size: 11px; color: var(--text-muted); padding: 12px; text-align: center;">
-                            No hay tarifas registradas todavía.<br>Sube una arriba en PDF o Excel (.xlsx, .xls, .csv).
+                            No hay tarifas registradas todavía.<br>Haz clic en "➕ ¿Quieres subir una nueva tarifa?".
                         </div>`;
                 } else {
                     tariffs.forEach(t => {
@@ -3280,6 +3360,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             const tid = e.currentTarget.dataset.id;
                             if (selectAuditProvider) {
                                 selectAuditProvider.value = tid;
+                                syncActiveTariffDisplay();
                                 selectAuditProvider.focus();
                                 selectAuditProvider.style.outline = "2px solid #6c5ce7";
                                 setTimeout(() => { selectAuditProvider.style.outline = ""; }, 1200);
@@ -3348,6 +3429,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 } else if (prevVal) {
                     selectAuditProvider.value = prevVal;
                 }
+
+                syncActiveTariffDisplay();
             }
         } catch (err) {
             console.error("Error cargando tarifas registradas:", err);
@@ -3388,6 +3471,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert(`✅ Tarifa de '${data.tariff.provider_name}' procesada con éxito!\nReferencias extraídas: ${data.tariff.total_items}\nFormato: ${data.tariff.file_type.toUpperCase()}`);
                     tariffFileInput.value = "";
                     if (tariffNameInput) tariffNameInput.value = "";
+                    if (panelUploadTariff) panelUploadTariff.style.display = "none";
                     await loadSavedTariffs(data.tariff.id);
                 } else {
                     alert(`❌ Error al procesar tarifa: ${data.detail || 'Formato no reconocido'}`);
@@ -3492,24 +3576,39 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            const file = auditFileInput.files[0];
+            const files = Array.from(auditFileInput.files);
             const formData = new FormData();
-            formData.append("file", file);
-            if (auditManualDate && auditManualDate.value) {
+            files.forEach(f => {
+                formData.append("files", f);
+            });
+            // Compatibilidad si el backend espera "file"
+            if (files.length === 1) {
+                formData.append("file", files[0]);
+            }
+            if (auditManualDate && auditManualDate.value && files.length === 1) {
                 formData.append("manual_date", auditManualDate.value);
             }
 
             btnUploadAuditPdf.disabled = true;
-            btnUploadAuditPdf.textContent = "⏳ Analizando PDF...";
+            btnUploadAuditPdf.textContent = files.length > 1 ? `⏳ Procesando ${files.length} PDFs...` : "⏳ Analizando PDF...";
 
             try {
                 const res = await fetch("/api/stock/upload-audit-pdf", {
                     method: "POST",
                     body: formData
                 });
-                const data = await res.json();
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch (jsonErr) {
+                    data = { detail: res.statusText || "Error en el servidor" };
+                }
                 if (res.ok) {
-                    alert(`✅ Inventario procesado con éxito!\nFecha detectada: ${data.detected_date}\nReferencias: ${data.total_references}\nUnidades totales: ${data.total_units}`);
+                    if (files.length > 1) {
+                        alert(`✅ ¡${data.processed_count || files.length} inventarios PDF procesados y guardados con éxito en el historial!`);
+                    } else {
+                        alert(`✅ Inventario procesado con éxito!\nFecha detectada: ${data.detected_date || data.date || 'Desconocida'}\nReferencias: ${data.total_references || 0}\nUnidades totales: ${data.total_units || 0}`);
+                    }
                     auditFileInput.value = "";
                     await loadAuditSnapshots();
                     await loadAuditBrands();
@@ -3520,7 +3619,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert(`❌ Error de conexión al subir PDF: ${err.message}`);
             } finally {
                 btnUploadAuditPdf.disabled = false;
-                btnUploadAuditPdf.textContent = "⬆ Subir PDF ERP";
+                btnUploadAuditPdf.textContent = "⬆ Subir PDF(s) de Stock";
             }
         });
     }
@@ -3877,10 +3976,410 @@ document.addEventListener("DOMContentLoaded", () => {
         return html;
     }
 
+    // -------------------------------------------------------------------------
+    // INTEGRACIÓN CON SUPABASE CLOUD (POSTGRESQL)
+    // -------------------------------------------------------------------------
+    function initSupabase() {
+        const btnModal = document.getElementById("btn-supabase-modal");
+        const modal = document.getElementById("modal-supabase");
+        const btnClose = document.getElementById("btn-close-modal-supabase");
+        const btnCloseFooter = document.getElementById("btn-close-supabase-footer");
+        const headerDot = document.getElementById("supabase-header-dot");
+        const statusTag = document.getElementById("supabase-status-tag");
+        const statusAlert = document.getElementById("supabase-status-alert");
+        const toggleEnabled = document.getElementById("supabase-enabled-toggle");
+        const toggleAutoSync = document.getElementById("supabase-autosync-toggle");
+        const inputUrl = document.getElementById("supabase-url-input");
+        const inputKey = document.getElementById("supabase-key-input");
+        const btnToggleKey = document.getElementById("btn-toggle-supabase-key");
+        const keyHint = document.getElementById("supabase-key-hint");
+        const btnTest = document.getElementById("btn-test-supabase");
+        const btnSave = document.getElementById("btn-save-supabase");
+        const feedbackMsg = document.getElementById("supabase-feedback-msg");
+
+        const btnPushExtractions = document.getElementById("btn-sync-push-extractions");
+        const btnPullExtractions = document.getElementById("btn-sync-pull-extractions");
+        const btnPushStock = document.getElementById("btn-sync-push-stock");
+        const btnSyncProviders = document.getElementById("btn-sync-providers");
+
+        if (!btnModal || !modal) return;
+
+        btnModal.addEventListener("click", () => {
+            modal.style.display = "flex";
+            loadSupabaseConfig();
+        });
+
+        const closeModal = () => {
+            modal.style.display = "none";
+            if (feedbackMsg) feedbackMsg.style.display = "none";
+        };
+        if (btnClose) btnClose.addEventListener("click", closeModal);
+        if (btnCloseFooter) btnCloseFooter.addEventListener("click", closeModal);
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) closeModal();
+        });
+
+        if (btnToggleKey && inputKey) {
+            btnToggleKey.addEventListener("click", () => {
+                inputKey.type = inputKey.type === "password" ? "text" : "password";
+            });
+        }
+
+        function showFeedback(type, text) {
+            if (!feedbackMsg) return;
+            feedbackMsg.style.display = "block";
+            if (type === "success") {
+                feedbackMsg.style.background = "rgba(62, 207, 142, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(62, 207, 142, 0.4)";
+                feedbackMsg.style.color = "#a7f3d0";
+                feedbackMsg.innerHTML = `✅ ${text}`;
+            } else if (type === "error") {
+                feedbackMsg.style.background = "rgba(239, 68, 68, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(239, 68, 68, 0.4)";
+                feedbackMsg.style.color = "#fca5a5";
+                feedbackMsg.innerHTML = `❌ ${text}`;
+            } else {
+                feedbackMsg.style.background = "rgba(59, 130, 246, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(59, 130, 246, 0.4)";
+                feedbackMsg.style.color = "#93c5fd";
+                feedbackMsg.innerHTML = `⏳ ${text}`;
+            }
+        }
+
+        async function loadSupabaseConfig() {
+            try {
+                const res = await fetch("/api/supabase/config");
+                if (!res.ok) return;
+                const data = await res.json();
+
+                if (toggleEnabled) toggleEnabled.checked = !!data.enabled;
+                if (toggleAutoSync) toggleAutoSync.checked = !!data.auto_sync;
+                if (inputUrl && !inputUrl.value) inputUrl.value = data.url || "";
+
+                if (data.has_key) {
+                    if (keyHint) keyHint.textContent = `Clave guardada en servidor (${data.key_preview}). Déjala vacía para conservarla.`;
+                } else {
+                    if (keyHint) keyHint.textContent = "No hay clave configurada.";
+                }
+
+                if (data.enabled && data.is_configured) {
+                    if (headerDot) {
+                        headerDot.className = "dot supabase-online";
+                        headerDot.title = "Supabase Conectado y Activo";
+                    }
+                    if (statusTag) {
+                        statusTag.className = "badge badge-success";
+                        statusTag.style.background = "#3ecf8e";
+                        statusTag.style.color = "#0b0f19";
+                        statusTag.textContent = "● Conectado";
+                    }
+                    if (statusAlert) statusAlert.classList.add("connected");
+                } else if (data.enabled && !data.is_configured) {
+                    if (headerDot) {
+                        headerDot.className = "dot offline";
+                        headerDot.title = "Supabase: Faltan credenciales";
+                    }
+                    if (statusTag) {
+                        statusTag.className = "badge badge-warning";
+                        statusTag.style.background = "#f59e0b";
+                        statusTag.style.color = "#0b0f19";
+                        statusTag.textContent = "⚠️ Faltan credenciales";
+                    }
+                    if (statusAlert) statusAlert.classList.remove("connected");
+                } else {
+                    if (headerDot) {
+                        headerDot.className = "dot offline";
+                        headerDot.title = "Supabase Desactivado";
+                    }
+                    if (statusTag) {
+                        statusTag.className = "badge badge-secondary";
+                        statusTag.textContent = "○ Desactivado";
+                    }
+                    if (statusAlert) statusAlert.classList.remove("connected");
+                }
+            } catch (err) {
+                console.warn("Error cargando config de Supabase:", err);
+            }
+        }
+
+        if (btnTest) {
+            btnTest.addEventListener("click", async () => {
+                const url = inputUrl ? inputUrl.value.trim() : "";
+                const key = inputKey ? inputKey.value.trim() : "";
+                showFeedback("info", "Probando conexión con Supabase...");
+                btnTest.disabled = true;
+
+                try {
+                    const res = await fetch("/api/supabase/test", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ url, key })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        showFeedback("success", data.message);
+                    } else {
+                        showFeedback("error", data.message);
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error de red al conectar con el backend: " + err.message);
+                } finally {
+                    btnTest.disabled = false;
+                }
+            });
+        }
+
+        if (btnSave) {
+            btnSave.addEventListener("click", async () => {
+                const enabled = toggleEnabled ? toggleEnabled.checked : false;
+                const auto_sync = toggleAutoSync ? toggleAutoSync.checked : true;
+                const url = inputUrl ? inputUrl.value.trim() : "";
+                const key = inputKey ? inputKey.value.trim() : "";
+
+                showFeedback("info", "Guardando configuración...");
+                btnSave.disabled = true;
+
+                try {
+                    const res = await fetch("/api/supabase/config", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ enabled, url, key, auto_sync })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showFeedback("success", "Configuración de Supabase guardada correctamente.");
+                        if (inputKey) inputKey.value = "";
+                        await loadSupabaseConfig();
+                    } else {
+                        showFeedback("error", data.detail || "No se pudo guardar la configuración.");
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error de red: " + err.message);
+                } finally {
+                    btnSave.disabled = false;
+                }
+            });
+        }
+
+        if (btnPushExtractions) {
+            btnPushExtractions.addEventListener("click", async () => {
+                showFeedback("info", "Subiendo extracciones locales a Supabase...");
+                btnPushExtractions.disabled = true;
+                try {
+                    const res = await fetch("/api/supabase/sync/extractions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showFeedback("success", data.message);
+                    } else {
+                        showFeedback("error", data.detail || data.message || "Error al subir extracciones.");
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error: " + err.message);
+                } finally {
+                    btnPushExtractions.disabled = false;
+                }
+            });
+        }
+
+        if (btnPullExtractions) {
+            btnPullExtractions.addEventListener("click", async () => {
+                showFeedback("info", "Descargando extracciones desde Supabase a local...");
+                btnPullExtractions.disabled = true;
+                try {
+                    const res = await fetch("/api/supabase/sync/extractions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "pull" })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showFeedback("success", data.message);
+                    } else {
+                        showFeedback("error", data.detail || data.message || "Error al descargar extracciones.");
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error: " + err.message);
+                } finally {
+                    btnPullExtractions.disabled = false;
+                }
+            });
+        }
+
+        if (btnPushStock) {
+            btnPushStock.addEventListener("click", async () => {
+                showFeedback("info", "Subiendo inventario de almacén a Supabase...");
+                btnPushStock.disabled = true;
+                try {
+                    const res = await fetch("/api/supabase/sync/stock", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showFeedback("success", data.message);
+                    } else {
+                        showFeedback("error", data.detail || data.message || "Error al subir stock.");
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error: " + err.message);
+                } finally {
+                    btnPushStock.disabled = false;
+                }
+            });
+        }
+
+        if (btnSyncProviders) {
+            btnSyncProviders.addEventListener("click", async () => {
+                showFeedback("info", "Sincronizando plantillas de proveedores...");
+                btnSyncProviders.disabled = true;
+                try {
+                    const res = await fetch("/api/supabase/sync/providers", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showFeedback("success", data.message);
+                    } else {
+                        showFeedback("error", data.detail || data.message || "Error sincronizando proveedores.");
+                    }
+                } catch (err) {
+                    showFeedback("error", "Error: " + err.message);
+                } finally {
+                    btnSyncProviders.disabled = false;
+                }
+            });
+        }
+
+        loadSupabaseConfig();
+    }
+
+    // -------------------------------------------------------------------------
+    // COPIA DE SEGURIDAD DEL SISTEMA (EXPORTAR / IMPORTAR .ZIP)
+    // -------------------------------------------------------------------------
+    function initBackupSystem() {
+        const btnModal = document.getElementById("btn-backup-modal");
+        const modal = document.getElementById("modal-backup");
+        const btnClose = document.getElementById("btn-close-modal-backup");
+        const btnCloseFooter = document.getElementById("btn-close-backup-footer");
+        const btnDownload = document.getElementById("btn-download-backup");
+        const fileInput = document.getElementById("backup-file-input");
+        const btnRestore = document.getElementById("btn-restore-backup");
+        const feedbackMsg = document.getElementById("backup-feedback-msg");
+
+        if (!btnModal || !modal) return;
+
+        const openModal = () => {
+            modal.style.display = "flex";
+            if (feedbackMsg) feedbackMsg.style.display = "none";
+        };
+        const closeModal = () => {
+            modal.style.display = "none";
+            if (feedbackMsg) feedbackMsg.style.display = "none";
+        };
+
+        btnModal.addEventListener("click", openModal);
+        if (btnClose) btnClose.addEventListener("click", closeModal);
+        if (btnCloseFooter) btnCloseFooter.addEventListener("click", closeModal);
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) closeModal();
+        });
+
+        function showBackupFeedback(type, text) {
+            if (!feedbackMsg) return;
+            feedbackMsg.style.display = "block";
+            if (type === "success") {
+                feedbackMsg.style.background = "rgba(62, 207, 142, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(62, 207, 142, 0.4)";
+                feedbackMsg.style.color = "#a7f3d0";
+                feedbackMsg.innerHTML = `✅ ${text}`;
+            } else if (type === "error") {
+                feedbackMsg.style.background = "rgba(239, 68, 68, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(239, 68, 68, 0.4)";
+                feedbackMsg.style.color = "#fca5a5";
+                feedbackMsg.innerHTML = `❌ ${text}`;
+            } else {
+                feedbackMsg.style.background = "rgba(59, 130, 246, 0.15)";
+                feedbackMsg.style.border = "1px solid rgba(59, 130, 246, 0.4)";
+                feedbackMsg.style.color = "#93c5fd";
+                feedbackMsg.innerHTML = `⏳ ${text}`;
+            }
+        }
+
+        if (btnDownload) {
+            btnDownload.addEventListener("click", () => {
+                showBackupFeedback("info", "Generando y descargando archivo de respaldo...");
+                window.location.href = "/api/backup/export";
+                setTimeout(() => {
+                    showBackupFeedback("success", "Descarga iniciada. Guarda el archivo .zip de respaldo en un lugar seguro.");
+                }, 1500);
+            });
+        }
+
+        if (btnRestore && fileInput) {
+            btnRestore.addEventListener("click", async () => {
+                if (!fileInput.files || fileInput.files.length === 0) {
+                    showBackupFeedback("error", "Por favor selecciona un archivo .zip de respaldo.");
+                    return;
+                }
+                const file = fileInput.files[0];
+                if (!file.name.toLowerCase().endsWith(".zip")) {
+                    showBackupFeedback("error", "El archivo seleccionado debe ser un .zip.");
+                    return;
+                }
+
+                if (!confirm(`¿Estás seguro de que deseas restaurar la copia de seguridad desde '${file.name}'? Todos los datos actuales del programa serán reemplazados con los de la copia.`)) {
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append("file", file);
+
+                btnRestore.disabled = true;
+                btnRestore.textContent = "⏳ Restaurando...";
+                showBackupFeedback("info", "Descomprimiendo y restaurando base de datos...");
+
+                try {
+                    const res = await fetch("/api/backup/import", {
+                        method: "POST",
+                        body: formData
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        showBackupFeedback("success", `¡Copia de seguridad restaurada con éxito! (${data.files_restored} archivos recuperados). Recargando datos...`);
+                        fileInput.value = "";
+                        setTimeout(async () => {
+                            closeModal();
+                            if (typeof loadStatus === "function") await loadStatus();
+                            if (typeof loadSavedTariffs === "function") await loadSavedTariffs();
+                            if (typeof loadAuditSnapshots === "function") await loadAuditSnapshots();
+                        }, 2000);
+                    } else {
+                        showBackupFeedback("error", data.detail || data.message || "Error al restaurar el archivo.");
+                    }
+                } catch (err) {
+                    showBackupFeedback("error", "Error de red al subir la copia: " + err.message);
+                } finally {
+                    btnRestore.disabled = false;
+                    btnRestore.textContent = "Restaurar";
+                }
+            });
+        }
+    }
+
     // Initialize Page
     initSSEConnection();
     loadStatus();
     loadGeminiConfig();
     initAuditTab();
+    initSupabase();
+    initBackupSystem();
 });
+
 

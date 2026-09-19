@@ -3,6 +3,7 @@ import sys
 import io
 import re
 import json
+import zipfile
 import time
 
 import asyncio
@@ -45,6 +46,32 @@ try:
     import stock_analyzer
 except ImportError:
     stock_analyzer = None
+
+try:
+    import supabase_client
+except ImportError:
+    supabase_client = None
+
+def safe_remove(path: str, max_retries: int = 4, delay: float = 0.15):
+    """Elimina un archivo temporal de forma segura en Windows, manejando bloqueos de concurrencia."""
+    if not path or not os.path.exists(path):
+        return
+    import gc
+    gc.collect()
+    for _ in range(max_retries):
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+            gc.collect()
+        except Exception:
+            break
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Regex pre-compiladas a nivel de módulo (evitar re-compilación en cada llamada)
@@ -1264,6 +1291,86 @@ def standardize_product_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     extra_cols = [c for c in df.columns if c not in UNIVERSAL_COLUMNS]
     return df[UNIVERSAL_COLUMNS + extra_cols]
 
+def get_supabase_client(cfg: Optional[Dict[str, Any]] = None):
+    """Devuelve una instancia de SupabaseClient configurada según config.json o variables de entorno."""
+    if not supabase_client:
+        return None
+    if cfg is None:
+        cfg = load_config()
+    sb_cfg = cfg.get("supabase", {})
+    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
+    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
+    return supabase_client.SupabaseClient(url=url, key=key)
+
+def sync_to_supabase_background(items: List[Dict[str, Any]], provider: Dict[str, Any]):
+    """Sincroniza extracciones a Supabase en un hilo daemon para evitar cualquier retraso en la captura local."""
+    if not supabase_client or not items:
+        return
+    try:
+        cfg = load_config()
+        sb_cfg = cfg.get("supabase", {})
+        if not sb_cfg.get("enabled", False) or not sb_cfg.get("auto_sync", True):
+            return
+        client = get_supabase_client(cfg)
+        if not client or not client.is_configured:
+            return
+
+        p_id = provider.get("id", "default")
+        p_name = provider.get("name", p_id)
+        items_copy = [dict(it) for it in items]
+
+        def _worker():
+            try:
+                count, err = client.upsert_extractions(items_copy, provider_id=p_id, provider_name=p_name)
+                if err:
+                    add_log("warning", f"☁️ Supabase (auto-sync): {err}")
+                elif count > 0:
+                    add_log("info", f"☁️ Supabase: {count} producto(s) sincronizado(s) en la nube ({p_name})")
+            except Exception as ex:
+                add_log("warning", f"☁️ Supabase auto-sync falló: {str(ex)}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception as e:
+        logger.debug(f"Error lanzando hilo de sincronización Supabase: {e}")
+
+def delete_from_supabase_background(delete_type: str, provider_id: str, model: Optional[str] = None):
+    """Sincroniza eliminaciones locales con Supabase en segundo plano sin bloquear el sistema."""
+    if not supabase_client or not provider_id:
+        return
+    try:
+        cfg = load_config()
+        sb_cfg = cfg.get("supabase", {})
+        if not sb_cfg.get("enabled", False):
+            return
+        client = get_supabase_client(cfg)
+        if not client or not client.is_configured:
+            return
+
+        def _worker():
+            try:
+                if delete_type in ("file", "clear"):
+                    ok, err = client.delete_extractions_by_provider(provider_id)
+                    if ok:
+                        add_log("info", f"☁️ Supabase: Eliminadas extracciones de '{provider_id}' en la nube.")
+                    elif err:
+                        add_log("warning", f"☁️ Supabase delete ({provider_id}): {err}")
+                elif delete_type == "row" and model:
+                    ok, err = client.delete_extraction_by_model(provider_id, model)
+                    if ok:
+                        add_log("info", f"☁️ Supabase: Eliminado modelo '{model}' ({provider_id}) en la nube.")
+                    elif err:
+                        add_log("warning", f"☁️ Supabase delete row ({model}): {err}")
+                elif delete_type == "provider":
+                    client.delete_provider_record(provider_id)
+                    client.delete_extractions_by_provider(provider_id)
+                    add_log("info", f"☁️ Supabase: Eliminada plantilla y datos de '{provider_id}' en la nube.")
+            except Exception as ex:
+                logger.debug(f"Error en worker de borrado Supabase: {ex}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception as e:
+        logger.debug(f"Error lanzando hilo de borrado Supabase: {e}")
+
 def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], provider: Dict[str, Any], source_label: str = "portapapeles") -> int:
     """Guarda un lote de productos extraídos en el archivo del proveedor con deduplicación por modelo y columnas estandarizadas."""
     if not extracted_data_list:
@@ -1317,10 +1424,15 @@ def save_extracted_items_to_provider(extracted_data_list: List[Dict[str, Any]], 
 
         if added_count > 1:
             add_log("success", f"Se han procesado y guardado {added_count} productos desde {source_label}.")
+
+        # Auto-sincronizar con Supabase en background (no bloqueante)
+        sync_to_supabase_background(extracted_data_list, provider)
+
         return added_count
     except Exception as e:
         add_log("error", f"Error guardando productos de {source_label}: {str(e)}")
         return 0
+
 
 def process_text(text: str, provider: Dict[str, Any], is_ocr: bool = False):
     text = preprocess_clipboard_text(text)
@@ -2135,6 +2247,20 @@ class CreateUserRequest(BaseModel):
     username: str
     password: str
 
+class SupabaseConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    url: Optional[str] = None
+    key: Optional[str] = None
+    auto_sync: Optional[bool] = None
+
+class SupabaseTestRequest(BaseModel):
+    url: Optional[str] = None
+    key: Optional[str] = None
+
+class SupabaseSyncRequest(BaseModel):
+    direction: Optional[str] = "push"  # "push" o "pull"
+    provider_id: Optional[str] = None
+
 # Rutas API
 @app.post("/api/process-text")
 async def process_text_endpoint(req: ProcessTextRequest):
@@ -2263,6 +2389,313 @@ async def update_gemini_config(req: GeminiConfigRequest, username: str = Depends
         "image_engine": config.get("image_engine", "gemini"),
         "gemini_auto_fallback": config.get("gemini_auto_fallback", True)
     }
+
+# ---------------------------------------------------------------------------
+# Endpoints de Configuración y Sincronización con Supabase
+# ---------------------------------------------------------------------------
+@app.get("/api/supabase/config")
+async def get_supabase_config(username: str = Depends(check_authentication)):
+    config = load_config()
+    sb_cfg = config.get("supabase", {})
+    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
+    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
+    key_preview = ""
+    if key:
+        key_preview = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "***"
+    return {
+        "enabled": bool(sb_cfg.get("enabled", False)),
+        "url": url,
+        "has_key": bool(key),
+        "key_preview": key_preview,
+        "auto_sync": bool(sb_cfg.get("auto_sync", True)),
+        "is_configured": bool(url and key and url.startswith("http")),
+    }
+
+@app.post("/api/supabase/config")
+async def update_supabase_config(req: SupabaseConfigRequest, username: str = Depends(check_authentication)):
+    config = load_config()
+    if "supabase" not in config:
+        config["supabase"] = {}
+    sb_cfg = config["supabase"]
+
+    if req.enabled is not None:
+        sb_cfg["enabled"] = bool(req.enabled)
+    if req.url is not None:
+        sb_cfg["url"] = req.url.strip()
+    if req.key is not None and req.key.strip():
+        sb_cfg["key"] = req.key.strip()
+    if req.auto_sync is not None:
+        sb_cfg["auto_sync"] = bool(req.auto_sync)
+
+    save_config(config)
+    add_log("info", f"Configuración de Supabase actualizada por '{username}'.")
+    return {
+        "status": "success",
+        "enabled": sb_cfg.get("enabled", False),
+        "url": sb_cfg.get("url", ""),
+        "has_key": bool(sb_cfg.get("key") or os.getenv("SUPABASE_KEY")),
+        "auto_sync": sb_cfg.get("auto_sync", True),
+    }
+
+@app.post("/api/supabase/test")
+async def test_supabase_connection(req: SupabaseTestRequest, username: str = Depends(check_authentication)):
+    config = load_config()
+    sb_cfg = config.get("supabase", {})
+    url = req.url or sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
+    key = req.key or sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
+
+    if not supabase_client:
+        return {"success": False, "message": "El módulo supabase_client no está disponible."}
+
+    client = supabase_client.SupabaseClient(url=url, key=key)
+    ok, msg = client.test_connection()
+    if ok:
+        add_log("success", f"Prueba de conexión con Supabase exitosa ({username}).")
+    else:
+        add_log("warning", f"Prueba de conexión con Supabase falló: {msg}")
+    return {"success": ok, "message": msg}
+
+@app.post("/api/supabase/sync/extractions")
+async def sync_supabase_extractions(req: SupabaseSyncRequest, username: str = Depends(check_authentication)):
+    client = get_supabase_client()
+    if not client or not client.is_configured:
+        raise HTTPException(status_code=400, detail="Supabase no está configurado con URL y clave válidas.")
+
+    direction = (req.direction or "push").lower()
+    target_prov_id = req.provider_id
+
+    if direction == "push":
+        # Leer archivos de data/extractions/ y enviarlos a Supabase
+        if not os.path.exists(EXTRACTIONS_DIR):
+            return {"success": True, "synced_count": 0, "message": "No hay archivos locales en extractions para subir."}
+
+        total_upserted = 0
+        cfg = load_config()
+        providers = {p.get("id"): p.get("name") for p in cfg.get("providers", [])}
+
+        files_to_sync = []
+        for f in os.listdir(EXTRACTIONS_DIR):
+            if f.endswith(".csv") or f.endswith(".xlsx"):
+                p_id = os.path.splitext(f)[0]
+                if target_prov_id and p_id != target_prov_id:
+                    continue
+                files_to_sync.append((p_id, os.path.join(EXTRACTIONS_DIR, f)))
+
+        for p_id, path in files_to_sync:
+            try:
+                if path.endswith(".xlsx"):
+                    df = pd.read_excel(path)
+                else:
+                    df = pd.read_csv(path, encoding="utf-8-sig")
+                if df.empty:
+                    continue
+                records = df.to_dict(orient="records")
+                p_name = providers.get(p_id, p_id)
+                count, err = client.upsert_extractions(records, provider_id=p_id, provider_name=p_name)
+                if err:
+                    add_log("warning", f"Supabase sync {p_id}: {err}")
+                else:
+                    total_upserted += count
+            except Exception as e:
+                add_log("error", f"Error leyendo {path} para Supabase: {str(e)}")
+
+        add_log("success", f"Subidos {total_upserted} productos a Supabase desde local ({username}).")
+        return {"success": True, "synced_count": total_upserted, "message": f"Se han subido {total_upserted} productos a Supabase."}
+
+    elif direction == "pull":
+        items, err = client.fetch_extractions(provider_id=target_prov_id, limit=5000)
+        if err:
+            raise HTTPException(status_code=500, detail=f"Error descargando de Supabase: {err}")
+        if not items:
+            return {"success": True, "synced_count": 0, "message": "No se encontraron productos en Supabase."}
+
+        # Agrupar por provider_id y actualizar CSVs locales
+        by_provider = {}
+        for it in items:
+            pid = it.get("provider_id") or "default"
+            by_provider.setdefault(pid, []).append(it)
+
+        total_saved = 0
+        cfg = load_config()
+        providers_map = {p.get("id"): p for p in cfg.get("providers", [])}
+
+        for pid, prov_items in by_provider.items():
+            prov_obj = providers_map.get(pid, {"id": pid, "name": pid, "file_format": "csv"})
+            local_items = []
+            for item in prov_items:
+                local_items.append({
+                    "Modelo": item.get("model", ""),
+                    "Marca": item.get("brand", ""),
+                    "Tipo de Aparato": item.get("category", ""),
+                    "Descripción": item.get("product", ""),
+                    "Precio Sin IVA": f"{item['price_no_vat']:.2f} €" if item.get("price_no_vat") is not None else "",
+                    "Precio Con IVA": f"{item['price_vat']:.2f} €" if item.get("price_vat") is not None else "",
+                    "PVP": f"{item['pvp']:.2f} €" if item.get("pvp") is not None else "",
+                    "Atributos": item.get("attributes", ""),
+                    "Fecha": item.get("captured_at", ""),
+                })
+            saved = save_extracted_items_to_provider(local_items, prov_obj, source_label="Supabase Cloud")
+            total_saved += saved
+
+        add_log("success", f"Descargados {total_saved} productos desde Supabase a local ({username}).")
+        return {"success": True, "synced_count": total_saved, "message": f"Se han descargado y actualizado {total_saved} productos locales."}
+
+    else:
+        raise HTTPException(status_code=400, detail="Dirección no válida (use 'push' o 'pull').")
+
+@app.post("/api/supabase/sync/stock")
+async def sync_supabase_stock(req: SupabaseSyncRequest, username: str = Depends(check_authentication)):
+    client = get_supabase_client()
+    if not client or not client.is_configured:
+        raise HTTPException(status_code=400, detail="Supabase no está configurado.")
+
+    direction = (req.direction or "push").lower()
+
+    if direction == "push":
+        stock_dir = get_writeable_path(os.path.join("data", "stock"))
+        if not os.path.exists(stock_dir):
+            return {"success": True, "synced_count": 0, "message": "No hay stock local para subir."}
+
+        files = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir) if f.endswith(".xlsx") or f.endswith(".csv")]
+        if not files:
+            return {"success": True, "synced_count": 0, "message": "No se encontraron archivos de stock locales."}
+
+        latest_file = max(files, key=os.path.getmtime)
+        try:
+            if latest_file.endswith(".xlsx"):
+                df = pd.read_excel(latest_file)
+            else:
+                df = pd.read_csv(latest_file)
+            records = df.to_dict(orient="records")
+            count, err = client.upsert_stock(records)
+            if err:
+                raise HTTPException(status_code=500, detail=f"Error al subir stock: {err}")
+            add_log("success", f"Subidos {count} artículos de stock a Supabase ({username}).")
+            return {"success": True, "synced_count": count, "message": f"Se han subido {count} artículos de stock a Supabase."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error procesando stock: {str(e)}")
+
+    elif direction == "pull":
+        items, err = client.fetch_stock(limit=10000)
+        if err:
+            raise HTTPException(status_code=500, detail=f"Error descargando stock: {err}")
+        return {"success": True, "synced_count": len(items), "data": items, "message": f"Descargados {len(items)} artículos de stock desde Supabase."}
+
+    else:
+        raise HTTPException(status_code=400, detail="Dirección no válida.")
+
+@app.post("/api/supabase/sync/providers")
+async def sync_supabase_providers(req: SupabaseSyncRequest, username: str = Depends(check_authentication)):
+    client = get_supabase_client()
+    if not client or not client.is_configured:
+        raise HTTPException(status_code=400, detail="Supabase no está configurado.")
+
+    direction = (req.direction or "push").lower()
+    config = load_config()
+
+    if direction == "push":
+        providers = config.get("providers", [])
+        count, err = client.upsert_providers(providers)
+        if err:
+            raise HTTPException(status_code=500, detail=f"Error subiendo proveedores: {err}")
+        add_log("success", f"Subidas {count} plantillas de proveedores a Supabase ({username}).")
+        return {"success": True, "synced_count": count, "message": f"Se han subido {count} plantillas de proveedores."}
+
+    elif direction == "pull":
+        cloud_providers, err = client.fetch_providers()
+        if err:
+            raise HTTPException(status_code=500, detail=f"Error descargando proveedores: {err}")
+        if not cloud_providers:
+            return {"success": True, "synced_count": 0, "message": "No hay proveedores en Supabase."}
+
+        local_providers = {p["id"]: p for p in config.get("providers", [])}
+        for cp in cloud_providers:
+            local_providers[cp["id"]] = cp
+
+        config["providers"] = list(local_providers.values())
+        save_config(config)
+        add_log("success", f"Actualizadas {len(cloud_providers)} plantillas desde Supabase ({username}).")
+        return {"success": True, "synced_count": len(cloud_providers), "message": f"Se han sincronizado {len(cloud_providers)} plantillas de proveedores."}
+
+    else:
+        raise HTTPException(status_code=400, detail="Dirección no válida.")
+
+# ---------------------------------------------------------------------------
+# Endpoints de Copia de Seguridad Integral (Exportar e Importar .ZIP)
+# ---------------------------------------------------------------------------
+@app.get("/api/backup/export")
+async def export_backup(username: str = Depends(check_authentication)):
+    """Genera y descarga un archivo .zip con toda la carpeta data/ (configuraciones, bases de datos y archivos)."""
+    if not os.path.exists(DATA_DIR):
+        raise HTTPException(status_code=404, detail="No se encontró la carpeta de datos para respaldar.")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for root, dirs, files in os.walk(DATA_DIR):
+            for file in files:
+                if file.endswith(".tmp") or file.endswith(".lock") or file.startswith(".~"):
+                    continue
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, DATA_DIR)
+                zip_file.write(file_path, arcname)
+
+    zip_buffer.seek(0)
+    ts = get_now().strftime("%Y%m%d_%H%M%S")
+    filename = f"garde_backup_{ts}.zip"
+    add_log("info", f"Copia de seguridad completa descargada por '{username}' ({filename}).")
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
+
+@app.post("/api/backup/import")
+async def import_backup(file: UploadFile = File(...), username: str = Depends(check_authentication)):
+    """Restaura una copia de seguridad .zip extrayéndola de forma segura en DATA_DIR."""
+    global _config_cache, _config_cache_ts, _dict_cache, _dict_cache_ts
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="El archivo debe ser un .zip válido de copia de seguridad.")
+
+    content = await file.read()
+    try:
+        zip_buffer = io.BytesIO(content)
+        with zipfile.ZipFile(zip_buffer, "r") as zip_ref:
+            data_dir_resolved = os.path.abspath(DATA_DIR)
+            for member in zip_ref.namelist():
+                target_path = os.path.abspath(os.path.join(DATA_DIR, member))
+                if not target_path.startswith(data_dir_resolved):
+                    raise HTTPException(status_code=400, detail=f"Archivo inválido en el zip: {member}")
+
+            extracted_count = 0
+            for member in zip_ref.infolist():
+                if not member.is_dir():
+                    zip_ref.extract(member, DATA_DIR)
+                    extracted_count += 1
+
+        # Invalidar cachés en memoria
+        _config_cache = {}
+        _config_cache_ts = 0.0
+        _dict_cache = {}
+        _dict_cache_ts = 0.0
+
+        load_config()
+        load_dictionary()
+
+        add_log("success", f"Copia de seguridad restaurada por '{username}'. {extracted_count} archivos actualizados.")
+        return {
+            "success": True,
+            "status": "success",
+            "message": f"Copia de seguridad restaurada correctamente ({extracted_count} archivos).",
+            "files_restored": extracted_count
+        }
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="El archivo proporcionado no es un archivo .zip válido o está dañado.")
+    except Exception as e:
+        add_log("error", f"Error restaurando copia de seguridad: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error restaurando copia de seguridad: {str(e)}")
 
 @app.post("/api/parse-image")
 async def parse_image(
@@ -2566,6 +2999,7 @@ async def delete_provider(provider_id: str):
         
     save_config(config)
     load_config()
+    delete_from_supabase_background("provider", provider_id)
     add_log("info", f"Proveedor '{provider_id}' eliminado.")
     return {"status": "success"}
 
@@ -2679,6 +3113,7 @@ async def clear_provider_data(provider_id: str):
         try:
             os.remove(filepath)
             add_to_deleted_blacklist(f"cleared::{provider_id}")
+            delete_from_supabase_background("clear", provider_id)
             add_log("success", f"Se han eliminado todas las capturas del proveedor '{provider['name']}'.")
             return {"status": "success", "message": "Datos eliminados correctamente"}
         except Exception as e:
@@ -2708,8 +3143,10 @@ async def delete_provider_row(provider_id: str, req: DeleteRowRequest):
             raise HTTPException(status_code=400, detail="Índice de fila no encontrado en el archivo")
             
         # Registrar datos del elemento eliminado para no re-capturarlo si persiste en portapapeles
+        deleted_model = None
         try:
             deleted_row = df.loc[req.index].to_dict()
+            deleted_model = deleted_row.get("Modelo") or deleted_row.get("model") or deleted_row.get("SKU")
             for col_name, val in deleted_row.items():
                 if val and str(val).strip() and len(str(val).strip()) >= 3:
                     add_to_deleted_blacklist(str(val))
@@ -2727,6 +3164,10 @@ async def delete_provider_row(provider_id: str, req: DeleteRowRequest):
             else:
                 df.to_csv(filepath, index=False, encoding='utf-8-sig')
                 
+        # Sincronizar eliminación de la fila en Supabase
+        if deleted_model:
+            delete_from_supabase_background("row", provider_id, model=str(deleted_model))
+
         add_log("success", f"Captura eliminada correctamente.")
         return {"status": "success", "message": "Fila eliminada correctamente"}
     except Exception as e:
@@ -3554,6 +3995,8 @@ async def delete_extraction_file(filename: str):
     try:
         os.remove(filepath)
         add_log("success", f"Archivo de extracción eliminado: {filename}")
+        p_id = os.path.splitext(filename)[0]
+        delete_from_supabase_background("file", p_id)
         return {"status": "success", "message": f"Archivo {filename} eliminado"}
     except Exception as e:
         add_log("error", f"Error al eliminar el archivo {filename}: {str(e)}")
@@ -5177,70 +5620,116 @@ async def save_price_limits(data: PriceLimitsSaveModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/stock/upload-audit")
+@app.post("/api/stock/upload-audit-pdf")
 async def upload_stock_audit_pdf(
-    file: UploadFile = File(...),
-    document_date: Optional[str] = Form(None)
+    file: Optional[UploadFile] = File(None),
+    files: Optional[List[UploadFile]] = File(None),
+    document_date: Optional[str] = Form(None),
+    manual_date: Optional[str] = Form(None)
 ):
-    """Sube un PDF de inventario, extrae referencias, detecta fecha y guarda snapshot en memoria histórica."""
+    """Sube uno o varios PDFs de inventario, extrae referencias, detecta fechas y guarda snapshots históricos."""
     if stock_analyzer is None:
         raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
         
     stock_dir = os.path.join(DATA_DIR, "stock")
     os.makedirs(stock_dir, exist_ok=True)
-    temp_pdf_path = os.path.join(stock_dir, "temp_audit_inventory.pdf")
     inventory_file = os.path.join(stock_dir, "inventory.json")
 
-    try:
-        content = await file.read()
-        with open(temp_pdf_path, "wb") as f:
-            f.write(content)
+    upload_files = []
+    if files:
+        upload_files.extend([f for f in files if f and f.filename])
+    if file and file.filename:
+        upload_files.append(file)
 
-        add_log("info", f"PDF de inventario '{file.filename}' recibido para auditoría. Procesando...")
-        extracted_products = parse_erp_pdf(temp_pdf_path)
-        if not extracted_products:
-            raise HTTPException(status_code=400, detail="No se pudieron extraer productos del PDF. Revisa el formato.")
+    if not upload_files:
+        raise HTTPException(status_code=400, detail="No se ha proporcionado ningún archivo PDF.")
 
-        # Intentar extraer fecha del texto del PDF si no fue provista
-        detected_date = document_date
-        if not detected_date and _pypdf_module:
-            try:
-                reader = _pypdf_module.PdfReader(temp_pdf_path)
-                sample_text = ""
-                for p in reader.pages[:3]:
-                    sample_text += (p.extract_text() or "") + "\n"
-                detected_date = stock_analyzer.extract_date_from_text(sample_text)
-            except Exception as e_date:
-                add_log("warning", f"No se pudo extraer fecha automáticamente del PDF: {e_date}")
+    processed_snapshots = []
+    last_extracted_products = []
 
-        # Guardar snapshot en historial
-        snapshot = stock_analyzer.save_stock_snapshot(
-            items=extracted_products,
-            filename=file.filename or "inventario.pdf",
-            detected_date=detected_date
-        )
+    for f_item in upload_files:
+        temp_pdf_path = os.path.join(stock_dir, f"temp_audit_{secrets.token_hex(4)}_{os.path.basename(f_item.filename)}")
+        try:
+            content = await f_item.read()
+            with open(temp_pdf_path, "wb") as f_out:
+                f_out.write(content)
 
-        # Actualizar también inventory.json activo
-        with open(inventory_file, "w", encoding="utf-8") as f:
-            json.dump(extracted_products, f, indent=2, ensure_ascii=False)
+            add_log("info", f"PDF de inventario '{f_item.filename}' recibido para auditoría. Procesando...")
+            extracted_products = parse_erp_pdf(temp_pdf_path)
+            if not extracted_products:
+                if len(upload_files) == 1:
+                    raise HTTPException(status_code=400, detail=f"No se pudieron extraer productos de '{f_item.filename}'. Revisa el formato.")
+                else:
+                    add_log("warning", f"Omitido '{f_item.filename}': no se pudieron extraer productos.")
+                    continue
 
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
+            last_extracted_products = extracted_products
 
-        add_log("success", f"Auditoría de inventario procesada: {len(extracted_products)} productos. Snapshot guardado ({snapshot.get('date')}).")
-        return {
-            "status": "success",
-            "snapshot_id": snapshot.get("id"),
-            "date": snapshot.get("date"),
-            "date_source": snapshot.get("date_source"),
-            "total_references": snapshot.get("total_references"),
-            "total_units": snapshot.get("total_units"),
-            "brands": list(snapshot.get("brands_count", {}).keys())[:20]
-        }
-    except Exception as e:
-        if os.path.exists(temp_pdf_path):
-            os.remove(temp_pdf_path)
-        add_log("error", f"Error procesando auditoría de inventario: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+            # Detectar fecha automáticamente del texto del PDF si no fue provista manualmente
+            detected_date = manual_date if len(upload_files) == 1 else None
+            if not detected_date and document_date and len(upload_files) == 1:
+                detected_date = document_date
+            if not detected_date and _pypdf_module:
+                try:
+                    reader = _pypdf_module.PdfReader(temp_pdf_path)
+                    sample_text = ""
+                    for p in reader.pages[:3]:
+                        sample_text += (p.extract_text() or "") + "\n"
+                    detected_date = stock_analyzer.extract_date_from_text(sample_text)
+                except Exception as e_date:
+                    add_log("warning", f"No se pudo extraer fecha automáticamente de '{f_item.filename}': {e_date}")
+
+            snapshot = stock_analyzer.save_stock_snapshot(
+                items=extracted_products,
+                filename=f_item.filename or "inventario.pdf",
+                detected_date=detected_date
+            )
+            processed_snapshots.append(snapshot)
+            add_log("success", f"Auditoría '{f_item.filename}' procesada: {len(extracted_products)} productos (Fecha: {snapshot.get('date')}).")
+        except HTTPException:
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
+            raise
+        except Exception as e:
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
+            add_log("error", f"Error procesando '{f_item.filename}': {str(e)}")
+            if len(upload_files) == 1:
+                raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            if os.path.exists(temp_pdf_path):
+                try:
+                    os.remove(temp_pdf_path)
+                except Exception:
+                    pass
+
+    if not processed_snapshots:
+        raise HTTPException(status_code=400, detail="No se pudo procesar ningún archivo PDF de los proporcionados.")
+
+    # Guardar en inventory.json el último inventario procesado para que la app lo muestre
+    if last_extracted_products:
+        try:
+            with open(inventory_file, "w", encoding="utf-8") as f_inv:
+                json.dump(last_extracted_products, f_inv, indent=2, ensure_ascii=False)
+        except Exception as e_save:
+            add_log("warning", f"No se pudo actualizar inventory.json: {e_save}")
+
+    latest_snap = processed_snapshots[-1]
+    return {
+        "status": "success",
+        "processed_count": len(processed_snapshots),
+        "snapshot_id": latest_snap.get("id"),
+        "date": latest_snap.get("date"),
+        "detected_date": latest_snap.get("date"),
+        "date_source": latest_snap.get("date_source"),
+        "total_references": latest_snap.get("total_references"),
+        "total_units": latest_snap.get("total_units"),
+        "brands": list(latest_snap.get("brands_count", {}).keys())[:20],
+        "all_snapshots": [
+            {"id": s.get("id"), "filename": s.get("filename"), "date": s.get("date"), "refs": s.get("total_references")}
+            for s in processed_snapshots
+        ]
+    }
 
 # ===========================================================================
 # ENDPOINTS: GESTOR DE TARIFAS DE PROVEEDORES (PDF o Excel)

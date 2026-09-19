@@ -29,6 +29,15 @@
                 <div class="active-badge" id="active-provider-badge">
                     Proveedor: Ninguno
                 </div>
+                <button id="btn-supabase-modal" class="btn btn-outline-supabase" title="Configurar Nube Supabase (PostgreSQL)">
+                    <span id="supabase-status-icon">☁️</span>
+                    <span>Supabase</span>
+                    <span id="supabase-header-dot" class="dot offline"></span>
+                </button>
+                <button id="btn-backup-modal" class="btn btn-outline-backup" title="Copias de Seguridad (Exportar / Restaurar)">
+                    <span>💾</span>
+                    <span>Copia de Seguridad</span>
+                </button>
             </div>
         </header>
 
@@ -627,47 +636,78 @@
 
                 <!-- Controls Layout: 2 Columns for Tariffs and Warehouse Stock -->
                 <div class="grid-2col mb-20" style="gap: 20px;">
-                    <!-- Column Left: MÓDULO 1. TARIFAS DE PROVEEDOR (PDF o Excel) -->
+                    <!-- Column Left: MÓDULO 1. TARIFAS DE PROVEEDOR -->
                     <div class="card" style="display: flex; flex-direction: column;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                             <div>
                                 <h3 class="card-title" style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
-                                    <span>📁</span> 1. Catálogo o Tarifa del Proveedor (PDF o Excel)
+                                    <span>📁</span> 1. Catálogo o Tarifa del Proveedor
                                 </h3>
-                                <p class="card-subtitle" style="font-size: 12px; margin: 4px 0 0 0;">
-                                    Sube la lista de precios o catálogo que te envía el fabricante o distribuidor.
+                                <p class="card-subtitle" style="font-size: 12px; margin: 3px 0 0 0;">
+                                    Selecciona el catálogo que deseas consultar o añade uno nuevo.
                                 </p>
                             </div>
                         </div>
 
-                        <!-- Subida de Tarifa -->
-                        <div style="background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
+                        <!-- VISTA PRINCIPAL: Selector de tarifa guardada + Botón ¿Quieres subir una nueva tarifa? -->
+                        <div style="background: rgba(15, 23, 42, 0.5); padding: 14px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
+                            <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 220px;">
+                                    <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 5px;">
+                                        📑 Tarifa Guardada:
+                                    </label>
+                                    <select id="select-audit-provider" class="form-select" style="font-size: 13px; font-weight: 600; padding: 8px 10px; border-color: rgba(99, 102, 241, 0.4); width: 100%;">
+                                        <option value="">Cargando tarifas guardadas...</option>
+                                    </select>
+                                </div>
+                                <button type="button" id="btn-toggle-upload-tariff" class="btn btn-outline-primary" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; font-weight: 600; height: 38px; white-space: nowrap;">
+                                    <span>➕</span> ¿Quieres subir una nueva tarifa?
+                                </button>
+                            </div>
+
+                            <!-- Resumen informativo de la tarifa activa -->
+                            <div id="tariff-selected-info-box" style="margin-top: 10px; display: none; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 6px 10px; border-radius: 6px; font-size: 11px;">
+                                <span id="tariff-selected-details" style="color: var(--text-muted);"></span>
+                                <button type="button" id="btn-delete-selected-tariff" class="btn btn-secondary btn-sm" style="color: #ef4444; padding: 2px 8px; font-size: 11px;" title="Eliminar esta tarifa">
+                                    🗑️ Eliminar
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- PANEL PLEGABLE: Formulario de Subida (Se muestra solo al hacer clic) -->
+                        <div id="panel-upload-tariff" style="display: none; background: rgba(30, 27, 75, 0.45); padding: 14px; border-radius: 8px; border: 1px solid rgba(124, 58, 237, 0.4); margin-bottom: 12px; animation: fadeIn 0.25s ease;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <span style="font-size: 12px; font-weight: 700; color: #c4b5fd;">⬆ Subir Nueva Tarifa o Catálogo</span>
+                                <button type="button" id="btn-cancel-upload-tariff" class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 11px;">✕ Cancelar</button>
+                            </div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                                 <div>
                                     <label for="tariff-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Marca o Proveedor:</label>
-                                    <input type="text" id="tariff-provider-input" placeholder="Ej: Beko, Balay, Bosch..." class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                    <input type="text" id="tariff-provider-input" placeholder="Ej: Beko, Balay, Bosch..." class="form-input" style="padding: 6px 8px; font-size: 12px;">
                                 </div>
                                 <div>
                                     <label for="tariff-name-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Nombre o Mes:</label>
-                                    <input type="text" id="tariff-name-input" placeholder="Ej: Julio 2026" class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                    <input type="text" id="tariff-name-input" placeholder="Ej: Julio 2026" class="form-input" style="padding: 6px 8px; font-size: 12px;">
                                 </div>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="file" id="tariff-file-input" accept=".pdf,.xlsx,.xls,.csv" class="form-input" style="padding: 5px 8px; font-size: 12px; flex: 1;">
-                                <button id="btn-upload-tariff" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
+                                <input type="file" id="tariff-file-input" accept=".pdf,.xlsx,.xls,.csv" class="form-input" style="padding: 6px 8px; font-size: 12px; flex: 1;">
+                                <button id="btn-upload-tariff" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px; font-weight: 600;">
                                     ⬆ Guardar Lista
                                 </button>
                             </div>
                         </div>
 
-                        <!-- Lista de Tarifas Guardadas -->
-                        <div style="flex: 1; display: flex; flex-direction: column;">
-                            <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                📑 Catálogos guardados para consultar:
-                            </label>
-                            <div id="tariffs-list-container" style="max-height: 140px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2); padding: 4px;">
-                                <div style="font-size: 11px; color: var(--text-muted); padding: 8px; text-align: center;">Cargando tarifas...</div>
-                            </div>
+                        <!-- Historial colapsado para ver todas las tarifas si se desea -->
+                        <div style="margin-top: auto;">
+                            <details style="font-size: 11px; color: var(--text-muted);">
+                                <summary style="cursor: pointer; padding: 4px 0; font-weight: 600; color: var(--text-muted);">
+                                    📋 Ver todas las tarifas guardadas (<span id="tariffs-count-badge">0</span>)
+                                </summary>
+                                <div id="tariffs-list-container" style="max-height: 120px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2); padding: 4px; margin-top: 6px;">
+                                    <div style="font-size: 11px; color: var(--text-muted); padding: 8px; text-align: center;">Cargando tarifas...</div>
+                                </div>
+                            </details>
                         </div>
                     </div>
 
@@ -677,14 +717,14 @@
                             <span>🏢</span> 2. Existencias de Mi Almacén (PDF del ERP)
                         </h3>
                         <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">
-                            Sube el archivo PDF que exportas de tu programa de gestión con las existencias.
+                            Sube uno o varios archivos PDF que exportas de tu ERP con las existencias para auditoría e historial.
                         </p>
                         
                         <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
-                            <input type="file" id="audit-file-input" accept=".pdf" class="form-input" style="padding: 6px 8px; font-size: 12px; flex: 1;">
-                            <input type="date" id="audit-manual-date" class="form-input" style="width: 130px; font-size: 11px; padding: 6px 6px;" title="Fecha opcional si el PDF no la incluye">
+                            <input type="file" id="audit-file-input" accept=".pdf" multiple class="form-input" style="padding: 6px 8px; font-size: 12px; flex: 1;" title="Puedes seleccionar uno o varios PDFs de inventario">
+                            <input type="date" id="audit-manual-date" class="form-input" style="width: 130px; font-size: 11px; padding: 6px 6px;" title="Fecha opcional si el PDF no la incluye (solo aplica si subes un único PDF)">
                             <button id="btn-upload-audit-pdf" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
-                                ⬆ Subir PDF de Stock
+                                ⬆ Subir PDF(s) de Stock
                             </button>
                         </div>
 
@@ -735,14 +775,14 @@
                         </div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr auto; gap: 12px; align-items: flex-end;">
+                    <div style="display: grid; grid-template-columns: 2fr 1.2fr 1fr auto; gap: 12px; align-items: flex-end;">
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                📁 Catálogo o Tarifa del Proveedor:
+                            <label style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                📁 Tarifa Activa a consultar:
                             </label>
-                            <select id="select-audit-provider" class="form-select" style="font-size: 13px;">
-                                <option value="">Cargando tarifas registradas...</option>
-                            </select>
+                            <div id="active-tariff-display" style="padding: 8px 12px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px; font-weight: 600; color: #a5b4fc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 38px; display: flex; align-items: center;">
+                                📁 Selecciona una tarifa en el Paso 1
+                            </div>
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
@@ -1060,6 +1100,165 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=1.0.4"></script>
+    <!-- MODAL: CONFIGURACIÓN SUPABASE CLOUD -->
+    <div id="modal-supabase" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="max-width: 580px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(62, 207, 142, 0.3);">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 22px;">☁️</span>
+                    <h3 class="modal-title" style="color: #3ecf8e;">Conexión a la Nube (Supabase)</h3>
+                </div>
+                <button id="btn-close-modal-supabase" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Estado de conexión -->
+                <div id="supabase-status-alert" class="supabase-status-box mb-15">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-size: 13px; font-weight: 600;">Estado de la Conexión:</span>
+                        <span id="supabase-status-tag" class="badge badge-secondary">Comprobando...</span>
+                    </div>
+                </div>
+
+                <!-- Interruptores -->
+                <div class="control-row mb-10" style="background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px;">
+                    <label for="supabase-enabled-toggle" style="font-size: 13px; font-weight: 600;">Activar conexión con Supabase:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="supabase-enabled-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <div class="control-row mb-15" style="background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px;">
+                    <div>
+                        <label for="supabase-autosync-toggle" style="font-size: 13px; font-weight: 600; display: block;">Auto-sincronizar capturas en tiempo real:</label>
+                        <span style="font-size: 11px; color: var(--text-muted);">Sube a Supabase cada producto capturado en segundo plano sin ralentizar el portapapeles.</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="supabase-autosync-toggle" checked>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- Campos de credenciales -->
+                <div class="form-group mb-12">
+                    <label for="supabase-url-input" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block;">
+                        URL del Proyecto Supabase:
+                    </label>
+                    <input type="text" id="supabase-url-input" class="form-input" placeholder="https://xyzcompany.supabase.co" style="width: 100%; font-family: monospace; font-size: 13px;">
+                </div>
+
+                <div class="form-group mb-15">
+                    <label for="supabase-key-input" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block;">
+                        Clave de API (Anon o Service Role):
+                    </label>
+                    <div style="position: relative; display: flex; align-items: center;">
+                        <input type="password" id="supabase-key-input" class="form-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." style="width: 100%; font-family: monospace; font-size: 13px; padding-right: 40px;">
+                        <button type="button" id="btn-toggle-supabase-key" style="position: absolute; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px;" title="Mostrar/ocultar clave">
+                            👁️
+                        </button>
+                    </div>
+                    <span id="supabase-key-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;"></span>
+                </div>
+
+                <!-- Botones de prueba y guardado -->
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <button id="btn-test-supabase" class="btn btn-secondary btn-sm" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                        <span>🧪</span> Probar Conexión
+                    </button>
+                    <button id="btn-save-supabase" class="btn btn-success btn-sm" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; background: #3ecf8e; color: #0b0f19; font-weight: 700;">
+                        <span>💾</span> Guardar Credenciales
+                    </button>
+                </div>
+
+                <div id="supabase-feedback-msg" style="font-size: 12px; padding: 8px 12px; border-radius: 6px; display: none; margin-bottom: 15px;"></div>
+
+                <!-- SECCIÓN: SINCRONIZACIÓN MANUAL -->
+                <div style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 10px;">
+                    <h4 style="font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                        <span>🔄</span> Centro de Sincronización Manual
+                    </h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                        <button id="btn-sync-push-extractions" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube todos los productos locales (.csv) a Supabase">
+                            ⬆️ <strong>Subir Capturas</strong><br>
+                            <span style="font-size: 10px; color: var(--text-muted);">De archivos locales a la nube</span>
+                        </button>
+                        <button id="btn-sync-pull-extractions" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Descarga productos de Supabase a los CSV locales">
+                            ⬇️ <strong>Descargar Capturas</strong><br>
+                            <span style="font-size: 10px; color: var(--text-muted);">De la nube a archivos locales</span>
+                        </button>
+                        <button id="btn-sync-push-stock" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube el inventario de stock actual a Supabase">
+                            📦 <strong>Subir Stock Almacén</strong><br>
+                            <span style="font-size: 10px; color: var(--text-muted);">Sincronizar inventario en la nube</span>
+                        </button>
+                        <button id="btn-sync-providers" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube y descarga plantillas de proveedores">
+                            📋 <strong>Sincronizar Plantillas</strong><br>
+                            <span style="font-size: 10px; color: var(--text-muted);">Reglas Regex de tiendas</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Nota informativa esquema SQL -->
+                <div style="margin-top: 15px; background: rgba(62, 207, 142, 0.08); border-left: 3px solid #3ecf8e; padding: 10px 12px; border-radius: 6px; font-size: 11px; color: #a7f3d0; line-height: 1.4;">
+                    💡 <strong>¿Primera vez configurando Supabase?</strong><br>
+                    Ejecuta el archivo <code>supabase_schema.sql</code> en el <em>SQL Editor</em> de Supabase para crear las tablas con índices y claves únicas optimizadas.
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; margin-top: 15px;">
+                <button id="btn-close-supabase-footer" class="btn btn-secondary btn-sm">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: COPIAS DE SEGURIDAD (EXPORTAR E IMPORTAR .ZIP) -->
+    <div id="modal-backup" class="modal-overlay" style="display: none; z-index: 9999;">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(124, 58, 237, 0.3);">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 22px;">💾</span>
+                    <h3 class="modal-title" style="color: #a78bfa;">Copias de Seguridad del Sistema</h3>
+                </div>
+                <button id="btn-close-modal-backup" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- EXPORTAR BACKUP -->
+                <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                    <h4 style="font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                        <span>📥</span> 1. Descargar Copia de Seguridad Completa
+                    </h4>
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.4;">
+                        Empaqueta y descarga en un archivo <code>.zip</code> toda la información actual: proveedores, capturas de tiendas, existencias de almacén, tarifas y usuarios.
+                    </p>
+                    <button id="btn-download-backup" class="btn btn-primary btn-sm" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; font-weight: 600;">
+                        <span>⬇️</span> Descargar Archivo .ZIP de Respaldo
+                    </button>
+                </div>
+
+                <!-- RESTAURAR BACKUP -->
+                <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-bottom: 10px;">
+                    <h4 style="font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                        <span>🔄</span> 2. Restaurar Copia de Seguridad
+                    </h4>
+                    <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.4;">
+                        Selecciona un archivo <code>.zip</code> generado previamente para restablecer todo el sistema tal como estaba en esa fecha.
+                    </p>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="file" id="backup-file-input" accept=".zip" class="form-input" style="padding: 6px; font-size: 12px; flex: 1;">
+                        <button id="btn-restore-backup" class="btn btn-secondary btn-sm" style="white-space: nowrap; padding: 6px 12px; font-weight: 600;">
+                            Restaurar
+                        </button>
+                    </div>
+                </div>
+
+                <div id="backup-feedback-msg" style="font-size: 12px; padding: 8px 12px; border-radius: 6px; display: none; margin-top: 10px;"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; margin-top: 15px;">
+                <button id="btn-close-backup-footer" class="btn btn-secondary btn-sm">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=1.0.6"></script>
 </body>
 </html>
+
+
