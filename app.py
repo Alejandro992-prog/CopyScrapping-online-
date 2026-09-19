@@ -174,6 +174,10 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 DICTIONARY_FILE = os.path.join(DATA_DIR, "dictionary.json")
 
+# Configuración por defecto para Supabase Cloud (siempre activo y sincronizado)
+DEFAULT_SUPABASE_URL = "https://ehekxiexlhychzmrfnez.supabase.co"
+DEFAULT_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVoZWt4aWV4bGh5Y2h6bXJmbmV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMTExMDksImV4cCI6MjA5ODU4NzEwOX0.1eZXv_v04ChRnVn0omwOJS7hdEDq2JdeAJSAI6MI-Zs"
+
 _dict_cache: Dict[str, Any] = {}
 _dict_cache_ts: float = 0.0
 _dict_cache_lock = threading.Lock()
@@ -465,9 +469,23 @@ def load_config() -> Dict[str, Any]:
         # Actualizar active_provider global
         active_id = config.get("active_provider_id")
         active_provider = next((p for p in providers if p["id"] == active_id), None)
-        if not active_provider and providers:
-            active_provider = providers[0]
-            config["active_provider_id"] = active_provider["id"]
+        # Garantizar que Supabase esté siempre configurado y conectado por defecto
+        if "supabase" not in config:
+            config["supabase"] = {
+                "enabled": True,
+                "url": DEFAULT_SUPABASE_URL,
+                "key": DEFAULT_SUPABASE_KEY,
+                "auto_sync": True
+            }
+        else:
+            if not config["supabase"].get("url"):
+                config["supabase"]["url"] = DEFAULT_SUPABASE_URL
+            if not config["supabase"].get("key"):
+                config["supabase"]["key"] = DEFAULT_SUPABASE_KEY
+            if config["supabase"].get("enabled") is None:
+                config["supabase"]["enabled"] = True
+            if config["supabase"].get("auto_sync") is None:
+                config["supabase"]["auto_sync"] = True
 
         _config_cache = config
         _config_cache_ts = time.monotonic()
@@ -1292,14 +1310,14 @@ def standardize_product_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df[UNIVERSAL_COLUMNS + extra_cols]
 
 def get_supabase_client(cfg: Optional[Dict[str, Any]] = None):
-    """Devuelve una instancia de SupabaseClient configurada según config.json o variables de entorno."""
+    """Devuelve una instancia de SupabaseClient configurada según config.json, variables de entorno o defaults."""
     if not supabase_client:
         return None
     if cfg is None:
         cfg = load_config()
     sb_cfg = cfg.get("supabase", {})
-    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
-    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
+    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
     return supabase_client.SupabaseClient(url=url, key=key)
 
 def sync_to_supabase_background(items: List[Dict[str, Any]], provider: Dict[str, Any]):
@@ -1309,7 +1327,7 @@ def sync_to_supabase_background(items: List[Dict[str, Any]], provider: Dict[str,
     try:
         cfg = load_config()
         sb_cfg = cfg.get("supabase", {})
-        if not sb_cfg.get("enabled", False) or not sb_cfg.get("auto_sync", True):
+        if not sb_cfg.get("enabled", True) or not sb_cfg.get("auto_sync", True):
             return
         client = get_supabase_client(cfg)
         if not client or not client.is_configured:
@@ -1340,7 +1358,7 @@ def delete_from_supabase_background(delete_type: str, provider_id: str, model: O
     try:
         cfg = load_config()
         sb_cfg = cfg.get("supabase", {})
-        if not sb_cfg.get("enabled", False):
+        if not sb_cfg.get("enabled", True):
             return
         client = get_supabase_client(cfg)
         if not client or not client.is_configured:
@@ -2397,13 +2415,14 @@ async def update_gemini_config(req: GeminiConfigRequest, username: str = Depends
 async def get_supabase_config(username: str = Depends(check_authentication)):
     config = load_config()
     sb_cfg = config.get("supabase", {})
-    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
-    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
+    key = sb_cfg.get("key") or os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
+    url = sb_cfg.get("url") or os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+    enabled = sb_cfg.get("enabled", True)
     key_preview = ""
     if key:
         key_preview = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else "***"
     return {
-        "enabled": bool(sb_cfg.get("enabled", False)),
+        "enabled": bool(enabled),
         "url": url,
         "has_key": bool(key),
         "key_preview": key_preview,
@@ -2431,9 +2450,9 @@ async def update_supabase_config(req: SupabaseConfigRequest, username: str = Dep
     add_log("info", f"Configuración de Supabase actualizada por '{username}'.")
     return {
         "status": "success",
-        "enabled": sb_cfg.get("enabled", False),
-        "url": sb_cfg.get("url", ""),
-        "has_key": bool(sb_cfg.get("key") or os.getenv("SUPABASE_KEY")),
+        "enabled": sb_cfg.get("enabled", True),
+        "url": sb_cfg.get("url", DEFAULT_SUPABASE_URL),
+        "has_key": bool(sb_cfg.get("key") or os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY),
         "auto_sync": sb_cfg.get("auto_sync", True),
     }
 
@@ -2441,8 +2460,8 @@ async def update_supabase_config(req: SupabaseConfigRequest, username: str = Dep
 async def test_supabase_connection(req: SupabaseTestRequest, username: str = Depends(check_authentication)):
     config = load_config()
     sb_cfg = config.get("supabase", {})
-    url = req.url or sb_cfg.get("url") or os.getenv("SUPABASE_URL", "")
-    key = req.key or sb_cfg.get("key") or os.getenv("SUPABASE_KEY", "")
+    url = req.url or sb_cfg.get("url") or os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL
+    key = req.key or sb_cfg.get("key") or os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY
 
     if not supabase_client:
         return {"success": False, "message": "El módulo supabase_client no está disponible."}

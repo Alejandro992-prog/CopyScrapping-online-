@@ -49,6 +49,9 @@ def clean_price_number(val: Any) -> Optional[float]:
 
 
 
+DEFAULT_SUPABASE_URL = "https://ehekxiexlhychzmrfnez.supabase.co"
+DEFAULT_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVoZWt4aWV4bGh5Y2h6bXJmbmV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMTExMDksImV4cCI6MjA5ODU4NzEwOX0.1eZXv_v04ChRnVn0omwOJS7hdEDq2JdeAJSAI6MI-Zs"
+
 class SupabaseClient:
     """
     Cliente ligero y resiliente para Supabase.
@@ -57,8 +60,8 @@ class SupabaseClient:
     """
 
     def __init__(self, url: Optional[str] = None, key: Optional[str] = None, timeout: float = 10.0):
-        self.url = (url or os.getenv("SUPABASE_URL", "")).strip().rstrip("/")
-        self.key = (key or os.getenv("SUPABASE_KEY", "")).strip()
+        self.url = (url or os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL).strip().rstrip("/")
+        self.key = (key or os.getenv("SUPABASE_KEY") or DEFAULT_SUPABASE_KEY).strip()
         self.timeout = timeout
 
     @property
