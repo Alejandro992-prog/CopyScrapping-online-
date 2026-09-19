@@ -34,20 +34,20 @@
 
         <!-- MAIN TABS NAVIGATION -->
         <nav class="app-nav">
-            <button class="nav-tab active" data-tab="tab-monitor" id="tab-btn-monitor">
-                <span class="tab-icon">👁️</span> Monitoreo en Vivo
+            <button class="nav-tab active" data-tab="tab-monitor" id="tab-btn-monitor" title="Captura y extrae datos copiados del portapapeles o webs">
+                <span class="tab-icon">📋</span> Copiar y Capturar
             </button>
-            <button class="nav-tab" data-tab="tab-train" id="tab-btn-train">
-                <span class="tab-icon">🎯</span> Asistente No-Code
+            <button class="nav-tab" data-tab="tab-train" id="tab-btn-train" title="Crea reglas para que la IA entienda el formato de tus tiendas habituales">
+                <span class="tab-icon">🎯</span> Enseñar Tiendas a la IA
             </button>
-            <button class="nav-tab" data-tab="tab-merge" id="tab-btn-merge">
-                <span class="tab-icon">📊</span> Fusión & Comparador
+            <button class="nav-tab" data-tab="tab-merge" id="tab-btn-merge" title="Compara listas de precios y catálogos entre proveedores">
+                <span class="tab-icon">📊</span> Comparar Precios
             </button>
-            <button class="nav-tab" data-tab="tab-stock" id="tab-btn-stock">
-                <span class="tab-icon">📦</span> Matriz de Stock
+            <button class="nav-tab" data-tab="tab-stock" id="tab-btn-stock" title="Consulta el inventario y existencias registradas en tu almacén">
+                <span class="tab-icon">📦</span> Stock del Almacén
             </button>
-            <button class="nav-tab" data-tab="tab-shortages" id="tab-btn-shortages">
-                <span class="tab-icon">📋</span> Auditoría y Faltas
+            <button class="nav-tab" data-tab="tab-shortages" id="tab-btn-shortages" title="Cruza las tarifas de tus proveedores con tu almacén para saber qué pedir">
+                <span class="tab-icon">🛒</span> ¿Qué Comprar? (Faltas y Pedidos)
             </button>
             <button class="nav-tab" data-tab="tab-users" id="tab-users-btn" style="display: none;">
                 <span class="tab-icon">👥</span> Usuarios
@@ -608,10 +608,10 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
                         <div>
                             <h2 style="font-size: 20px; font-weight: 700; margin: 0 0 6px 0; display: flex; align-items: center; gap: 10px;">
-                                <span>📋</span> Auditoría de Roturas, Tarifas y Análisis de Ventas IA
+                                <span>🛒</span> Reposición y Faltas: Tarifa de Proveedor vs Almacén
                             </h2>
                             <p style="font-size: 13px; color: var(--text-muted); margin: 0;">
-                                Cruza las existencias de tu almacén contra las tarifas oficiales de proveedores, detecta desabastecimientos y proyecta el ritmo de ventas entre inventarios con Gemini.
+                                Cruza la lista de precios de tu proveedor con el stock de tu almacén para saber qué productos te faltan, cuánto te costará reponerlos y descargar el pedido en Excel.
                             </p>
                         </div>
                         <div style="display: flex; gap: 10px;">
@@ -619,7 +619,7 @@
                                 📥 Descargar Pedido (Excel)
                             </button>
                             <button id="btn-trigger-gemini-ai" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #7c3aed, #2563eb); border: none; display: flex; align-items: center; gap: 6px;">
-                                ✨ Diagnóstico Ejecutivo Gemini
+                                ✨ Resumen Inteligente con IA
                             </button>
                         </div>
                     </div>
@@ -632,10 +632,10 @@
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
                             <div>
                                 <h3 class="card-title" style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
-                                    <span>📦</span> 1. Tarifas de Proveedor (PDF o Excel)
+                                    <span>📁</span> 1. Catálogo o Tarifa del Proveedor (PDF o Excel)
                                 </h3>
                                 <p class="card-subtitle" style="font-size: 12px; margin: 4px 0 0 0;">
-                                    Admite catálogos PDF o tarifas Excel (.xlsx, .xls, .csv).
+                                    Sube la lista de precios o catálogo que te envía el fabricante o distribuidor.
                                 </p>
                             </div>
                         </div>
@@ -644,18 +644,18 @@
                         <div style="background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                                 <div>
-                                    <label for="tariff-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Proveedor:</label>
-                                    <input type="text" id="tariff-provider-input" placeholder="Ej: Balay, Bosch..." class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                    <label for="tariff-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Marca o Proveedor:</label>
+                                    <input type="text" id="tariff-provider-input" placeholder="Ej: Beko, Balay, Bosch..." class="form-input" style="padding: 5px 8px; font-size: 12px;">
                                 </div>
                                 <div>
-                                    <label for="tariff-name-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Versión / Nombre:</label>
-                                    <input type="text" id="tariff-name-input" placeholder="Ej: Septiembre 2026" class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                    <label for="tariff-name-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Nombre o Mes:</label>
+                                    <input type="text" id="tariff-name-input" placeholder="Ej: Julio 2026" class="form-input" style="padding: 5px 8px; font-size: 12px;">
                                 </div>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center;">
                                 <input type="file" id="tariff-file-input" accept=".pdf,.xlsx,.xls,.csv" class="form-input" style="padding: 5px 8px; font-size: 12px; flex: 1;">
                                 <button id="btn-upload-tariff" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
-                                    ⬆ Guardar Tarifa
+                                    ⬆ Guardar Lista
                                 </button>
                             </div>
                         </div>
@@ -663,7 +663,7 @@
                         <!-- Lista de Tarifas Guardadas -->
                         <div style="flex: 1; display: flex; flex-direction: column;">
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                📑 Tarifas Registradas en Sistema:
+                                📑 Catálogos guardados para consultar:
                             </label>
                             <div id="tariffs-list-container" style="max-height: 140px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2); padding: 4px;">
                                 <div style="font-size: 11px; color: var(--text-muted); padding: 8px; text-align: center;">Cargando tarifas...</div>
@@ -674,26 +674,26 @@
                     <!-- Column Right: MÓDULO 2. STOCK DE ALMACÉN (Siempre PDF) -->
                     <div class="card" style="display: flex; flex-direction: column;">
                         <h3 class="card-title" style="font-size: 16px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
-                            <span>🏢</span> 2. Stock de Almacén (Siempre PDF)
+                            <span>🏢</span> 2. Existencias de Mi Almacén (PDF del ERP)
                         </h3>
                         <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">
-                            Exportado directo del ERP. Detecta la fecha oficial del inventario automáticamente.
+                            Sube el archivo PDF que exportas de tu programa de gestión con las existencias.
                         </p>
                         
                         <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
                             <input type="file" id="audit-file-input" accept=".pdf" class="form-input" style="padding: 6px 8px; font-size: 12px; flex: 1;">
                             <input type="date" id="audit-manual-date" class="form-input" style="width: 130px; font-size: 11px; padding: 6px 6px;" title="Fecha opcional si el PDF no la incluye">
                             <button id="btn-upload-audit-pdf" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
-                                ⬆ Subir PDF ERP
+                                ⬆ Subir PDF de Stock
                             </button>
                         </div>
 
                         <div class="form-group" style="margin-bottom: 10px;">
                             <label for="select-audit-snapshot" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                🕒 Snapshot Activo de Inventario:
+                                📅 Fecha de Inventario a consultar:
                             </label>
                             <select id="select-audit-snapshot" class="form-select" style="font-size: 12px; padding: 6px 8px;">
-                                <option value="">Cargando historial de snapshots...</option>
+                                <option value="">Cargando historial de inventarios...</option>
                             </select>
                             <div id="snapshot-meta-info" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
                                 <!-- Detalle del snapshot seleccionado -->
@@ -703,18 +703,18 @@
                         <!-- Comparador de Ventas Delta (T1 vs T2) Integrado -->
                         <div style="margin-top: auto; background: rgba(30, 41, 59, 0.35); padding: 10px; border-radius: 6px; border: 1px dashed var(--border-color);">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">📈 Rotación / Ventas (Delta entre 2 PDFs):</span>
+                                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">📈 ¿Qué se ha vendido? (Comparar 2 inventarios):</span>
                                 <button id="btn-run-sales-delta" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;">
-                                    🔄 Calcular Ventas
+                                    🔄 Ver Ventas
                                 </button>
                             </div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
                                 <div>
-                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">T1 (Anterior):</label>
+                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">Fecha 1 (Inventario Anterior):</label>
                                     <select id="select-delta-old" class="form-select" style="font-size: 11px; padding: 4px 6px; width: 100%;"></select>
                                 </div>
                                 <div>
-                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">T2 (Reciente):</label>
+                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">Fecha 2 (Inventario Más Reciente):</label>
                                     <select id="select-delta-new" class="form-select" style="font-size: 11px; padding: 4px 6px; width: 100%;"></select>
                                 </div>
                             </div>
@@ -727,10 +727,10 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
                         <div>
                             <h3 class="card-title" style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
-                                <span>⚡</span> 3. Cruce Directo: Tarifa Seleccionada vs Stock Almacén
+                                <span>⚡</span> 3. ¿Qué necesito pedir? (Comparar Tarifa vs Almacén)
                             </h3>
                             <p class="card-subtitle" style="font-size: 12px; margin: 3px 0 0 0;">
-                                Cruza cualquier catálogo (PDF o Excel) contra el stock para detectar roturas y calcular el coste del pedido.
+                                Selecciona el catálogo de tu proveedor para ver al instante qué productos no te quedan en el almacén y el importe necesario para reponer.
                             </p>
                         </div>
                     </div>
@@ -738,7 +738,7 @@
                     <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr auto; gap: 12px; align-items: flex-end;">
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                🏷️ Tarifa Proveedor Activa:
+                                📁 Catálogo o Tarifa del Proveedor:
                             </label>
                             <select id="select-audit-provider" class="form-select" style="font-size: 13px;">
                                 <option value="">Cargando tarifas registradas...</option>
@@ -746,7 +746,7 @@
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                🔖 Marca a Auditar:
+                                🏷️ Marca que deseas consultar:
                             </label>
                             <select id="select-audit-brand" class="form-select" style="font-size: 13px;">
                                 <option value="Todas">Todas las Marcas</option>
@@ -754,7 +754,7 @@
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="input-audit-threshold" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                ⚠️ Umbral Stock Bajo:
+                                ⚠️ Avisar si quedan menos de:
                             </label>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 70px; padding: 6px 8px; text-align: center; font-size: 13px;">
@@ -763,7 +763,7 @@
                         </div>
                         <div>
                             <button id="btn-run-audit" class="btn btn-primary" style="padding: 8px 18px; font-size: 13px; white-space: nowrap; height: 38px; display: flex; align-items: center; gap: 8px;">
-                                🔍 Auditar Faltas
+                                🔍 Comprobar Faltas
                             </button>
                         </div>
                     </div>
@@ -772,29 +772,29 @@
                 <!-- KPI Cards Row -->
                 <div class="grid-4col mb-20" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
                     <div class="card" style="border-left: 4px solid #ef4444; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">🔴 Faltas Totales (Rotura)</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">🔴 PRODUCTOS AGOTADOS</div>
                         <div id="audit-kpi-shortages" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Sin stock en almacén</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">0 existencias en almacén</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #f59e0b; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">🟡 Stock Bajo / Crítico</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">🟡 CASI AGOTADOS</div>
                         <div id="audit-kpi-low" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Por debajo del umbral</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Menos del umbral marcado</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #10b981; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">🟢 Stock Saludable</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">🟢 HAY STOCK SUFICIENTE</div>
                         <div id="audit-kpi-ok" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Existencias suficientes</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Existencias disponibles</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #3b82f6; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">💶 Pedido Sugerido</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">💶 COSTE ESTIMADO DEL PEDIDO</div>
                         <div id="audit-kpi-cost" style="font-size: 24px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0,00 €</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Inversión estimada reposición</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Inversión necesaria para reponer</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #8b5cf6; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">📦 Ventas Estimadas</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">📦 VENTAS REGISTRADAS</div>
                         <div id="audit-kpi-sales" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">—</div>
-                        <div id="audit-kpi-sales-sub" style="font-size: 11px; color: var(--text-muted);">Delta periodo analizado</div>
+                        <div id="audit-kpi-sales-sub" style="font-size: 11px; color: var(--text-muted);">Entre las 2 fechas comparadas</div>
                     </div>
                 </div>
 
@@ -815,19 +815,19 @@
                 <!-- Sub-Navigation for Result Tables -->
                 <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; flex-wrap: wrap;">
                     <button class="btn btn-sm audit-subtab-btn active" data-subtab="audit-subtab-shortages" style="display: flex; align-items: center; gap: 6px;">
-                        🔴 Faltas / Rotura (<span id="count-badge-shortages">0</span>)
+                        🔴 Agotados / Sin Stock (<span id="count-badge-shortages">0</span>)
                     </button>
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-low" style="display: flex; align-items: center; gap: 6px;">
-                        🟡 Stock Bajo (<span id="count-badge-low">0</span>)
+                        🟡 Pocas Unidades (<span id="count-badge-low">0</span>)
                     </button>
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-ok" style="display: flex; align-items: center; gap: 6px;">
-                        🟢 Stock Suficiente (<span id="count-badge-ok">0</span>)
+                        🟢 Stock Disponible (<span id="count-badge-ok">0</span>)
                     </button>
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-sales" style="display: flex; align-items: center; gap: 6px;">
-                        📈 Rotación y Ventas (<span id="count-badge-sales">0</span>)
+                        📈 Productos Vendidos (<span id="count-badge-sales">0</span>)
                     </button>
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-surplus" style="display: flex; align-items: center; gap: 6px;">
-                        ⚪ Excedentes / No en Tarifa (<span id="count-badge-surplus">0</span>)
+                        ⚪ En Almacén fuera de Catálogo (<span id="count-badge-surplus">0</span>)
                     </button>
                 </div>
 
@@ -837,19 +837,19 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Modelo / SKU</th>
-                                    <th>Descripción</th>
+                                    <th>Modelo / Referencia</th>
+                                    <th>Descripción del Producto</th>
                                     <th>Categoría</th>
-                                    <th style="text-align: center;">Stock Actual</th>
-                                    <th style="text-align: center;">Pedido Sugerido</th>
-                                    <th style="text-align: right;">Coste Tarifa</th>
+                                    <th style="text-align: center;">Stock en Almacén</th>
+                                    <th style="text-align: center;">Cantidad a Pedir</th>
+                                    <th style="text-align: right;">Precio Proveedor</th>
                                     <th style="text-align: right;">Total Línea</th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-shortages">
                                 <tr>
                                     <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
-                                        Selecciona una tarifa y pulsa "Auditar Faltas" para ver las referencias en rotura.
+                                        Selecciona una tarifa y pulsa "Comprobar Faltas" para ver qué productos no te quedan.
                                     </td>
                                 </tr>
                             </tbody>
@@ -863,12 +863,12 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Modelo / SKU</th>
-                                    <th>Descripción</th>
+                                    <th>Modelo / Referencia</th>
+                                    <th>Descripción del Producto</th>
                                     <th>Categoría</th>
-                                    <th style="text-align: center;">Stock Actual</th>
-                                    <th style="text-align: center;">Pedido Sugerido</th>
-                                    <th style="text-align: right;">Coste Tarifa</th>
+                                    <th style="text-align: center;">Stock en Almacén</th>
+                                    <th style="text-align: center;">Cantidad a Pedir</th>
+                                    <th style="text-align: right;">Precio Proveedor</th>
                                     <th style="text-align: right;">Total Línea</th>
                                 </tr>
                             </thead>
@@ -885,11 +885,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Modelo / SKU</th>
-                                    <th>Descripción</th>
+                                    <th>Modelo / Referencia</th>
+                                    <th>Descripción del Producto</th>
                                     <th>Categoría</th>
-                                    <th style="text-align: center;">Stock Actual</th>
-                                    <th style="text-align: right;">Coste Tarifa</th>
+                                    <th style="text-align: center;">Stock en Almacén</th>
+                                    <th style="text-align: right;">Precio Proveedor</th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-ok">
@@ -905,20 +905,20 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Modelo / SKU</th>
+                                    <th>Modelo / Referencia</th>
                                     <th>Marca</th>
-                                    <th>Descripción</th>
+                                    <th>Descripción del Producto</th>
                                     <th style="text-align: center;">Stock Anterior</th>
                                     <th style="text-align: center;">Stock Actual</th>
                                     <th style="text-align: center;">Uds Vendidas</th>
-                                    <th style="text-align: right;">Ritmo Diario</th>
-                                    <th style="text-align: center;">Días hasta Rotura</th>
+                                    <th style="text-align: right;">Ventas/Día</th>
+                                    <th style="text-align: center;">Días hasta Agotarse</th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-sales">
                                 <tr>
                                     <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
-                                        Selecciona dos snapshots de fecha diferente y pulsa "Calcular Ventas".
+                                        Selecciona dos fechas de inventario arriba y pulsa "Ver Ventas".
                                     </td>
                                 </tr>
                             </tbody>
@@ -932,11 +932,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>SKU Almacén</th>
-                                    <th>Descripción</th>
+                                    <th>Referencia Almacén</th>
+                                    <th>Descripción del Producto</th>
                                     <th>Categoría</th>
-                                    <th style="text-align: center;">Stock Almacén</th>
-                                    <th style="text-align: right;">Coste Registrado</th>
+                                    <th style="text-align: center;">Stock en Almacén</th>
+                                    <th style="text-align: right;">Coste Almacén</th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-surplus">

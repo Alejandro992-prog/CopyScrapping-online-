@@ -121,52 +121,130 @@ def delete_tariff(tariff_id: str) -> bool:
     return False
 
 def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[str, Any]]:
-    """Extrae productos y precios desde un archivo Excel o CSV de tarifa de proveedor."""
+    """Extrae productos y precios desde un archivo Excel o CSV de tarifa de proveedor con detección inteligente de cabecera y columnas."""
     if pd is None:
         return []
     try:
+        kw_list = ['modelo', 'model', 'sku', 'referencia', 'código', 'codigo', 'ref', 'articulo', 'artículo', 'descripción', 'descripcion', 'producto', 'precio', 'pvp', 'coste', 'neto', 'cesión', 'cesion', 'tarifa', 'marca']
         if filepath.endswith(".csv"):
-            df = pd.read_csv(filepath)
+            df_raw = pd.read_csv(filepath, header=None, nrows=20, encoding='utf-8-sig')
+            best_idx = 0
+            max_kw = 0
+            for idx, row in df_raw.iterrows():
+                row_strs = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                matches = sum(1 for v in row_strs if any(k in v for k in kw_list))
+                if matches > max_kw:
+                    max_kw = matches
+                    best_idx = idx
+            df = pd.read_csv(filepath, header=best_idx if max_kw >= 2 else 0, encoding='utf-8-sig')
         else:
-            df = pd.read_excel(filepath)
+            xl = pd.ExcelFile(filepath)
+            target_sheet = xl.sheet_names[0]
+            for s in xl.sheet_names:
+                slow = s.lower()
+                if any(k in slow for k in ['tarifa', 'precios', 'general', 'catalogo', 'articulos', 'productos']):
+                    target_sheet = s
+                    break
+            
+            df_raw = xl.parse(target_sheet, header=None, nrows=25)
+            best_idx = 0
+            max_kw = 0
+            for idx, row in df_raw.iterrows():
+                row_strs = [str(v).strip().lower() for v in row.values if pd.notna(v)]
+                matches = sum(1 for v in row_strs if any(k in v for k in kw_list))
+                if matches > max_kw:
+                    max_kw = matches
+                    best_idx = idx
+            
+            df = xl.parse(target_sheet, header=best_idx if max_kw >= 2 else 0)
     except Exception as e:
         print(f"Error leyendo archivo Excel de tarifa: {e}")
         return []
 
-    cols = [str(c).strip() for c in df.columns]
+    cols = [str(c).strip() for c in df.columns if pd.notna(c) and not str(c).startswith("Unnamed:")]
     col_map = {}
-    for c in cols:
-        clow = c.lower()
-        if not col_map.get("model") and any(k in clow for k in ["modelo", "model", "sku", "referencia", "código", "codigo", "ref", "item"]):
+    
+    # 1. Identificar columnas específicas con prioridad clara
+    for c in df.columns:
+        clow = str(c).strip().lower()
+        if 'unnamed:' in clow:
+            continue
+        if not col_map.get("brand") and any(k in clow for k in ["marca", "brand", "fabricante"]):
+            col_map["brand"] = c
+        elif not col_map.get("model") and any(k in clow for k in ["modelo", "model"]):
             col_map["model"] = c
-        elif not col_map.get("product") and any(k in clow for k in ["producto", "product", "descripcion", "descripción", "articulo", "artículo", "concepto", "nombre"]):
+        elif not col_map.get("sku") and any(k in clow for k in ["sku", "referencia", "código", "codigo", "ref."]):
+            col_map["sku"] = c
+        elif not col_map.get("ean") and any(k in clow for k in ["ean", "gtin", "barras"]):
+            col_map["ean"] = c
+        elif not col_map.get("product") and any(k in clow for k in ["descripcion", "descripción", "producto", "articulo", "artículo", "concepto", "nombre"]):
             col_map["product"] = c
-        elif not col_map.get("price") and any(k in clow for k in ["precio", "price", "pvp", "coste", "tarifa", "importe", "neto"]):
-            col_map["price"] = c
 
+    # 2. Si no encontró 'model' específico, usar 'sku' o 'referencia' (nunca la marca)
+    if not col_map.get("model") and col_map.get("sku"):
+        col_map["model"] = col_map["sku"]
+
+    # 3. Detectar precio con orden de preferencia estricto
+    for c in df.columns:
+        clow = str(c).strip().lower()
+        if 'unnamed:' in clow or any(bad in clow for bad in ['ecotasa', 'descuento', 'oferta', '%', 'unidades', 'pedido', 'minima']):
+            continue
+        if any(k in clow for k in ["neto factura", "neto con promo", "precio neto", "neto"]):
+            col_map["price"] = c
+            break
+
+    if not col_map.get("price"):
+        for c in df.columns:
+            clow = str(c).strip().lower()
+            if 'unnamed:' in clow or any(bad in clow for bad in ['ecotasa', 'descuento', 'oferta', '%', 'unidades', 'pedido', 'minima']):
+                continue
+            if any(k in clow for k in ["cesión", "cesion", "pvpr", "pvp", "tarifa", "coste", "precio"]):
+                col_map["price"] = c
+                break
+
+    # Fallback si no encontró modelo: buscar entre columnas que no sean marca ni precio
     if not col_map.get("model") and len(cols) > 0:
-        col_map["model"] = cols[0]
-    if not col_map.get("price") and len(cols) > 1:
-        col_map["price"] = cols[-1]
+        non_brand_cols = [
+            c for c in cols 
+            if (not col_map.get("brand") or c != col_map["brand"]) 
+            and (not col_map.get("price") or c != col_map["price"])
+            and not any(bad in str(c).lower() for bad in ["marca", "brand", "fabricante", "precio", "pvp", "coste"])
+        ]
+        if non_brand_cols:
+            col_map["model"] = non_brand_cols[0]
 
     items = []
+    brand_default_norm = (default_provider or "").strip().upper()
+
     for _, row in df.iterrows():
         r = row.to_dict()
-        model_val = str(r.get(col_map.get("model", ""), "")).strip()
-        product_val = str(r.get(col_map.get("product", ""), "")).strip() if col_map.get("product") else model_val
-        raw_price = r.get(col_map.get("price", ""), 0)
+        model_val = str(r.get(col_map.get("model", ""), "")).strip() if col_map.get("model") else ""
+        product_val = str(r.get(col_map.get("product", ""), "")).strip() if col_map.get("product") else ""
+        brand_val = str(r.get(col_map.get("brand", ""), "")).strip() if col_map.get("brand") else default_provider
+        ean_val = str(r.get(col_map.get("ean", ""), "")).strip() if col_map.get("ean") else ""
+        raw_price = r.get(col_map.get("price", ""), 0) if col_map.get("price") else 0
         
-        if model_val in ["nan", "None", ""]:
+        # Descartar cabeceras repetidas en medio de los datos
+        if model_val.upper() in ["NAN", "NONE", "", "MARCA", "BRAND", "MODELO", "MODEL", "SKU", "REFERENCIA", "CODIGO", "CÓDIGO"]:
             model_val = ""
-        if product_val in ["nan", "None", ""]:
+        if product_val.upper() in ["NAN", "NONE", "", "DESCRIPCIÓN", "DESCRIPCION", "PRODUCTO", "ARTICULO", "ARTÍCULO"]:
             product_val = ""
             
+        # Si el modelo coincide exactamente con la marca (ej. 'BEKO'), comprobar si hay otra columna con el modelo real
+        if (brand_val and model_val.upper() == brand_val.upper()) or (brand_default_norm and model_val.upper() == brand_default_norm):
+            sku_cand = str(r.get(col_map.get("sku", ""), "")).strip() if col_map.get("sku") else ""
+            if sku_cand and sku_cand.upper() != brand_val.upper() and sku_cand.upper() != brand_default_norm and sku_cand not in ["nan", "None"]:
+                model_val = sku_cand
+            else:
+                # Si no hay SKU diferente a la marca, no podemos usar el nombre de la marca como modelo
+                continue
+
         if not model_val and not product_val:
             continue
             
         price_val = 0.0
         if isinstance(raw_price, (int, float)):
-            price_val = float(raw_price)
+            price_val = float(raw_price) if pd.notna(raw_price) else 0.0
         else:
             p_str = str(raw_price).replace("€", "").replace("EUR", "").strip()
             if '.' in p_str and ',' in p_str:
@@ -178,11 +256,18 @@ def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[s
             except Exception:
                 price_val = 0.0
 
+        if price_val > 50000:
+            price_val = price_val / 100.0 if price_val < 5000000 else 0.0
+
+        final_brand = brand_val or default_provider
+        final_product = product_val or f"{final_brand} {model_val}"
+
         items.append({
             "model": model_val or product_val[:25],
-            "product": product_val or model_val,
-            "price": price_val,
-            "brand": default_provider,
+            "product": final_product,
+            "ean": ean_val if ean_val not in ["nan", "None"] else "",
+            "price": round(price_val, 2),
+            "brand": final_brand,
             "attributes": ""
         })
     return items
@@ -240,11 +325,20 @@ Devuelve ÚNICAMENTE un JSON válido con la lista:
 Texto del PDF:
 {raw_text[:12000]}
 """
-            resp = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            resp_text = resp.text or ""
+            candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+            resp = None
+            for m in candidate_models:
+                try:
+                    resp = client.models.generate_content(
+                        model=m,
+                        contents=prompt
+                    )
+                    if resp and resp.text:
+                        break
+                except Exception:
+                    continue
+
+            resp_text = resp.text if resp else ""
             clean_json = re.sub(r'^```json\s*|^```\s*|```$', '', resp_text.strip(), flags=re.MULTILINE)
             gemini_items = json.loads(clean_json)
             if isinstance(gemini_items, list) and len(gemini_items) > 0:
@@ -460,6 +554,7 @@ def compare_stock_vs_tariff(
     
     # 1. Crear índice de búsqueda rápida en stock
     stock_by_sku: Dict[str, Dict[str, Any]] = {}
+    stock_by_ean: Dict[str, Dict[str, Any]] = {}
     stock_by_desc: List[Dict[str, Any]] = []
     
     for item in stock_items:
@@ -472,8 +567,8 @@ def compare_stock_vs_tariff(
         
         if sku_clean:
             stock_by_sku[sku_clean] = item
-        if ean_clean and ean_clean != "ND":
-            stock_by_sku[ean_clean] = item
+        if ean_clean and len(ean_clean) >= 8 and ean_clean != "ND":
+            stock_by_ean[ean_clean] = item
             
         stock_by_desc.append(item)
 
@@ -491,6 +586,7 @@ def compare_stock_vs_tariff(
         product = t_item.get("product", "")
         price = float(t_item.get("price", 0.0))
         brand = t_item.get("brand", "")
+        brand_upper = brand.strip().upper() if brand else ""
         
         # Filtro de marca en la tarifa si está especificado
         if norm_brand_filter:
@@ -499,24 +595,34 @@ def compare_stock_vs_tariff(
                 continue
 
         norm_model = normalize_sku(model)
+        norm_ean = normalize_sku(t_item.get("ean", ""))
         matched = None
         
-        if norm_model and norm_model in stock_by_sku:
+        # 1. Match directo por código EAN
+        if norm_ean and len(norm_ean) >= 8 and norm_ean in stock_by_ean:
+            matched = stock_by_ean[norm_ean]
+        # 2. Match directo por Modelo / SKU
+        elif norm_model and norm_model != brand_upper and norm_model in stock_by_sku:
             matched = stock_by_sku[norm_model]
-        elif norm_model and len(norm_model) >= 5:
-            # Búsqueda parcial si el modelo está contenido
+        # 3. Match por SKU similar (sufijos de país ej: ES, XPN, etc.)
+        elif norm_model and len(norm_model) >= 5 and norm_model != brand_upper:
             for s_sku, s_item in stock_by_sku.items():
-                if norm_model in s_sku or s_sku in norm_model:
-                    matched = s_item
-                    break
+                if len(s_sku) >= 5 and (norm_model in s_sku or s_sku in norm_model):
+                    if abs(len(norm_model) - len(s_sku)) <= 4:
+                        matched = s_item
+                        break
 
-        if not matched and (product or model):
-            # Búsqueda en descripción de stock
-            for s_item in stock_by_desc:
-                s_desc_norm = normalize_sku(s_item.get("description") or s_item.get("product") or "")
-                if norm_model and norm_model in s_desc_norm:
-                    matched = s_item
-                    break
+        # 4. Búsqueda en descripción de stock con límites de palabra (nunca si coincide con marca o palabra genérica)
+        if not matched and norm_model and len(norm_model) >= 5 and norm_model != brand_upper:
+            generic_words = {"BLANCO", "NEGRO", "ACERO", "CRISTAL", "LAVADORA", "FRIGORIFICO", "HORNO", "PLACA", "CAMPANA", "INTEGRABLE", "OFERTA", "NUEVO", "COMBI"}
+            if norm_model not in generic_words:
+                pattern = r'(?<![A-Z0-9])' + re.escape(norm_model) + r'(?![A-Z0-9])'
+                for s_item in stock_by_desc:
+                    s_desc = str(s_item.get("description") or s_item.get("product") or "").upper()
+                    s_desc_norm = normalize_sku(s_desc)
+                    if re.search(pattern, s_desc_norm):
+                        matched = s_item
+                        break
 
         current_qty = 0
         stock_sku = model
@@ -705,7 +811,7 @@ def generate_gemini_sales_report(
     delta_result: Dict[str, Any],
     shortages_result: Dict[str, Any],
     api_key: str,
-    custom_model: str = "gemini-2.5-flash"
+    custom_model: str = "gemini-3.6-flash"
 ) -> str:
     """Invoca la API de Gemini para redactar un informe ejecutivo comercial y propuesta de compra."""
     if not api_key:
@@ -765,22 +871,38 @@ ESTRUCTURA OBLIGATORIA DEL INFORME:
 Usa un tono riguroso, directo, con viñetas elegantes y cifras destacadas en negrita.
 """
 
-    try:
-        response = client.models.generate_content(
-            model=custom_model,
-            contents=prompt,
-        )
-        return response.text or "No se obtuvo respuesta de Gemini."
-    except Exception as e:
-        # Intento de rescate con modelo estándar
+    candidate_models = [
+        custom_model,
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-flash-latest",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite"
+    ]
+    
+    seen = set()
+    models_to_try = []
+    deprecated = {"gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"}
+    for m in candidate_models:
+        if m and m not in seen and m not in deprecated:
+            seen.add(m)
+            models_to_try.append(m)
+
+    last_error = None
+    for model_name in models_to_try:
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model=model_name,
                 contents=prompt,
             )
-            return response.text or "No se obtuvo respuesta de Gemini."
-        except Exception as e2:
-            return f"Error al generar informe con Gemini: {str(e)} | Fallback: {str(e2)}"
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_error = e
+            continue
+
+    return f"Error al generar informe con Gemini: {str(last_error)}"
 
 def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Optional[Dict[str, Any]] = None) -> Workbook:
     """Genera un archivo Excel profesional con las hojas de Faltas, Stock Bajo y Ventas."""

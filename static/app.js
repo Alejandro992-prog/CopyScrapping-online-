@@ -3314,11 +3314,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 if (tariffs && tariffs.length > 0) {
                     const grpTariffs = document.createElement("optgroup");
-                    grpTariffs.label = "Tarifas de Proveedor Registradas (data/tariffs/)";
+                    grpTariffs.label = "Catálogos y Listas de Proveedores Guardadas";
                     tariffs.forEach(t => {
                         const opt = document.createElement("option");
                         opt.value = t.id;
-                        opt.textContent = `📦 [${(t.file_type || '').toUpperCase()}] ${t.provider_name} - ${t.tariff_name} (${t.total_items} refs)`;
+                        opt.textContent = `📁 [${(t.file_type || '').toUpperCase()}] ${t.provider_name} - ${t.tariff_name} (${t.total_items} referencias)`;
                         grpTariffs.appendChild(opt);
                     });
                     selectAuditProvider.appendChild(grpTariffs);
@@ -3330,7 +3330,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     const extFiles = await extRes.json();
                     if (extFiles && extFiles.length > 0) {
                         const grpExtractions = document.createElement("optgroup");
-                        grpExtractions.label = "Histórico de data/extractions/";
+                        grpExtractions.label = "Archivos de Catálogos Anteriores";
                         extFiles.forEach(f => {
                             const opt = document.createElement("option");
                             opt.value = f.filename;
@@ -3456,7 +3456,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function updateSnapshotMetaInfo() {
         if (!snapshotMetaInfo || !selectAuditSnapshot) return;
         const selText = selectAuditSnapshot.options[selectAuditSnapshot.selectedIndex]?.text || '';
-        snapshotMetaInfo.innerHTML = `<span style="color: #10b981;">●</span> Snapshot seleccionado: <strong>${selText}</strong>`;
+        snapshotMetaInfo.innerHTML = `<span style="color: #10b981;">●</span> Inventario seleccionado: <strong>${selText}</strong>`;
     }
 
     if (selectAuditSnapshot) {
@@ -3488,58 +3488,59 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnUploadAuditPdf && auditFileInput) {
         btnUploadAuditPdf.addEventListener("click", async () => {
             if (!auditFileInput.files || auditFileInput.files.length === 0) {
-                alert("Por favor selecciona un archivo PDF de inventario.");
+                alert("Por favor selecciona un archivo PDF de stock exportado de tu ERP.");
                 return;
             }
+
             const file = auditFileInput.files[0];
             const formData = new FormData();
             formData.append("file", file);
             if (auditManualDate && auditManualDate.value) {
-                formData.append("document_date", auditManualDate.value);
+                formData.append("manual_date", auditManualDate.value);
             }
 
             btnUploadAuditPdf.disabled = true;
-            btnUploadAuditPdf.textContent = "⏳ Analizando...";
+            btnUploadAuditPdf.textContent = "⏳ Analizando PDF...";
 
             try {
-                const res = await fetch("/api/stock/upload-audit", {
+                const res = await fetch("/api/stock/upload-audit-pdf", {
                     method: "POST",
                     body: formData
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    alert(`✅ Inventario importado con éxito!\nFecha detectada: ${data.date} (${data.date_source === 'document' ? 'Del documento PDF' : 'Fecha actual'})\nReferencias: ${data.total_references}`);
+                    alert(`✅ Inventario procesado con éxito!\nFecha detectada: ${data.detected_date}\nReferencias: ${data.total_references}\nUnidades totales: ${data.total_units}`);
                     auditFileInput.value = "";
-                    if (auditManualDate) auditManualDate.value = "";
                     await loadAuditSnapshots();
                     await loadAuditBrands();
                 } else {
-                    alert(`❌ Error al procesar: ${data.detail || 'Formato no compatible'}`);
+                    alert(`❌ Error al procesar PDF: ${data.detail || 'Formato no reconocido'}`);
                 }
             } catch (err) {
-                alert(`❌ Error de conexión al subir inventario: ${err.message}`);
+                alert(`❌ Error de conexión al subir PDF: ${err.message}`);
             } finally {
                 btnUploadAuditPdf.disabled = false;
-                btnUploadAuditPdf.textContent = "⬆ Subir PDF";
+                btnUploadAuditPdf.textContent = "⬆ Subir PDF ERP";
             }
         });
     }
 
-    // Ejecutar auditoría de faltas contra tarifa
+    // Ejecutar auditoría de faltas y cruce de stock vs catálogo
     if (btnRunAudit) {
         btnRunAudit.addEventListener("click", async () => {
             const providerId = selectAuditProvider?.value;
             if (!providerId) {
-                alert("Selecciona una tarifa de proveedor.");
+                alert("Por favor selecciona una tarifa de proveedor activa para auditar.");
+                selectAuditProvider?.focus();
                 return;
             }
 
             const brand = selectAuditBrand?.value || "Todas";
-            const snapId = selectAuditSnapshot?.value || null;
+            const snapId = selectAuditSnapshot?.value || "";
             const threshold = parseInt(inputAuditThreshold?.value || "2", 10);
 
             btnRunAudit.disabled = true;
-            btnRunAudit.textContent = "⏳ Auditando...";
+            btnRunAudit.textContent = "⏳ Comprobando existencias...";
 
             try {
                 const res = await fetch("/api/stock/audit-shortages", {
@@ -3558,13 +3559,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     auditShortagesData = data;
                     renderAuditResults(data);
                 } else {
-                    alert(`❌ Error al auditar: ${data.detail || 'Ocurrió un error'}`);
+                    alert(`❌ Error al comprobar faltas: ${data.detail || 'Ocurrió un error'}`);
                 }
             } catch (err) {
                 alert(`❌ Error al conectar con el servidor: ${err.message}`);
             } finally {
                 btnRunAudit.disabled = false;
-                btnRunAudit.textContent = "🔍 Auditar Faltas";
+                btnRunAudit.textContent = "🔍 Comprobar Faltas";
             }
         });
     }
