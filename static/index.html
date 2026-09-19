@@ -46,6 +46,9 @@
             <button class="nav-tab" data-tab="tab-stock" id="tab-btn-stock">
                 <span class="tab-icon">📦</span> Matriz de Stock
             </button>
+            <button class="nav-tab" data-tab="tab-shortages" id="tab-btn-shortages">
+                <span class="tab-icon">📋</span> Auditoría y Faltas
+            </button>
             <button class="nav-tab" data-tab="tab-users" id="tab-users-btn" style="display: none;">
                 <span class="tab-icon">👥</span> Usuarios
             </button>
@@ -596,6 +599,296 @@
                         </table>
                     </div>
                 </div>
+            </section>
+
+            <!-- TAB: AUDITORÍA DE ROTURAS, COMPARADOR DE TARIFAS Y ANÁLISIS DE VENTAS IA -->
+            <section id="tab-shortages" class="tab-content">
+                <!-- Header Banner -->
+                <div class="card mb-20" style="background: linear-gradient(135deg, rgba(30, 27, 75, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%); border-left: 4px solid #7c3aed;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                        <div>
+                            <h2 style="font-size: 20px; font-weight: 700; margin: 0 0 6px 0; display: flex; align-items: center; gap: 10px;">
+                                <span>📋</span> Auditoría de Roturas, Tarifas y Análisis de Ventas IA
+                            </h2>
+                            <p style="font-size: 13px; color: var(--text-muted); margin: 0;">
+                                Cruza las existencias de tu almacén contra las tarifas oficiales de proveedores, detecta desabastecimientos y proyecta el ritmo de ventas entre inventarios con Gemini.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button id="btn-export-audit-excel" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px;">
+                                📥 Descargar Pedido (Excel)
+                            </button>
+                            <button id="btn-trigger-gemini-ai" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #7c3aed, #2563eb); border: none; display: flex; align-items: center; gap: 6px;">
+                                ✨ Diagnóstico Ejecutivo Gemini
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls Layout: 2 Columns -->
+                <div class="grid-2col mb-20">
+                    <!-- Column Left: Carga y Memoria de Inventarios -->
+                    <div class="card">
+                        <h3 class="card-title" style="font-size: 16px; margin-bottom: 8px;">1. Inventario de Almacén (PDF)</h3>
+                        <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">Sube el listado de existencias de tu ERP. Detectará la fecha del documento o subida.</p>
+                        
+                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px;">
+                            <input type="file" id="audit-file-input" accept=".pdf" class="form-input" style="padding: 7px 10px; font-size: 12px; flex: 1;">
+                            <input type="date" id="audit-manual-date" class="form-input" style="width: 140px; font-size: 12px;" title="Fecha opcional (si el PDF no la incluye)">
+                            <button id="btn-upload-audit-pdf" class="btn btn-primary btn-sm" style="white-space: nowrap;">
+                                ⬆ Subir PDF
+                            </button>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="select-audit-snapshot" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                🕒 Snapshot Activo de Inventario:
+                            </label>
+                            <select id="select-audit-snapshot" class="form-select" style="font-size: 13px;">
+                                <option value="">Cargando historial de snapshots...</option>
+                            </select>
+                            <div id="snapshot-meta-info" style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">
+                                <!-- Detalle del snapshot seleccionado -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Column Right: Filtros de Tarifa y Marca -->
+                    <div class="card">
+                        <h3 class="card-title" style="font-size: 16px; margin-bottom: 8px;">2. Comparativa contra Tarifa</h3>
+                        <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">Selecciona la tarifa de compra y la marca a auditar.</p>
+                        
+                        <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">Tarifa Proveedor:</label>
+                                <select id="select-audit-provider" class="form-select" style="font-size: 13px;">
+                                    <option value="">Cargando tarifas...</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">Marca a Auditar:</label>
+                                <select id="select-audit-brand" class="form-select" style="font-size: 13px;">
+                                    <option value="Todas">Todas las Marcas</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="input-audit-threshold" style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">Umbral Stock Bajo:</label>
+                                <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 65px; padding: 4px 8px; text-align: center;">
+                                <span style="font-size: 12px; color: var(--text-muted);">uds</span>
+                            </div>
+                            <button id="btn-run-audit" class="btn btn-primary btn-sm" style="flex: 1; max-width: 180px;">
+                                🔍 Auditar Faltas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Comparador de Ventas entre Snapshots (Barra Desplegable) -->
+                <div class="card mb-20" style="background: rgba(30, 41, 59, 0.4); border: 1px dashed var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 18px;">📈</span>
+                            <div>
+                                <strong style="font-size: 14px; color: var(--text-color);">Memoria y Comparador de Ventas (Delta Temporal)</strong>
+                                <span style="font-size: 12px; color: var(--text-muted); display: block;">Compara dos inventarios para saber exactamente qué se ha vendido y el ritmo diario.</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label style="font-size: 12px; color: var(--text-muted);">T1 (Anterior):</label>
+                                <select id="select-delta-old" class="form-select" style="width: 170px; font-size: 12px; padding: 5px 8px;"></select>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label style="font-size: 12px; color: var(--text-muted);">T2 (Reciente):</label>
+                                <select id="select-delta-new" class="form-select" style="width: 170px; font-size: 12px; padding: 5px 8px;"></select>
+                            </div>
+                            <button id="btn-run-sales-delta" class="btn btn-secondary btn-sm" style="font-size: 12px;">
+                                🔄 Calcular Ventas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- KPI Cards Row -->
+                <div class="grid-4col mb-20" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                    <div class="card" style="border-left: 4px solid #ef4444; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">🔴 Faltas Totales (Rotura)</div>
+                        <div id="audit-kpi-shortages" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Sin stock en almacén</div>
+                    </div>
+                    <div class="card" style="border-left: 4px solid #f59e0b; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">🟡 Stock Bajo / Crítico</div>
+                        <div id="audit-kpi-low" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Por debajo del umbral</div>
+                    </div>
+                    <div class="card" style="border-left: 4px solid #10b981; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">🟢 Stock Saludable</div>
+                        <div id="audit-kpi-ok" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Existencias suficientes</div>
+                    </div>
+                    <div class="card" style="border-left: 4px solid #3b82f6; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">💶 Pedido Sugerido</div>
+                        <div id="audit-kpi-cost" style="font-size: 24px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0,00 €</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Inversión estimada reposición</div>
+                    </div>
+                    <div class="card" style="border-left: 4px solid #8b5cf6; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">📦 Ventas Estimadas</div>
+                        <div id="audit-kpi-sales" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">—</div>
+                        <div id="audit-kpi-sales-sub" style="font-size: 11px; color: var(--text-muted);">Delta periodo analizado</div>
+                    </div>
+                </div>
+
+                <!-- Gemini AI Executive Box (Generado bajo demanda) -->
+                <div id="card-gemini-executive" class="card mb-20" style="display: none; background: linear-gradient(135deg, rgba(30, 27, 75, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(124, 58, 237, 0.4);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 18px;">✨</span>
+                            <h3 style="font-size: 16px; font-weight: 700; color: #c4b5fd; margin: 0;">Informe Comercial Ejecutivo Gemini</h3>
+                        </div>
+                        <button id="btn-close-gemini-card" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;">Ocultar</button>
+                    </div>
+                    <div id="gemini-report-body" style="font-size: 13px; line-height: 1.6; color: #e2e8f0; white-space: pre-line;">
+                        <!-- Contenido markdown del informe generado -->
+                    </div>
+                </div>
+
+                <!-- Sub-Navigation for Result Tables -->
+                <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; flex-wrap: wrap;">
+                    <button class="btn btn-sm audit-subtab-btn active" data-subtab="audit-subtab-shortages" style="display: flex; align-items: center; gap: 6px;">
+                        🔴 Faltas / Rotura (<span id="count-badge-shortages">0</span>)
+                    </button>
+                    <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-low" style="display: flex; align-items: center; gap: 6px;">
+                        🟡 Stock Bajo (<span id="count-badge-low">0</span>)
+                    </button>
+                    <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-ok" style="display: flex; align-items: center; gap: 6px;">
+                        🟢 Stock Suficiente (<span id="count-badge-ok">0</span>)
+                    </button>
+                    <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-sales" style="display: flex; align-items: center; gap: 6px;">
+                        📈 Rotación y Ventas (<span id="count-badge-sales">0</span>)
+                    </button>
+                    <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-surplus" style="display: flex; align-items: center; gap: 6px;">
+                        ⚪ Excedentes / No en Tarifa (<span id="count-badge-surplus">0</span>)
+                    </button>
+                </div>
+
+                <!-- Subtab 1: Shortages / Reorder Table -->
+                <div id="audit-subtab-shortages" class="audit-subtab-content">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Modelo / SKU</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th style="text-align: center;">Stock Actual</th>
+                                    <th style="text-align: center;">Pedido Sugerido</th>
+                                    <th style="text-align: right;">Coste Tarifa</th>
+                                    <th style="text-align: right;">Total Línea</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-shortages">
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                                        Selecciona una tarifa y pulsa "Auditar Faltas" para ver las referencias en rotura.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Subtab 2: Low Stock Table -->
+                <div id="audit-subtab-low" class="audit-subtab-content" style="display: none;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Modelo / SKU</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th style="text-align: center;">Stock Actual</th>
+                                    <th style="text-align: center;">Pedido Sugerido</th>
+                                    <th style="text-align: right;">Coste Tarifa</th>
+                                    <th style="text-align: right;">Total Línea</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-low">
+                                <!-- Filas de stock bajo -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Subtab 3: In Stock Table -->
+                <div id="audit-subtab-ok" class="audit-subtab-content" style="display: none;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Modelo / SKU</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th style="text-align: center;">Stock Actual</th>
+                                    <th style="text-align: right;">Coste Tarifa</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-ok">
+                                <!-- Filas de stock ok -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Subtab 4: Sales & Delta Table -->
+                <div id="audit-subtab-sales" class="audit-subtab-content" style="display: none;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Modelo / SKU</th>
+                                    <th>Marca</th>
+                                    <th>Descripción</th>
+                                    <th style="text-align: center;">Stock Anterior</th>
+                                    <th style="text-align: center;">Stock Actual</th>
+                                    <th style="text-align: center;">Uds Vendidas</th>
+                                    <th style="text-align: right;">Ritmo Diario</th>
+                                    <th style="text-align: center;">Días hasta Rotura</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-sales">
+                                <tr>
+                                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                                        Selecciona dos snapshots de fecha diferente y pulsa "Calcular Ventas".
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Subtab 5: Surplus Table -->
+                <div id="audit-subtab-surplus" class="audit-subtab-content" style="display: none;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>SKU Almacén</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th style="text-align: center;">Stock Almacén</th>
+                                    <th style="text-align: right;">Coste Registrado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-surplus">
+                                <!-- Filas de excedentes -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
             </section>
 
             <!-- TAB 4: USER MANAGEMENT (Root Only) -->

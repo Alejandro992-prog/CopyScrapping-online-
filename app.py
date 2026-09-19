@@ -41,6 +41,11 @@ try:
 except ImportError:
     _pypdf_module = None  # type: ignore
 
+try:
+    import stock_analyzer
+except ImportError:
+    stock_analyzer = None
+
 # ---------------------------------------------------------------------------
 # Regex pre-compiladas a nivel de módulo (evitar re-compilación en cada llamada)
 # ---------------------------------------------------------------------------
@@ -5166,6 +5171,296 @@ async def save_price_limits(data: PriceLimitsSaveModel):
     save_config(config)
     add_log("info", f"Límites de precio actualizados para {data.category}: E < {data.eco_max}€, M < {data.med_max}€.")
     return {"status": "success"}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINTS: AUDITORÍA DE ROTURAS, HISTÓRICO DE STOCK Y VENTAS IA
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/stock/upload-audit")
+async def upload_stock_audit_pdf(
+    file: UploadFile = File(...),
+    document_date: Optional[str] = Form(None)
+):
+    """Sube un PDF de inventario, extrae referencias, detecta fecha y guarda snapshot en memoria histórica."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+        
+    stock_dir = os.path.join(DATA_DIR, "stock")
+    os.makedirs(stock_dir, exist_ok=True)
+    temp_pdf_path = os.path.join(stock_dir, "temp_audit_inventory.pdf")
+    inventory_file = os.path.join(stock_dir, "inventory.json")
+
+    try:
+        content = await file.read()
+        with open(temp_pdf_path, "wb") as f:
+            f.write(content)
+
+        add_log("info", f"PDF de inventario '{file.filename}' recibido para auditoría. Procesando...")
+        extracted_products = parse_erp_pdf(temp_pdf_path)
+        if not extracted_products:
+            raise HTTPException(status_code=400, detail="No se pudieron extraer productos del PDF. Revisa el formato.")
+
+        # Intentar extraer fecha del texto del PDF si no fue provista
+        detected_date = document_date
+        if not detected_date and _pypdf_module:
+            try:
+                reader = _pypdf_module.PdfReader(temp_pdf_path)
+                sample_text = ""
+                for p in reader.pages[:3]:
+                    sample_text += (p.extract_text() or "") + "\n"
+                detected_date = stock_analyzer.extract_date_from_text(sample_text)
+            except Exception as e_date:
+                add_log("warning", f"No se pudo extraer fecha automáticamente del PDF: {e_date}")
+
+        # Guardar snapshot en historial
+        snapshot = stock_analyzer.save_stock_snapshot(
+            items=extracted_products,
+            filename=file.filename or "inventario.pdf",
+            detected_date=detected_date
+        )
+
+        # Actualizar también inventory.json activo
+        with open(inventory_file, "w", encoding="utf-8") as f:
+            json.dump(extracted_products, f, indent=2, ensure_ascii=False)
+
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+
+        add_log("success", f"Auditoría de inventario procesada: {len(extracted_products)} productos. Snapshot guardado ({snapshot.get('date')}).")
+        return {
+            "status": "success",
+            "snapshot_id": snapshot.get("id"),
+            "date": snapshot.get("date"),
+            "date_source": snapshot.get("date_source"),
+            "total_references": snapshot.get("total_references"),
+            "total_units": snapshot.get("total_units"),
+            "brands": list(snapshot.get("brands_count", {}).keys())[:20]
+        }
+    except Exception as e:
+        if os.path.exists(temp_pdf_path):
+            os.remove(temp_pdf_path)
+        add_log("error", f"Error procesando auditoría de inventario: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stock/history")
+async def get_stock_history():
+    """Devuelve la lista de snapshots de stock guardados ordenados por fecha."""
+    if stock_analyzer is None:
+        return []
+    return stock_analyzer.get_stock_snapshots_list()
+
+@app.get("/api/stock/brands")
+async def get_stock_brands(snapshot_id: Optional[str] = None):
+    """Devuelve las marcas disponibles en un snapshot o en el inventario actual."""
+    if stock_analyzer is None:
+        return []
+    items = []
+    if snapshot_id:
+        snap = stock_analyzer.load_snapshot(snapshot_id)
+        if snap:
+            items = snap.get("items", [])
+    if not items:
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if os.path.exists(inv_path):
+            try:
+                with open(inv_path, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+            except Exception:
+                items = []
+                
+    brands_count = {}
+    for it in items:
+        b = str(it.get("brand") or "").strip()
+        if b and b.upper() != "N/D":
+            brands_count[b] = brands_count.get(b, 0) + 1
+            
+    # Ordenar por frecuencia
+    sorted_brands = sorted(brands_count.keys(), key=lambda k: brands_count[k], reverse=True)
+    return sorted_brands
+
+class AuditRequestModel(BaseModel):
+    provider_id: str
+    brand: Optional[str] = "Todas"
+    snapshot_id: Optional[str] = None
+    threshold: int = 2
+
+@app.post("/api/stock/audit-shortages")
+async def audit_shortages_endpoint(req: AuditRequestModel):
+    """Cruza la tarifa del proveedor contra el stock del snapshot seleccionado."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+
+    # 1. Cargar stock items
+    stock_items = []
+    if req.snapshot_id:
+        snap = stock_analyzer.load_snapshot(req.snapshot_id)
+        if snap:
+            stock_items = snap.get("items", [])
+    if not stock_items:
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if os.path.exists(inv_path):
+            with open(inv_path, "r", encoding="utf-8") as f:
+                stock_items = json.load(f)
+
+    if not stock_items:
+        raise HTTPException(status_code=400, detail="No hay datos de inventario cargados.")
+
+    # 2. Cargar tarifa de proveedor
+    tariff_items = stock_analyzer.load_provider_tariff_items(req.provider_id)
+    if not tariff_items:
+        raise HTTPException(status_code=400, detail=f"No se pudieron cargar artículos de la tarifa '{req.provider_id}'.")
+
+    # 3. Comparar
+    result = stock_analyzer.compare_stock_vs_tariff(
+        stock_items=stock_items,
+        tariff_items=tariff_items,
+        brand_filter=req.brand,
+        low_stock_threshold=req.threshold
+    )
+    return result
+
+class SalesAnalysisRequestModel(BaseModel):
+    snapshot_old_id: str
+    snapshot_new_id: str
+    brand: Optional[str] = "Todas"
+
+@app.post("/api/stock/analyze-sales")
+async def analyze_sales_endpoint(req: SalesAnalysisRequestModel):
+    """Calcula las diferencias de inventario, ventas y ritmo de salida entre dos snapshots."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+
+    snap_old = stock_analyzer.load_snapshot(req.snapshot_old_id)
+    snap_new = stock_analyzer.load_snapshot(req.snapshot_new_id)
+
+    if not snap_old or not snap_new:
+        raise HTTPException(status_code=400, detail="No se pudieron cargar uno o ambos snapshots seleccionados.")
+
+    delta = stock_analyzer.calculate_stock_delta(
+        snapshot_old=snap_old,
+        snapshot_new=snap_new,
+        brand_filter=req.brand
+    )
+    return delta
+
+class GeminiReportRequestModel(BaseModel):
+    provider_id: str
+    brand: Optional[str] = "Todas"
+    snapshot_old_id: Optional[str] = None
+    snapshot_new_id: Optional[str] = None
+    threshold: int = 2
+
+@app.post("/api/stock/gemini-report")
+async def gemini_stock_report_endpoint(req: GeminiReportRequestModel):
+    """Genera un informe comercial ejecutivo con Gemini analizando ventas y faltas de stock."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+
+    current_config = load_config()
+    api_key = (current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Configura tu API Key de Gemini en los ajustes del sistema para generar el informe.")
+
+    # 1. Obtener datos de faltas
+    stock_items = []
+    if req.snapshot_new_id:
+        snap_new = stock_analyzer.load_snapshot(req.snapshot_new_id)
+        if snap_new:
+            stock_items = snap_new.get("items", [])
+    if not stock_items:
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if os.path.exists(inv_path):
+            with open(inv_path, "r", encoding="utf-8") as f:
+                stock_items = json.load(f)
+
+    tariff_items = stock_analyzer.load_provider_tariff_items(req.provider_id)
+    shortages_result = stock_analyzer.compare_stock_vs_tariff(
+        stock_items=stock_items,
+        tariff_items=tariff_items,
+        brand_filter=req.brand,
+        low_stock_threshold=req.threshold
+    )
+
+    # 2. Obtener datos de ventas si hay dos snapshots
+    delta_result = {}
+    if req.snapshot_old_id and req.snapshot_new_id and req.snapshot_old_id != req.snapshot_new_id:
+        snap_old = stock_analyzer.load_snapshot(req.snapshot_old_id)
+        snap_new = stock_analyzer.load_snapshot(req.snapshot_new_id)
+        if snap_old and snap_new:
+            delta_result = stock_analyzer.calculate_stock_delta(snap_old, snap_new, brand_filter=req.brand)
+    else:
+        # Si no hay snapshot previo, crear estructura sintética para el prompt
+        delta_result = {
+            "period": {"date_old": "N/D", "date_new": "Actual", "days_elapsed": 1},
+            "brand": req.brand or "Todas",
+            "kpis": {"total_units_sold": 0, "products_with_sales": 0, "average_sales_per_day": 0},
+            "top_sold": [],
+            "critical_alerts": []
+        }
+
+    report_markdown = stock_analyzer.generate_gemini_sales_report(
+        delta_result=delta_result,
+        shortages_result=shortages_result,
+        api_key=api_key
+    )
+
+    return {
+        "status": "success",
+        "report": report_markdown
+    }
+
+@app.get("/api/stock/audit/export/xlsx")
+async def export_audit_excel_endpoint(
+    provider_id: str,
+    brand: Optional[str] = "Todas",
+    snapshot_new_id: Optional[str] = None,
+    snapshot_old_id: Optional[str] = None,
+    threshold: int = 2
+):
+    """Exporta a Excel profesional el informe de faltas, stock bajo y análisis de ventas."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+
+    # Cargar stock
+    stock_items = []
+    if snapshot_new_id:
+        snap_new = stock_analyzer.load_snapshot(snapshot_new_id)
+        if snap_new:
+            stock_items = snap_new.get("items", [])
+    if not stock_items:
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if os.path.exists(inv_path):
+            with open(inv_path, "r", encoding="utf-8") as f:
+                stock_items = json.load(f)
+
+    tariff_items = stock_analyzer.load_provider_tariff_items(provider_id)
+    shortages_result = stock_analyzer.compare_stock_vs_tariff(
+        stock_items=stock_items,
+        tariff_items=tariff_items,
+        brand_filter=brand,
+        low_stock_threshold=threshold
+    )
+
+    delta_result = None
+    if snapshot_old_id and snapshot_new_id and snapshot_old_id != snapshot_new_id:
+        snap_old = stock_analyzer.load_snapshot(snapshot_old_id)
+        snap_new = stock_analyzer.load_snapshot(snapshot_new_id)
+        if snap_old and snap_new:
+            delta_result = stock_analyzer.calculate_stock_delta(snap_old, snap_new, brand_filter=brand)
+
+    wb = stock_analyzer.export_audit_to_excel(shortages_result, delta_result)
+    out_buffer = io.BytesIO()
+    wb.save(out_buffer)
+    out_buffer.seek(0)
+
+    clean_brand = re.sub(r'[^a-zA-Z0-9]', '_', brand or "Todas")
+    fname = f"Auditoria_Faltas_{clean_brand}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+
+    return StreamingResponse(
+        out_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
 
 if __name__ == "__main__":
     import uvicorn

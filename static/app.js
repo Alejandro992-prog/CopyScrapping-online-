@@ -207,6 +207,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadRegisteredUsers();
             } else if (tab.dataset.tab === "tab-stock") {
                 loadStockMatrix();
+            } else if (tab.dataset.tab === "tab-shortages") {
+                initAuditTab();
             }
         });
     });
@@ -3155,6 +3157,558 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
         });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MÓDULO: AUDITORÍA DE FALTAS, COMPARADOR DE TARIFAS Y ANÁLISIS DE VENTAS IA
+    // ─────────────────────────────────────────────────────────────────────────
+    let auditShortagesData = null;
+    let auditDeltaData = null;
+
+    // Elementos del DOM de Auditoría
+    const selectAuditSnapshot = document.getElementById("select-audit-snapshot");
+    const selectAuditProvider = document.getElementById("select-audit-provider");
+    const selectAuditBrand = document.getElementById("select-audit-brand");
+    const inputAuditThreshold = document.getElementById("input-audit-threshold");
+    const btnRunAudit = document.getElementById("btn-run-audit");
+    const btnUploadAuditPdf = document.getElementById("btn-upload-audit-pdf");
+    const auditFileInput = document.getElementById("audit-file-input");
+    const auditManualDate = document.getElementById("audit-manual-date");
+    const snapshotMetaInfo = document.getElementById("snapshot-meta-info");
+
+    const selectDeltaOld = document.getElementById("select-delta-old");
+    const selectDeltaNew = document.getElementById("select-delta-new");
+    const btnRunSalesDelta = document.getElementById("btn-run-sales-delta");
+
+    const btnTriggerGemini = document.getElementById("btn-trigger-gemini-ai");
+    const cardGeminiExec = document.getElementById("card-gemini-executive");
+    const geminiReportContent = document.getElementById("gemini-report-body");
+    const btnCloseGeminiCard = document.getElementById("btn-close-gemini-card");
+
+    const btnExportAuditXlsx = document.getElementById("btn-export-audit-excel");
+
+    // Sub-pestañas de tablas
+    const auditSubtabBtns = document.querySelectorAll(".audit-subtab-btn");
+    auditSubtabBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            auditSubtabBtns.forEach(b => {
+                b.classList.remove("active");
+                b.classList.add("btn-secondary");
+            });
+            document.querySelectorAll(".audit-subtab-content").forEach(c => c.style.display = "none");
+            btn.classList.add("active");
+            btn.classList.remove("btn-secondary");
+            const targetEl = document.getElementById(btn.dataset.subtab);
+            if (targetEl) targetEl.style.display = "block";
+        });
+    });
+
+    if (btnCloseGeminiCard && cardGeminiExec) {
+        btnCloseGeminiCard.addEventListener("click", () => {
+            cardGeminiExec.style.display = "none";
+        });
+    }
+
+    async function initAuditTab() {
+        await loadAuditSnapshots();
+        await loadAuditProviders();
+        await loadAuditBrands();
+    }
+
+    async function loadAuditSnapshots() {
+        if (!selectAuditSnapshot) return;
+        try {
+            const res = await fetch("/api/stock/history");
+            const snapshots = await res.json();
+            
+            selectAuditSnapshot.innerHTML = "";
+            if (selectDeltaOld) selectDeltaOld.innerHTML = "";
+            if (selectDeltaNew) selectDeltaNew.innerHTML = "";
+
+            if (!snapshots || snapshots.length === 0) {
+                selectAuditSnapshot.innerHTML = '<option value="">Inventario actual (inventory.json)</option>';
+                if (selectDeltaOld) selectDeltaOld.innerHTML = '<option value="">Sin histórico</option>';
+                if (selectDeltaNew) selectDeltaNew.innerHTML = '<option value="">Sin histórico</option>';
+                if (snapshotMetaInfo) snapshotMetaInfo.innerHTML = "<em>No hay snapshots en historial. Se usará el inventario actual.</em>";
+                return;
+            }
+
+            selectAuditSnapshot.innerHTML = '<option value="">-- Inventario Actual en Sistema --</option>';
+            snapshots.forEach((snap, idx) => {
+                const opt = document.createElement("option");
+                opt.value = snap.id;
+                opt.textContent = `📅 ${snap.date} (${snap.total_references} refs, ${snap.total_units} uds) - ${snap.filename || 'PDF'}`;
+                selectAuditSnapshot.appendChild(opt);
+
+                if (selectDeltaOld) {
+                    const optOld = document.createElement("option");
+                    optOld.value = snap.id;
+                    optOld.textContent = `${snap.date} (${snap.filename || 'PDF'})`;
+                    selectDeltaOld.appendChild(optOld);
+                }
+
+                if (selectDeltaNew) {
+                    const optNew = document.createElement("option");
+                    optNew.value = snap.id;
+                    optNew.textContent = `${snap.date} (${snap.filename || 'PDF'})`;
+                    selectDeltaNew.appendChild(optNew);
+                }
+            });
+
+            // Por defecto en el comparador delta, poner T1 = anterior y T2 = más reciente
+            if (snapshots.length >= 2 && selectDeltaOld && selectDeltaNew) {
+                selectDeltaNew.selectedIndex = 0;
+                selectDeltaOld.selectedIndex = 1;
+            }
+
+            updateSnapshotMetaInfo();
+        } catch (err) {
+            console.error("Error cargando snapshots de stock:", err);
+        }
+    }
+
+    function updateSnapshotMetaInfo() {
+        if (!snapshotMetaInfo || !selectAuditSnapshot) return;
+        const selText = selectAuditSnapshot.options[selectAuditSnapshot.selectedIndex]?.text || '';
+        snapshotMetaInfo.innerHTML = `<span style="color: #10b981;">●</span> Snapshot seleccionado: <strong>${selText}</strong>`;
+    }
+
+    if (selectAuditSnapshot) {
+        selectAuditSnapshot.addEventListener("change", () => {
+            updateSnapshotMetaInfo();
+            loadAuditBrands();
+        });
+    }
+
+    async function loadAuditProviders() {
+        if (!selectAuditProvider) return;
+        try {
+            const res = await fetch("/api/extractions/files");
+            const files = await res.json();
+            selectAuditProvider.innerHTML = "";
+            if (!files || files.length === 0) {
+                selectAuditProvider.innerHTML = '<option value="">No hay tarifas disponibles</option>';
+                return;
+            }
+            files.forEach(f => {
+                const opt = document.createElement("option");
+                opt.value = f.filename;
+                opt.textContent = `${f.filename} (${f.last_modified})`;
+                selectAuditProvider.appendChild(opt);
+            });
+        } catch (err) {
+            console.error("Error cargando tarifas para auditoría:", err);
+        }
+    }
+
+    async function loadAuditBrands() {
+        if (!selectAuditBrand) return;
+        try {
+            const snapId = selectAuditSnapshot?.value || '';
+            const res = await fetch(`/api/stock/brands?snapshot_id=${encodeURIComponent(snapId)}`);
+            const brands = await res.json();
+            selectAuditBrand.innerHTML = '<option value="Todas">Todas las Marcas</option>';
+            brands.forEach(b => {
+                const opt = document.createElement("option");
+                opt.value = b;
+                opt.textContent = b;
+                selectAuditBrand.appendChild(opt);
+            });
+        } catch (err) {
+            console.error("Error cargando marcas de stock:", err);
+        }
+    }
+
+    // Subida de PDF para auditoría con detección de fecha
+    if (btnUploadAuditPdf && auditFileInput) {
+        btnUploadAuditPdf.addEventListener("click", async () => {
+            if (!auditFileInput.files || auditFileInput.files.length === 0) {
+                alert("Por favor selecciona un archivo PDF de inventario.");
+                return;
+            }
+            const file = auditFileInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+            if (auditManualDate && auditManualDate.value) {
+                formData.append("document_date", auditManualDate.value);
+            }
+
+            btnUploadAuditPdf.disabled = true;
+            btnUploadAuditPdf.textContent = "⏳ Analizando...";
+
+            try {
+                const res = await fetch("/api/stock/upload-audit", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(`✅ Inventario importado con éxito!\nFecha detectada: ${data.date} (${data.date_source === 'document' ? 'Del documento PDF' : 'Fecha actual'})\nReferencias: ${data.total_references}`);
+                    auditFileInput.value = "";
+                    if (auditManualDate) auditManualDate.value = "";
+                    await loadAuditSnapshots();
+                    await loadAuditBrands();
+                } else {
+                    alert(`❌ Error al procesar: ${data.detail || 'Formato no compatible'}`);
+                }
+            } catch (err) {
+                alert(`❌ Error de conexión al subir inventario: ${err.message}`);
+            } finally {
+                btnUploadAuditPdf.disabled = false;
+                btnUploadAuditPdf.textContent = "⬆ Subir PDF";
+            }
+        });
+    }
+
+    // Ejecutar auditoría de faltas contra tarifa
+    if (btnRunAudit) {
+        btnRunAudit.addEventListener("click", async () => {
+            const providerId = selectAuditProvider?.value;
+            if (!providerId) {
+                alert("Selecciona una tarifa de proveedor.");
+                return;
+            }
+
+            const brand = selectAuditBrand?.value || "Todas";
+            const snapId = selectAuditSnapshot?.value || null;
+            const threshold = parseInt(inputAuditThreshold?.value || "2", 10);
+
+            btnRunAudit.disabled = true;
+            btnRunAudit.textContent = "⏳ Auditando...";
+
+            try {
+                const res = await fetch("/api/stock/audit-shortages", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        provider_id: providerId,
+                        brand: brand,
+                        snapshot_id: snapId,
+                        threshold: threshold
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    auditShortagesData = data;
+                    renderAuditResults(data);
+                } else {
+                    alert(`❌ Error al auditar: ${data.detail || 'Ocurrió un error'}`);
+                }
+            } catch (err) {
+                alert(`❌ Error al conectar con el servidor: ${err.message}`);
+            } finally {
+                btnRunAudit.disabled = false;
+                btnRunAudit.textContent = "🔍 Auditar Faltas";
+            }
+        });
+    }
+
+    function renderAuditResults(data) {
+        const kpis = data.kpis || {};
+        
+        // Actualizar KPIs
+        const elShortages = document.getElementById("audit-kpi-shortages");
+        const elLow = document.getElementById("audit-kpi-low");
+        const elOk = document.getElementById("audit-kpi-ok");
+        const elCost = document.getElementById("audit-kpi-cost");
+
+        if (elShortages) elShortages.textContent = kpis.shortages_count || 0;
+        if (elLow) elLow.textContent = kpis.low_stock_count || 0;
+        if (elOk) elOk.textContent = kpis.in_stock_count || 0;
+        if (elCost) elCost.textContent = `${(kpis.total_estimated_reorder_cost || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
+
+        // Actualizar badges en subtabs
+        const bShortages = document.getElementById("count-badge-shortages");
+        const bLow = document.getElementById("count-badge-low");
+        const bOk = document.getElementById("count-badge-ok");
+        const bSurplus = document.getElementById("count-badge-surplus");
+
+        if (bShortages) bShortages.textContent = kpis.shortages_count || 0;
+        if (bLow) bLow.textContent = kpis.low_stock_count || 0;
+        if (bOk) bOk.textContent = kpis.in_stock_count || 0;
+        if (bSurplus) bSurplus.textContent = kpis.surplus_count || 0;
+
+        // Renderizar tabla de Faltas (Roturas)
+        const tbodyShortages = document.getElementById("table-body-shortages");
+        if (tbodyShortages) {
+            tbodyShortages.innerHTML = "";
+            if (!data.shortages || data.shortages.length === 0) {
+                tbodyShortages.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #10b981; padding: 25px;">🎉 ¡Excelente! No tienes ninguna falta para esta marca y tarifa.</td></tr>';
+            } else {
+                data.shortages.forEach(it => {
+                    const tr = document.createElement("tr");
+                    tr.style.background = "rgba(239, 68, 68, 0.05)";
+                    tr.innerHTML = `
+                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td style="max-width: 320px; font-size: 12px;">${escapeHtml(it.product)}</td>
+                        <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
+                        <td style="text-align: center;"><span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700;">0 uds</span></td>
+                        <td style="text-align: center;"><strong style="color: #3b82f6;">+${it.suggested_reorder} uds</strong></td>
+                        <td style="text-align: right;">${it.supplier_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                        <td style="text-align: right; font-weight: 700; color: #ef4444;">${it.reorder_cost.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                    `;
+                    tbodyShortages.appendChild(tr);
+                });
+            }
+        }
+
+        // Renderizar tabla de Stock Bajo
+        const tbodyLow = document.getElementById("table-body-low");
+        if (tbodyLow) {
+            tbodyLow.innerHTML = "";
+            if (!data.low_stock || data.low_stock.length === 0) {
+                tbodyLow.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">No hay productos en estado de stock bajo.</td></tr>';
+            } else {
+                data.low_stock.forEach(it => {
+                    const tr = document.createElement("tr");
+                    tr.style.background = "rgba(245, 158, 11, 0.05)";
+                    tr.innerHTML = `
+                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td style="max-width: 320px; font-size: 12px;">${escapeHtml(it.product)}</td>
+                        <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
+                        <td style="text-align: center;"><span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; font-weight: 700;">${it.stock} uds</span></td>
+                        <td style="text-align: center;"><strong style="color: #3b82f6;">+${it.suggested_reorder} uds</strong></td>
+                        <td style="text-align: right;">${it.supplier_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                        <td style="text-align: right; font-weight: 700;">${it.reorder_cost.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                    `;
+                    tbodyLow.appendChild(tr);
+                });
+            }
+        }
+
+        // Renderizar tabla de En Stock
+        const tbodyOk = document.getElementById("table-body-ok");
+        if (tbodyOk) {
+            tbodyOk.innerHTML = "";
+            if (!data.in_stock || data.in_stock.length === 0) {
+                tbodyOk.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">Sin referencias en esta categoría.</td></tr>';
+            } else {
+                data.in_stock.forEach(it => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td style="max-width: 380px; font-size: 12px;">${escapeHtml(it.product)}</td>
+                        <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
+                        <td style="text-align: center;"><span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; font-weight: 700;">${it.stock} uds</span></td>
+                        <td style="text-align: right;">${it.supplier_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                    `;
+                    tbodyOk.appendChild(tr);
+                });
+            }
+        }
+
+        // Renderizar tabla de Excedentes / No en Tarifa
+        const tbodySurplus = document.getElementById("table-body-surplus");
+        if (tbodySurplus) {
+            tbodySurplus.innerHTML = "";
+            if (!data.surplus || data.surplus.length === 0) {
+                tbodySurplus.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">Todo el stock de almacén coincide con la tarifa.</td></tr>';
+            } else {
+                data.surplus.forEach(it => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td><strong>${escapeHtml(it.sku)}</strong></td>
+                        <td style="max-width: 380px; font-size: 12px;">${escapeHtml(it.description)}</td>
+                        <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
+                        <td style="text-align: center;">${it.stock} uds</td>
+                        <td style="text-align: right;">${(it.cost || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                    `;
+                    tbodySurplus.appendChild(tr);
+                });
+            }
+        }
+    }
+
+    // Calcular Ventas y Delta entre 2 Snapshots
+    if (btnRunSalesDelta) {
+        btnRunSalesDelta.addEventListener("click", async () => {
+            const oldId = selectDeltaOld?.value;
+            const newId = selectDeltaNew?.value;
+
+            if (!oldId || !newId) {
+                alert("Selecciona dos snapshots para comparar.");
+                return;
+            }
+            if (oldId === newId) {
+                alert("Debes seleccionar dos snapshots con fechas distintas para calcular ventas.");
+                return;
+            }
+
+            const brand = selectAuditBrand?.value || "Todas";
+
+            btnRunSalesDelta.disabled = true;
+            btnRunSalesDelta.textContent = "⏳ Calculando...";
+
+            try {
+                const res = await fetch("/api/stock/analyze-sales", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        snapshot_old_id: oldId,
+                        snapshot_new_id: newId,
+                        brand: brand
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    auditDeltaData = data;
+                    renderSalesDeltaResults(data);
+                    
+                    // Activar visualmente la pestaña de ventas
+                    const salesSubtabBtn = document.querySelector('[data-subtab="audit-subtab-sales"]');
+                    if (salesSubtabBtn) salesSubtabBtn.click();
+                } else {
+                    alert(`❌ Error al calcular ventas: ${data.detail || 'Error'}`);
+                }
+            } catch (err) {
+                alert(`❌ Error de conexión: ${err.message}`);
+            } finally {
+                btnRunSalesDelta.disabled = false;
+                btnRunSalesDelta.textContent = "🔄 Calcular Ventas";
+            }
+        });
+    }
+
+    function renderSalesDeltaResults(data) {
+        const kpis = data.kpis || {};
+        const period = data.period || {};
+
+        // Actualizar KPI Card de ventas
+        const elSales = document.getElementById("audit-kpi-sales");
+        const elSalesSub = document.getElementById("audit-kpi-sales-sub");
+        const bSales = document.getElementById("count-badge-sales");
+
+        if (elSales) elSales.textContent = `${kpis.total_units_sold || 0} uds`;
+        if (elSalesSub) elSalesSub.textContent = `En ${period.days_elapsed || 1} días (${kpis.average_sales_per_day || 0} uds/día)`;
+        if (bSales) bSales.textContent = kpis.products_with_sales || 0;
+
+        // Renderizar tabla de ventas
+        const tbody = document.getElementById("table-body-sales");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+
+        const allSold = data.all_sold || [];
+        if (allSold.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 25px;">No se registraron ventas netas en el periodo (${period.date_old} a ${period.date_new}).</td></tr>`;
+            return;
+        }
+
+        allSold.forEach(it => {
+            const tr = document.createElement("tr");
+            const isCritical = it.is_critical_burn;
+            if (isCritical) {
+                tr.style.background = "rgba(239, 68, 68, 0.08)";
+            }
+            tr.innerHTML = `
+                <td><strong>${escapeHtml(it.sku)}</strong></td>
+                <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.brand)}</span></td>
+                <td style="max-width: 300px; font-size: 12px;">${escapeHtml(it.description)}</td>
+                <td style="text-align: center;">${it.stock_old}</td>
+                <td style="text-align: center;"><strong>${it.stock_new}</strong></td>
+                <td style="text-align: center;"><span class="badge" style="background: rgba(37, 99, 235, 0.15); color: #3b82f6; font-weight: 800;">${it.units_sold} uds</span></td>
+                <td style="text-align: right; font-weight: 600;">${it.sales_rate_per_day} / día</td>
+                <td style="text-align: center;">
+                    ${it.stock_new === 0 
+                        ? '<span class="badge" style="background: #ef4444; color: #fff;">AGOTADO (0d)</span>' 
+                        : (isCritical 
+                            ? `<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700;">⚠️ ${it.days_to_stockout} días</span>` 
+                            : `${it.days_to_stockout} días`)}
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    // Generar informe cognitivo con Gemini
+    if (btnTriggerGemini) {
+        btnTriggerGemini.addEventListener("click", async () => {
+            const providerId = selectAuditProvider?.value;
+            if (!providerId) {
+                alert("Por favor selecciona una tarifa de proveedor antes de generar el informe.");
+                return;
+            }
+
+            const brand = selectAuditBrand?.value || "Todas";
+            const threshold = parseInt(inputAuditThreshold?.value || "2", 10);
+            const snapOldId = selectDeltaOld?.value || null;
+            const snapNewId = selectDeltaNew?.value || selectAuditSnapshot?.value || null;
+
+            if (cardGeminiExec) cardGeminiExec.style.display = "block";
+            if (geminiReportContent) {
+                geminiReportContent.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #c4b5fd;">
+                        <span class="spinner" style="display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(196, 181, 253, 0.3); border-top-color: #c4b5fd; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+                        <p style="margin-top: 10px; font-weight: 600;">Gemini está analizando las existencias, ventas y calculando la propuesta óptima de compra...</p>
+                    </div>
+                `;
+            }
+
+            btnTriggerGemini.disabled = true;
+
+            try {
+                const res = await fetch("/api/stock/gemini-report", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        provider_id: providerId,
+                        brand: brand,
+                        snapshot_old_id: snapOldId,
+                        snapshot_new_id: snapNewId,
+                        threshold: threshold
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    if (geminiReportContent) {
+                        geminiReportContent.innerHTML = formatMarkdownToHtml(data.report || "Sin contenido.");
+                    }
+                } else {
+                    if (geminiReportContent) {
+                        geminiReportContent.innerHTML = `<div style="color: #ef4444; padding: 10px;">❌ Error: ${data.detail || 'No se pudo generar el informe.'}</div>`;
+                    }
+                }
+            } catch (err) {
+                if (geminiReportContent) {
+                    geminiReportContent.innerHTML = `<div style="color: #ef4444; padding: 10px;">❌ Error de conexión: ${err.message}</div>`;
+                }
+            } finally {
+                btnTriggerGemini.disabled = false;
+            }
+        });
+    }
+
+    // Exportar a Excel
+    if (btnExportAuditXlsx) {
+        btnExportAuditXlsx.addEventListener("click", () => {
+            const providerId = selectAuditProvider?.value;
+            if (!providerId) {
+                alert("Selecciona una tarifa de proveedor para exportar el pedido.");
+                return;
+            }
+            const brand = selectAuditBrand?.value || "Todas";
+            const threshold = inputAuditThreshold?.value || "2";
+            const snapNew = selectDeltaNew?.value || selectAuditSnapshot?.value || '';
+            const snapOld = selectDeltaOld?.value || '';
+
+            const url = `/api/stock/audit/export/xlsx?provider_id=${encodeURIComponent(providerId)}&brand=${encodeURIComponent(brand)}&threshold=${encodeURIComponent(threshold)}&snapshot_new_id=${encodeURIComponent(snapNew)}&snapshot_old_id=${encodeURIComponent(snapOld)}`;
+            window.location.href = url;
+        });
+    }
+
+    function formatMarkdownToHtml(md) {
+        if (!md) return '';
+        let html = md
+            .replace(/^### (.*$)/gim, '<h4 style="color: #93c5fd; margin: 12px 0 6px 0; font-size: 15px;">$1</h4>')
+            .replace(/^## (.*$)/gim, '<h3 style="color: #c4b5fd; margin: 16px 0 8px 0; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">$1</h3>')
+            .replace(/^# (.*$)/gim, '<h2 style="color: #e0e7ff; margin: 18px 0 10px 0; font-size: 18px;">$1</h2>')
+            .replace(/\*\*(.*?)\*\*/gim, '<strong style="color: #f8fafc;">$1</strong>')
+            .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+            .replace(/^- (.*$)/gim, '<li style="margin-left: 20px; list-style-type: disc;">$1</li>')
+            .replace(/\n/gim, '<br>');
+        return html;
     }
 
     // Initialize Page
