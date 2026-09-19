@@ -34,6 +34,232 @@ def get_history_dir() -> str:
     os.makedirs(history_dir, exist_ok=True)
     return history_dir
 
+def get_tariffs_dir() -> str:
+    tariffs_dir = os.path.join(get_base_data_dir(), "tariffs")
+    os.makedirs(tariffs_dir, exist_ok=True)
+    return tariffs_dir
+
+def save_tariff(
+    provider_name: str,
+    tariff_name: str,
+    file_type: str,
+    original_filename: str,
+    items: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Guarda una tarifa de proveedor procesada en data/tariffs/."""
+    tariffs_dir = get_tariffs_dir()
+    now = datetime.now()
+    clean_p = re.sub(r'[^a-zA-Z0-9]', '_', (provider_name or "proveedor").strip().lower())
+    tariff_id = f"{clean_p}_{now.strftime('%Y%m%d_%H%M%S')}"
+    
+    tariff_data = {
+        "id": tariff_id,
+        "provider_name": provider_name.strip() if provider_name else "Proveedor",
+        "tariff_name": tariff_name.strip() if tariff_name else f"Tarifa {now.strftime('%d/%m/%Y')}",
+        "file_type": file_type.lower(),
+        "original_filename": original_filename,
+        "upload_date": now.strftime("%Y-%m-%d"),
+        "created_at": now.isoformat(),
+        "total_items": len(items),
+        "items": items
+    }
+    filepath = os.path.join(tariffs_dir, f"tariff_{tariff_id}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(tariff_data, f, indent=2, ensure_ascii=False)
+    return tariff_data
+
+def get_tariffs_list() -> List[Dict[str, Any]]:
+    """Devuelve la lista de todas las tarifas de proveedores registradas."""
+    tariffs_dir = get_tariffs_dir()
+    result = []
+    for fname in os.listdir(tariffs_dir):
+        if fname.startswith("tariff_") and fname.endswith(".json"):
+            fpath = os.path.join(tariffs_dir, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                    result.append({
+                        "id": d.get("id"),
+                        "provider_name": d.get("provider_name"),
+                        "tariff_name": d.get("tariff_name"),
+                        "file_type": d.get("file_type"),
+                        "original_filename": d.get("original_filename"),
+                        "upload_date": d.get("upload_date"),
+                        "total_items": d.get("total_items", 0)
+                    })
+            except Exception:
+                continue
+    result.sort(key=lambda x: x.get("upload_date", ""), reverse=True)
+    return result
+
+def load_tariff(tariff_id: str) -> Optional[Dict[str, Any]]:
+    """Carga una tarifa de proveedor por su ID."""
+    tariffs_dir = get_tariffs_dir()
+    safe_id = str(tariff_id).replace("tariff_", "").strip()
+    candidate = os.path.join(tariffs_dir, f"tariff_{safe_id}.json")
+    if not os.path.exists(candidate):
+        candidate = os.path.join(tariffs_dir, f"{tariff_id}.json")
+    if not os.path.exists(candidate):
+        return None
+    try:
+        with open(candidate, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def delete_tariff(tariff_id: str) -> bool:
+    """Elimina una tarifa guardada."""
+    tariffs_dir = get_tariffs_dir()
+    safe_id = str(tariff_id).replace("tariff_", "").strip()
+    candidate = os.path.join(tariffs_dir, f"tariff_{safe_id}.json")
+    if os.path.exists(candidate):
+        try:
+            os.remove(candidate)
+            return True
+        except Exception:
+            return False
+    return False
+
+def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[str, Any]]:
+    """Extrae productos y precios desde un archivo Excel o CSV de tarifa de proveedor."""
+    if pd is None:
+        return []
+    try:
+        if filepath.endswith(".csv"):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
+    except Exception as e:
+        print(f"Error leyendo archivo Excel de tarifa: {e}")
+        return []
+
+    cols = [str(c).strip() for c in df.columns]
+    col_map = {}
+    for c in cols:
+        clow = c.lower()
+        if not col_map.get("model") and any(k in clow for k in ["modelo", "model", "sku", "referencia", "código", "codigo", "ref", "item"]):
+            col_map["model"] = c
+        elif not col_map.get("product") and any(k in clow for k in ["producto", "product", "descripcion", "descripción", "articulo", "artículo", "concepto", "nombre"]):
+            col_map["product"] = c
+        elif not col_map.get("price") and any(k in clow for k in ["precio", "price", "pvp", "coste", "tarifa", "importe", "neto"]):
+            col_map["price"] = c
+
+    if not col_map.get("model") and len(cols) > 0:
+        col_map["model"] = cols[0]
+    if not col_map.get("price") and len(cols) > 1:
+        col_map["price"] = cols[-1]
+
+    items = []
+    for _, row in df.iterrows():
+        r = row.to_dict()
+        model_val = str(r.get(col_map.get("model", ""), "")).strip()
+        product_val = str(r.get(col_map.get("product", ""), "")).strip() if col_map.get("product") else model_val
+        raw_price = r.get(col_map.get("price", ""), 0)
+        
+        if model_val in ["nan", "None", ""]:
+            model_val = ""
+        if product_val in ["nan", "None", ""]:
+            product_val = ""
+            
+        if not model_val and not product_val:
+            continue
+            
+        price_val = 0.0
+        if isinstance(raw_price, (int, float)):
+            price_val = float(raw_price)
+        else:
+            p_str = str(raw_price).replace("€", "").replace("EUR", "").strip()
+            if '.' in p_str and ',' in p_str:
+                p_str = p_str.replace('.', '').replace(',', '.')
+            elif ',' in p_str:
+                p_str = p_str.replace(',', '.')
+            try:
+                price_val = float(re.sub(r'[^\d\.]', '', p_str))
+            except Exception:
+                price_val = 0.0
+
+        items.append({
+            "model": model_val or product_val[:25],
+            "product": product_val or model_val,
+            "price": price_val,
+            "brand": default_provider,
+            "attributes": ""
+        })
+    return items
+
+def parse_pdf_tariff(filepath: str, default_provider: str = "", api_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Extrae productos y precios desde un PDF de tarifa enviado por el proveedor."""
+    import pypdf
+    items = []
+    raw_text = ""
+    try:
+        reader = pypdf.PdfReader(filepath)
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            raw_text += t + "\n"
+            for line in t.split("\n"):
+                line_str = line.strip()
+                if not line_str or len(line_str) < 5:
+                    continue
+                price_match = re.search(r'(\b\d{1,4}(?:[\.,]\d{2})\b)\s*(?:€|EUR)?', line_str)
+                model_match = re.search(r'\b(?=[A-Z0-9/-]*[0-9])(?=[A-Z0-9/-]*[A-Z])[A-Z0-9/-]{4,25}\b', line_str)
+                if price_match and model_match:
+                    model_str = model_match.group(0)
+                    p_raw = price_match.group(1)
+                    if '.' in p_raw and ',' in p_raw:
+                        p_raw = p_raw.replace('.', '').replace(',', '.')
+                    elif ',' in p_raw:
+                        p_raw = p_raw.replace(',', '.')
+                    try:
+                        p_val = float(p_raw)
+                    except Exception:
+                        p_val = 0.0
+                    desc_str = line_str.replace(model_str, "").replace(price_match.group(0), "").strip()
+                    if not desc_str:
+                        desc_str = f"{default_provider} {model_str}"
+                    items.append({
+                        "model": model_str,
+                        "product": desc_str,
+                        "price": p_val,
+                        "brand": default_provider,
+                        "attributes": ""
+                    })
+    except Exception as e:
+        print(f"Error parseando PDF de tarifa: {e}")
+
+    # Si con regex se extrajeron pocos datos y hay clave de Gemini, invocar extracción estructurada
+    if len(items) < 3 and api_key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            prompt = f"""Extrae todos los modelos y precios de coste de esta tarifa del proveedor '{default_provider}'.
+Devuelve ÚNICAMENTE un JSON válido con la lista:
+[
+  {{"model": "CODIGO_MODELO", "product": "DESCRIPCION", "price": 299.00}}
+]
+Texto del PDF:
+{raw_text[:12000]}
+"""
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            resp_text = resp.text or ""
+            clean_json = re.sub(r'^```json\s*|^```\s*|```$', '', resp_text.strip(), flags=re.MULTILINE)
+            gemini_items = json.loads(clean_json)
+            if isinstance(gemini_items, list) and len(gemini_items) > 0:
+                items = [{
+                    "model": str(it.get("model", "")),
+                    "product": str(it.get("product", "")),
+                    "price": float(it.get("price", 0.0)),
+                    "brand": default_provider,
+                    "attributes": ""
+                } for it in gemini_items]
+        except Exception as e_gem:
+            print(f"Gemini fallback en PDF de tarifa: {e_gem}")
+
+    return items
+
 def normalize_sku(sku: str) -> str:
     """Normaliza un SKU/Modelo eliminando espacios, guiones, barras y pasando a mayúsculas."""
     if not sku:
@@ -156,10 +382,22 @@ def load_snapshot(snapshot_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 def load_provider_tariff_items(provider_filename_or_id: str) -> List[Dict[str, Any]]:
-    """Carga los artículos de una tarifa de proveedor desde data/extractions/."""
+    """Carga los artículos de una tarifa de proveedor desde data/tariffs/ o data/extractions/."""
+    # 1. Comprobar si es un ID de tarifa guardada en data/tariffs/
+    tariff_obj = load_tariff(provider_filename_or_id)
+    if tariff_obj and "items" in tariff_obj:
+        return tariff_obj["items"]
+
+    # 2. Comprobar en data/tariffs/ por coincidencia de nombre
+    tariffs_dir = get_tariffs_dir()
+    for fname in os.listdir(tariffs_dir):
+        if fname.endswith(".json") and provider_filename_or_id in fname:
+            t = load_tariff(fname.replace("tariff_", "").replace(".json", ""))
+            if t and "items" in t:
+                return t["items"]
+
+    # 3. Fallback a data/extractions/ para compatibilidad con archivos previos
     extractions_dir = os.path.join(get_base_data_dir(), "extractions")
-    
-    # Buscar archivo exacto o por prefijo
     target_path = os.path.join(extractions_dir, provider_filename_or_id)
     if not os.path.exists(target_path):
         for candidate in [f"{provider_filename_or_id}.xlsx", f"{provider_filename_or_id}.csv"]:
@@ -180,13 +418,10 @@ def load_provider_tariff_items(provider_filename_or_id: str) -> List[Dict[str, A
         items = []
         for _, row in df.iterrows():
             row_dict = row.to_dict()
-            
-            # Buscar columnas estándar o equivalentes
             model = str(row_dict.get("model") or row_dict.get("modelo") or row_dict.get("sku") or "").strip()
             product = str(row_dict.get("product") or row_dict.get("producto") or row_dict.get("descripcion") or "").strip()
             raw_price = row_dict.get("price") or row_dict.get("precio") or row_dict.get("precio_sin_iva") or row_dict.get("PVP") or 0
             
-            # Limpiar precio a numérico
             price_val = 0.0
             if isinstance(raw_price, (int, float)):
                 price_val = float(raw_price)
@@ -232,7 +467,7 @@ def compare_stock_vs_tariff(
         if norm_brand_filter and norm_brand_filter not in b:
             continue
             
-        sku_clean = normalize_sku(item.get("sku", ""))
+        sku_clean = normalize_sku(item.get("sku") or item.get("model") or "")
         ean_clean = normalize_sku(item.get("ean", ""))
         
         if sku_clean:
@@ -255,10 +490,11 @@ def compare_stock_vs_tariff(
         model = t_item.get("model", "")
         product = t_item.get("product", "")
         price = float(t_item.get("price", 0.0))
+        brand = t_item.get("brand", "")
         
         # Filtro de marca en la tarifa si está especificado
         if norm_brand_filter:
-            text_to_check = f"{model} {product}".upper()
+            text_to_check = f"{model} {product} {brand}".upper()
             if norm_brand_filter not in text_to_check:
                 continue
 
@@ -274,10 +510,10 @@ def compare_stock_vs_tariff(
                     matched = s_item
                     break
 
-        if not matched and product:
+        if not matched and (product or model):
             # Búsqueda en descripción de stock
             for s_item in stock_by_desc:
-                s_desc_norm = normalize_sku(s_item.get("description", ""))
+                s_desc_norm = normalize_sku(s_item.get("description") or s_item.get("product") or "")
                 if norm_model and norm_model in s_desc_norm:
                     matched = s_item
                     break
@@ -288,7 +524,7 @@ def compare_stock_vs_tariff(
         description = product
         
         if matched:
-            matched_stock_skus.add(normalize_sku(matched.get("sku", "")))
+            matched_stock_skus.add(normalize_sku(matched.get("sku") or matched.get("model") or ""))
             try:
                 current_qty = int(matched.get("stock", 0))
             except Exception:

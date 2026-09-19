@@ -3176,6 +3176,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const auditManualDate = document.getElementById("audit-manual-date");
     const snapshotMetaInfo = document.getElementById("snapshot-meta-info");
 
+    // Elementos del Gestor de Tarifas de Proveedor (PDF o Excel)
+    const tariffFileInput = document.getElementById("tariff-file-input");
+    const tariffProviderInput = document.getElementById("tariff-provider-input");
+    const tariffNameInput = document.getElementById("tariff-name-input");
+    const btnUploadTariff = document.getElementById("btn-upload-tariff");
+    const tariffsListContainer = document.getElementById("tariffs-list-container");
+
     const selectDeltaOld = document.getElementById("select-delta-old");
     const selectDeltaNew = document.getElementById("select-delta-new");
     const btnRunSalesDelta = document.getElementById("btn-run-sales-delta");
@@ -3210,9 +3217,188 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function initAuditTab() {
+        await loadSavedTariffs();
         await loadAuditSnapshots();
-        await loadAuditProviders();
         await loadAuditBrands();
+    }
+
+    // Cargar tarifas registradas en data/tariffs/ y actualizar tanto la lista visual como el selector de cruce
+    async function loadSavedTariffs(selectedTariffId = null) {
+        if (!tariffsListContainer && !selectAuditProvider) return;
+        try {
+            const res = await fetch("/api/tariffs/list");
+            const tariffs = await res.json();
+
+            // 1. Renderizar lista en la tarjeta de Tarifas
+            if (tariffsListContainer) {
+                tariffsListContainer.innerHTML = "";
+                if (!tariffs || tariffs.length === 0) {
+                    tariffsListContainer.innerHTML = `
+                        <div style="font-size: 11px; color: var(--text-muted); padding: 12px; text-align: center;">
+                            No hay tarifas registradas todavía.<br>Sube una arriba en PDF o Excel (.xlsx, .xls, .csv).
+                        </div>`;
+                } else {
+                    tariffs.forEach(t => {
+                        const row = document.createElement("div");
+                        row.style.display = "flex";
+                        row.style.justifyContent = "space-between";
+                        row.style.alignItems = "center";
+                        row.style.padding = "6px 8px";
+                        row.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+                        row.style.gap = "8px";
+
+                        const isPdf = (t.file_type || '').toLowerCase() === 'pdf';
+                        const badgeColor = isPdf ? '#ef4444' : '#10b981';
+                        const badgeBg = isPdf ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+
+                        row.innerHTML = `
+                            <div style="display: flex; align-items: center; gap: 6px; overflow: hidden;">
+                                <span style="font-size: 9px; font-weight: 700; background: ${badgeBg}; color: ${badgeColor}; padding: 2px 5px; border-radius: 4px; text-transform: uppercase;">
+                                    ${escapeHtml(t.file_type || 'DOC')}
+                                </span>
+                                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    <strong style="font-size: 12px; color: var(--text-main);">${escapeHtml(t.provider_name)}</strong>
+                                    <span style="font-size: 11px; color: var(--text-muted);"> · ${escapeHtml(t.tariff_name)}</span>
+                                    <span style="font-size: 10px; color: var(--text-muted); display: block;">${t.total_items} refs • ${t.upload_date}</span>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 4px; align-items: center;">
+                                <button class="btn btn-secondary btn-sm btn-select-tariff" data-id="${escapeHtml(t.id)}" style="font-size: 10px; padding: 2px 6px;" title="Seleccionar para el cruce de auditoría">
+                                    Usar
+                                </button>
+                                <button class="btn btn-secondary btn-sm btn-delete-tariff" data-id="${escapeHtml(t.id)}" style="font-size: 10px; padding: 2px 6px; color: #ef4444;" title="Eliminar tarifa">
+                                    🗑️
+                                </button>
+                            </div>
+                        `;
+                        tariffsListContainer.appendChild(row);
+                    });
+
+                    // Event listeners para 'Usar' y 'Eliminar'
+                    tariffsListContainer.querySelectorAll(".btn-select-tariff").forEach(btn => {
+                        btn.addEventListener("click", (e) => {
+                            const tid = e.currentTarget.dataset.id;
+                            if (selectAuditProvider) {
+                                selectAuditProvider.value = tid;
+                                selectAuditProvider.focus();
+                                selectAuditProvider.style.outline = "2px solid #6c5ce7";
+                                setTimeout(() => { selectAuditProvider.style.outline = ""; }, 1200);
+                            }
+                        });
+                    });
+
+                    tariffsListContainer.querySelectorAll(".btn-delete-tariff").forEach(btn => {
+                        btn.addEventListener("click", async (e) => {
+                            const tid = e.currentTarget.dataset.id;
+                            if (confirm("¿Seguro que deseas eliminar esta tarifa guardada?")) {
+                                try {
+                                    const delRes = await fetch(`/api/tariffs/${encodeURIComponent(tid)}`, { method: "DELETE" });
+                                    if (delRes.ok) {
+                                        await loadSavedTariffs();
+                                    } else {
+                                        alert("Error eliminando tarifa.");
+                                    }
+                                } catch (err) {
+                                    alert(`Error al eliminar: ${err.message}`);
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+
+            // 2. Poblar el selector de cruce selectAuditProvider
+            if (selectAuditProvider) {
+                const prevVal = selectedTariffId || selectAuditProvider.value;
+                selectAuditProvider.innerHTML = "";
+
+                if (tariffs && tariffs.length > 0) {
+                    const grpTariffs = document.createElement("optgroup");
+                    grpTariffs.label = "Tarifas de Proveedor Registradas (data/tariffs/)";
+                    tariffs.forEach(t => {
+                        const opt = document.createElement("option");
+                        opt.value = t.id;
+                        opt.textContent = `📦 [${(t.file_type || '').toUpperCase()}] ${t.provider_name} - ${t.tariff_name} (${t.total_items} refs)`;
+                        grpTariffs.appendChild(opt);
+                    });
+                    selectAuditProvider.appendChild(grpTariffs);
+                }
+
+                // Cargar también archivos de extractions como fallback histórico
+                try {
+                    const extRes = await fetch("/api/extractions/files");
+                    const extFiles = await extRes.json();
+                    if (extFiles && extFiles.length > 0) {
+                        const grpExtractions = document.createElement("optgroup");
+                        grpExtractions.label = "Histórico de data/extractions/";
+                        extFiles.forEach(f => {
+                            const opt = document.createElement("option");
+                            opt.value = f.filename;
+                            opt.textContent = `📄 ${f.filename} (${f.last_modified})`;
+                            grpExtractions.appendChild(opt);
+                        });
+                        selectAuditProvider.appendChild(grpExtractions);
+                    }
+                } catch (e_ext) {
+                    // ignorar fallback si falla
+                }
+
+                if (!selectAuditProvider.children.length) {
+                    selectAuditProvider.innerHTML = '<option value="">-- No hay tarifas disponibles --</option>';
+                } else if (prevVal) {
+                    selectAuditProvider.value = prevVal;
+                }
+            }
+        } catch (err) {
+            console.error("Error cargando tarifas registradas:", err);
+        }
+    }
+
+    // Subida de Tarifa de Proveedor (PDF o Excel)
+    if (btnUploadTariff && tariffFileInput) {
+        btnUploadTariff.addEventListener("click", async () => {
+            if (!tariffFileInput.files || tariffFileInput.files.length === 0) {
+                alert("Por favor selecciona un archivo de tarifa (PDF o Excel .xlsx, .xls, .csv).");
+                return;
+            }
+            const provName = (tariffProviderInput?.value || "").trim();
+            if (!provName) {
+                alert("Por favor indica el Nombre del Proveedor (ej. Balay, Bosch, Teka...).");
+                tariffProviderInput?.focus();
+                return;
+            }
+            const tName = (tariffNameInput?.value || "").trim() || `Tarifa ${new Date().toLocaleDateString('es-ES')}`;
+
+            const file = tariffFileInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("provider_name", provName);
+            formData.append("tariff_name", tName);
+
+            btnUploadTariff.disabled = true;
+            btnUploadTariff.textContent = "⏳ Procesando...";
+
+            try {
+                const res = await fetch("/api/tariffs/upload", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(`✅ Tarifa de '${data.tariff.provider_name}' procesada con éxito!\nReferencias extraídas: ${data.tariff.total_items}\nFormato: ${data.tariff.file_type.toUpperCase()}`);
+                    tariffFileInput.value = "";
+                    if (tariffNameInput) tariffNameInput.value = "";
+                    await loadSavedTariffs(data.tariff.id);
+                } else {
+                    alert(`❌ Error al procesar tarifa: ${data.detail || 'Formato no reconocido'}`);
+                }
+            } catch (err) {
+                alert(`❌ Error de conexión al subir tarifa: ${err.message}`);
+            } finally {
+                btnUploadTariff.disabled = false;
+                btnUploadTariff.textContent = "⬆ Guardar Tarifa";
+            }
+        });
     }
 
     async function loadAuditSnapshots() {
@@ -3278,27 +3464,6 @@ document.addEventListener("DOMContentLoaded", () => {
             updateSnapshotMetaInfo();
             loadAuditBrands();
         });
-    }
-
-    async function loadAuditProviders() {
-        if (!selectAuditProvider) return;
-        try {
-            const res = await fetch("/api/extractions/files");
-            const files = await res.json();
-            selectAuditProvider.innerHTML = "";
-            if (!files || files.length === 0) {
-                selectAuditProvider.innerHTML = '<option value="">No hay tarifas disponibles</option>';
-                return;
-            }
-            files.forEach(f => {
-                const opt = document.createElement("option");
-                opt.value = f.filename;
-                opt.textContent = `${f.filename} (${f.last_modified})`;
-                selectAuditProvider.appendChild(opt);
-            });
-        } catch (err) {
-            console.error("Error cargando tarifas para auditoría:", err);
-        }
     }
 
     async function loadAuditBrands() {
@@ -3715,5 +3880,6 @@ document.addEventListener("DOMContentLoaded", () => {
     initSSEConnection();
     loadStatus();
     loadGeminiConfig();
+    initAuditTab();
 });
 

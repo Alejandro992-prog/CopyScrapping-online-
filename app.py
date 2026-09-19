@@ -5242,6 +5242,104 @@ async def upload_stock_audit_pdf(
         add_log("error", f"Error procesando auditoría de inventario: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ===========================================================================
+# ENDPOINTS: GESTOR DE TARIFAS DE PROVEEDORES (PDF o Excel)
+# ===========================================================================
+
+@app.post("/api/tariffs/upload")
+async def upload_tariff_endpoint(
+    file: UploadFile = File(...),
+    provider_name: str = Form(...),
+    tariff_name: str = Form(...)
+):
+    """Procesa y almacena una tarifa de proveedor en PDF o Excel (.xlsx, .xls, .csv)."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+
+    filename = file.filename or "tarifa"
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in [".pdf", ".xlsx", ".xls", ".csv"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato no compatible ({ext}). Por favor sube un archivo PDF (.pdf) o Excel (.xlsx, .xls, .csv)."
+        )
+
+    tariffs_dir = stock_analyzer.get_tariffs_dir()
+    temp_path = os.path.join(tariffs_dir, f"temp_{int(time.time())}_{secrets.token_hex(4)}{ext}")
+
+    try:
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        items = []
+        if ext == ".pdf":
+            current_config = load_config()
+            api_key = (current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+            items = stock_analyzer.parse_pdf_tariff(temp_path, default_provider=provider_name, api_key=api_key)
+        else:
+            items = stock_analyzer.parse_excel_tariff(temp_path, default_provider=provider_name)
+
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        if not items:
+            raise HTTPException(
+                status_code=400,
+                detail="No se pudieron extraer referencias con modelo y precio del archivo subido. Verifica el contenido o columnas del archivo."
+            )
+
+        tariff_record = stock_analyzer.save_tariff(
+            provider_name=provider_name,
+            tariff_name=tariff_name,
+            file_type=ext.replace(".", ""),
+            original_filename=filename,
+            items=items
+        )
+
+        add_log("success", f"Tarifa de '{provider_name}' ('{tariff_name}') registrada con {len(items)} referencias.")
+        return {
+            "status": "success",
+            "tariff": tariff_record
+        }
+    except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        add_log("error", f"Error procesando tarifa de proveedor: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tariffs/list")
+async def list_tariffs_endpoint():
+    """Devuelve el listado de todas las tarifas de proveedores registradas."""
+    if stock_analyzer is None:
+        return []
+    return stock_analyzer.get_tariffs_list()
+
+@app.get("/api/tariffs/{tariff_id}")
+async def get_tariff_detail_endpoint(tariff_id: str):
+    """Devuelve la información y lista de artículos de una tarifa específica."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+    tariff = stock_analyzer.load_tariff(tariff_id)
+    if not tariff:
+        raise HTTPException(status_code=404, detail="Tarifa no encontrada.")
+    return tariff
+
+@app.delete("/api/tariffs/{tariff_id}")
+async def delete_tariff_endpoint(tariff_id: str):
+    """Elimina una tarifa de proveedor registrada."""
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+    success = stock_analyzer.delete_tariff(tariff_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="No se pudo eliminar la tarifa especificada.")
+    add_log("info", f"Tarifa {tariff_id} eliminada.")
+    return {"status": "success", "message": "Tarifa eliminada con éxito."}
+
 @app.get("/api/stock/history")
 async def get_stock_history():
     """Devuelve la lista de snapshots de stock guardados ordenados por fecha."""

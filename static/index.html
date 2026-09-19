@@ -625,88 +625,145 @@
                     </div>
                 </div>
 
-                <!-- Controls Layout: 2 Columns -->
-                <div class="grid-2col mb-20">
-                    <!-- Column Left: Carga y Memoria de Inventarios -->
-                    <div class="card">
-                        <h3 class="card-title" style="font-size: 16px; margin-bottom: 8px;">1. Inventario de Almacén (PDF)</h3>
-                        <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">Sube el listado de existencias de tu ERP. Detectará la fecha del documento o subida.</p>
-                        
-                        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px;">
-                            <input type="file" id="audit-file-input" accept=".pdf" class="form-input" style="padding: 7px 10px; font-size: 12px; flex: 1;">
-                            <input type="date" id="audit-manual-date" class="form-input" style="width: 140px; font-size: 12px;" title="Fecha opcional (si el PDF no la incluye)">
-                            <button id="btn-upload-audit-pdf" class="btn btn-primary btn-sm" style="white-space: nowrap;">
-                                ⬆ Subir PDF
-                            </button>
+                <!-- Controls Layout: 2 Columns for Tariffs and Warehouse Stock -->
+                <div class="grid-2col mb-20" style="gap: 20px;">
+                    <!-- Column Left: MÓDULO 1. TARIFAS DE PROVEEDOR (PDF o Excel) -->
+                    <div class="card" style="display: flex; flex-direction: column;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                            <div>
+                                <h3 class="card-title" style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
+                                    <span>📦</span> 1. Tarifas de Proveedor (PDF o Excel)
+                                </h3>
+                                <p class="card-subtitle" style="font-size: 12px; margin: 4px 0 0 0;">
+                                    Admite catálogos PDF o tarifas Excel (.xlsx, .xls, .csv).
+                                </p>
+                            </div>
                         </div>
 
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <label for="select-audit-snapshot" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                🕒 Snapshot Activo de Inventario:
+                        <!-- Subida de Tarifa -->
+                        <div style="background: rgba(15, 23, 42, 0.4); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                                <div>
+                                    <label for="tariff-provider-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Proveedor:</label>
+                                    <input type="text" id="tariff-provider-input" placeholder="Ej: Balay, Bosch..." class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                </div>
+                                <div>
+                                    <label for="tariff-name-input" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">Versión / Nombre:</label>
+                                    <input type="text" id="tariff-name-input" placeholder="Ej: Septiembre 2026" class="form-input" style="padding: 5px 8px; font-size: 12px;">
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="file" id="tariff-file-input" accept=".pdf,.xlsx,.xls,.csv" class="form-input" style="padding: 5px 8px; font-size: 12px; flex: 1;">
+                                <button id="btn-upload-tariff" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
+                                    ⬆ Guardar Tarifa
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Lista de Tarifas Guardadas -->
+                        <div style="flex: 1; display: flex; flex-direction: column;">
+                            <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                📑 Tarifas Registradas en Sistema:
                             </label>
-                            <select id="select-audit-snapshot" class="form-select" style="font-size: 13px;">
-                                <option value="">Cargando historial de snapshots...</option>
-                            </select>
-                            <div id="snapshot-meta-info" style="font-size: 11px; color: var(--text-muted); margin-top: 5px;">
-                                <!-- Detalle del snapshot seleccionado -->
+                            <div id="tariffs-list-container" style="max-height: 140px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.2); padding: 4px;">
+                                <div style="font-size: 11px; color: var(--text-muted); padding: 8px; text-align: center;">Cargando tarifas...</div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Column Right: Filtros de Tarifa y Marca -->
-                    <div class="card">
-                        <h3 class="card-title" style="font-size: 16px; margin-bottom: 8px;">2. Comparativa contra Tarifa</h3>
-                        <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">Selecciona la tarifa de compra y la marca a auditar.</p>
+                    <!-- Column Right: MÓDULO 2. STOCK DE ALMACÉN (Siempre PDF) -->
+                    <div class="card" style="display: flex; flex-direction: column;">
+                        <h3 class="card-title" style="font-size: 16px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                            <span>🏢</span> 2. Stock de Almacén (Siempre PDF)
+                        </h3>
+                        <p class="card-subtitle" style="font-size: 12px; margin-bottom: 12px;">
+                            Exportado directo del ERP. Detecta la fecha oficial del inventario automáticamente.
+                        </p>
                         
-                        <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
-                            <div class="form-group" style="margin-bottom: 0;">
-                                <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">Tarifa Proveedor:</label>
-                                <select id="select-audit-provider" class="form-select" style="font-size: 13px;">
-                                    <option value="">Cargando tarifas...</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="margin-bottom: 0;">
-                                <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">Marca a Auditar:</label>
-                                <select id="select-audit-brand" class="form-select" style="font-size: 13px;">
-                                    <option value="Todas">Todas las Marcas</option>
-                                </select>
+                        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                            <input type="file" id="audit-file-input" accept=".pdf" class="form-input" style="padding: 6px 8px; font-size: 12px; flex: 1;">
+                            <input type="date" id="audit-manual-date" class="form-input" style="width: 130px; font-size: 11px; padding: 6px 6px;" title="Fecha opcional si el PDF no la incluye">
+                            <button id="btn-upload-audit-pdf" class="btn btn-primary btn-sm" style="white-space: nowrap; font-size: 12px;">
+                                ⬆ Subir PDF ERP
+                            </button>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 10px;">
+                            <label for="select-audit-snapshot" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                🕒 Snapshot Activo de Inventario:
+                            </label>
+                            <select id="select-audit-snapshot" class="form-select" style="font-size: 12px; padding: 6px 8px;">
+                                <option value="">Cargando historial de snapshots...</option>
+                            </select>
+                            <div id="snapshot-meta-info" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                                <!-- Detalle del snapshot seleccionado -->
                             </div>
                         </div>
 
-                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <label for="input-audit-threshold" style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">Umbral Stock Bajo:</label>
-                                <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 65px; padding: 4px 8px; text-align: center;">
-                                <span style="font-size: 12px; color: var(--text-muted);">uds</span>
+                        <!-- Comparador de Ventas Delta (T1 vs T2) Integrado -->
+                        <div style="margin-top: auto; background: rgba(30, 41, 59, 0.35); padding: 10px; border-radius: 6px; border: 1px dashed var(--border-color);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">📈 Rotación / Ventas (Delta entre 2 PDFs):</span>
+                                <button id="btn-run-sales-delta" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 8px;">
+                                    🔄 Calcular Ventas
+                                </button>
                             </div>
-                            <button id="btn-run-audit" class="btn btn-primary btn-sm" style="flex: 1; max-width: 180px;">
-                                🔍 Auditar Faltas
-                            </button>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                <div>
+                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">T1 (Anterior):</label>
+                                    <select id="select-delta-old" class="form-select" style="font-size: 11px; padding: 4px 6px; width: 100%;"></select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 10px; color: var(--text-muted); display: block;">T2 (Reciente):</label>
+                                    <select id="select-delta-new" class="form-select" style="font-size: 11px; padding: 4px 6px; width: 100%;"></select>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Comparador de Ventas entre Snapshots (Barra Desplegable) -->
-                <div class="card mb-20" style="background: rgba(30, 41, 59, 0.4); border: 1px dashed var(--border-color);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span style="font-size: 18px;">📈</span>
-                            <div>
-                                <strong style="font-size: 14px; color: var(--text-color);">Memoria y Comparador de Ventas (Delta Temporal)</strong>
-                                <span style="font-size: 12px; color: var(--text-muted); display: block;">Compara dos inventarios para saber exactamente qué se ha vendido y el ritmo diario.</span>
+                <!-- MÓDULO 3: CRUCE DIRECTO Y AUDITORÍA DE FALTAS -->
+                <div class="card mb-20" style="border-top: 3px solid #6c5ce7; background: rgba(21, 28, 44, 0.85);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <h3 class="card-title" style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
+                                <span>⚡</span> 3. Cruce Directo: Tarifa Seleccionada vs Stock Almacén
+                            </h3>
+                            <p class="card-subtitle" style="font-size: 12px; margin: 3px 0 0 0;">
+                                Cruza cualquier catálogo (PDF o Excel) contra el stock para detectar roturas y calcular el coste del pedido.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr auto; gap: 12px; align-items: flex-end;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="select-audit-provider" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                🏷️ Tarifa Proveedor Activa:
+                            </label>
+                            <select id="select-audit-provider" class="form-select" style="font-size: 13px;">
+                                <option value="">Cargando tarifas registradas...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                🔖 Marca a Auditar:
+                            </label>
+                            <select id="select-audit-brand" class="form-select" style="font-size: 13px;">
+                                <option value="Todas">Todas las Marcas</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="input-audit-threshold" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                ⚠️ Umbral Stock Bajo:
+                            </label>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 70px; padding: 6px 8px; text-align: center; font-size: 13px;">
+                                <span style="font-size: 12px; color: var(--text-muted);">uds</span>
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <label style="font-size: 12px; color: var(--text-muted);">T1 (Anterior):</label>
-                                <select id="select-delta-old" class="form-select" style="width: 170px; font-size: 12px; padding: 5px 8px;"></select>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <label style="font-size: 12px; color: var(--text-muted);">T2 (Reciente):</label>
-                                <select id="select-delta-new" class="form-select" style="width: 170px; font-size: 12px; padding: 5px 8px;"></select>
-                            </div>
-                            <button id="btn-run-sales-delta" class="btn btn-secondary btn-sm" style="font-size: 12px;">
-                                🔄 Calcular Ventas
+                        <div>
+                            <button id="btn-run-audit" class="btn btn-primary" style="padding: 8px 18px; font-size: 13px; white-space: nowrap; height: 38px; display: flex; align-items: center; gap: 8px;">
+                                🔍 Auditar Faltas
                             </button>
                         </div>
                     </div>
