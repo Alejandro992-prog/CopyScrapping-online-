@@ -4161,6 +4161,39 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
 
+        const btnSyncAllNow = document.getElementById("btn-sync-all-now");
+        if (btnSyncAllNow) {
+            btnSyncAllNow.addEventListener("click", async () => {
+                showFeedback("info", "Sincronizando todos tus datos con la nube...");
+                btnSyncAllNow.disabled = true;
+                try {
+                    // 1. Sincronizar extracciones locales a Supabase
+                    await fetch("/api/supabase/sync/extractions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    // 2. Sincronizar stock a Supabase
+                    await fetch("/api/supabase/sync/stock", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    // 3. Sincronizar plantillas
+                    await fetch("/api/supabase/sync/providers", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ direction: "push" })
+                    });
+                    showFeedback("success", "¡Todo tu inventario, capturas y plantillas están sincronizados en la nube!");
+                } catch (err) {
+                    showFeedback("error", "Error sincronizando: " + err.message);
+                } finally {
+                    btnSyncAllNow.disabled = false;
+                }
+            });
+        }
+
         if (btnPushExtractions) {
             btnPushExtractions.addEventListener("click", async () => {
                 showFeedback("info", "Subiendo extracciones locales a Supabase...");
@@ -4187,7 +4220,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (btnPullExtractions) {
             btnPullExtractions.addEventListener("click", async () => {
-                showFeedback("info", "Descargando extracciones desde Supabase a local...");
+                showFeedback("info", "Descargando datos desde Supabase a local...");
                 btnPullExtractions.disabled = true;
                 try {
                     const res = await fetch("/api/supabase/sync/extractions", {
@@ -4199,7 +4232,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (res.ok && data.success) {
                         showFeedback("success", data.message);
                     } else {
-                        showFeedback("error", data.detail || data.message || "Error al descargar extracciones.");
+                        showFeedback("error", data.detail || data.message || "Error al descargar datos.");
                     }
                 } catch (err) {
                     showFeedback("error", "Error: " + err.message);

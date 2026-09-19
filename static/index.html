@@ -1101,109 +1101,61 @@
     </div>
 
     <!-- MODAL: CONFIGURACIÓN SUPABASE CLOUD -->
+    <!-- MODAL: CONEXIÓN NUBE SUPABASE (AUTOMÁTICA Y TRANSPARENTE) -->
     <div id="modal-supabase" class="modal-overlay" style="display: none; z-index: 9999;">
-        <div class="modal-content" style="max-width: 580px; max-height: 90vh; overflow-y: auto;">
-            <div class="modal-header" style="border-bottom: 1px solid rgba(62, 207, 142, 0.3);">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(62, 207, 142, 0.25);">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <span style="font-size: 22px;">☁️</span>
-                    <h3 class="modal-title" style="color: #3ecf8e;">Conexión a la Nube (Supabase)</h3>
+                    <h3 class="modal-title" style="color: #3ecf8e;">Base de Datos Cloud (Supabase)</h3>
                 </div>
                 <button id="btn-close-modal-supabase" class="modal-close-btn">&times;</button>
             </div>
-            <div class="modal-body">
-                <!-- Estado de conexión -->
-                <div id="supabase-status-alert" class="supabase-status-box mb-15">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <span style="font-size: 13px; font-weight: 600;">Estado de la Conexión:</span>
-                        <span id="supabase-status-tag" class="badge badge-secondary">Comprobando...</span>
+            <div class="modal-body" style="padding-top: 15px;">
+                <!-- Tarjeta de Estado Activo Permanente -->
+                <div style="background: rgba(62, 207, 142, 0.08); border: 1px solid rgba(62, 207, 142, 0.35); border-radius: 12px; padding: 18px; text-align: center; margin-bottom: 20px;">
+                    <div style="display: inline-flex; align-items: center; gap: 8px; background: rgba(62, 207, 142, 0.18); color: #3ecf8e; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 13px; margin-bottom: 10px;">
+                        <span class="dot supabase-online" style="width: 10px; height: 10px; border-radius: 50%;"></span>
+                        Conectado y Activo
                     </div>
+                    <p style="font-size: 13px; color: #f1f5f9; margin: 0 0 6px 0; font-weight: 600;">
+                        Tus datos se guardan y sincronizan automáticamente en la nube.
+                    </p>
+                    <p style="font-size: 11px; color: var(--text-muted); margin: 0;">
+                        Capturas del portapapeles, existencias de almacén y tarifas se respaldan en tiempo real.
+                    </p>
                 </div>
 
-                <!-- Interruptores -->
-                <div class="control-row mb-10" style="background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px;">
-                    <label for="supabase-enabled-toggle" style="font-size: 13px; font-weight: 600;">Activar conexión con Supabase:</label>
-                    <label class="switch">
-                        <input type="checkbox" id="supabase-enabled-toggle">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-
-                <div class="control-row mb-15" style="background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px;">
-                    <div>
-                        <label for="supabase-autosync-toggle" style="font-size: 13px; font-weight: 600; display: block;">Auto-sincronizar capturas en tiempo real:</label>
-                        <span style="font-size: 11px; color: var(--text-muted);">Sube a Supabase cada producto capturado en segundo plano sin ralentizar el portapapeles.</span>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" id="supabase-autosync-toggle" checked>
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-
-                <!-- Campos de credenciales -->
-                <div class="form-group mb-12">
-                    <label for="supabase-url-input" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block;">
-                        URL del Proyecto Supabase:
-                    </label>
-                    <input type="text" id="supabase-url-input" class="form-input" placeholder="https://xyzcompany.supabase.co" style="width: 100%; font-family: monospace; font-size: 13px;">
-                </div>
-
-                <div class="form-group mb-15">
-                    <label for="supabase-key-input" style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block;">
-                        Clave de API (Anon o Service Role):
-                    </label>
-                    <div style="position: relative; display: flex; align-items: center;">
-                        <input type="password" id="supabase-key-input" class="form-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." style="width: 100%; font-family: monospace; font-size: 13px; padding-right: 40px;">
-                        <button type="button" id="btn-toggle-supabase-key" style="position: absolute; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px;" title="Mostrar/ocultar clave">
-                            👁️
-                        </button>
-                    </div>
-                    <span id="supabase-key-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;"></span>
-                </div>
-
-                <!-- Botones de prueba y guardado -->
-                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                    <button id="btn-test-supabase" class="btn btn-secondary btn-sm" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                        <span>🧪</span> Probar Conexión
+                <!-- Botones de Acción Rápida -->
+                <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
+                    <button id="btn-sync-all-now" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; background: #3ecf8e; color: #0b0f19; border: none;">
+                        <span>🔄</span> Sincronizar Todo Ahora
                     </button>
-                    <button id="btn-save-supabase" class="btn btn-success btn-sm" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; background: #3ecf8e; color: #0b0f19; font-weight: 700;">
-                        <span>💾</span> Guardar Credenciales
-                    </button>
-                </div>
-
-                <div id="supabase-feedback-msg" style="font-size: 12px; padding: 8px 12px; border-radius: 6px; display: none; margin-bottom: 15px;"></div>
-
-                <!-- SECCIÓN: SINCRONIZACIÓN MANUAL -->
-                <div style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 10px;">
-                    <h4 style="font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
-                        <span>🔄</span> Centro de Sincronización Manual
-                    </h4>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                        <button id="btn-sync-push-extractions" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube todos los productos locales (.csv) a Supabase">
-                            ⬆️ <strong>Subir Capturas</strong><br>
-                            <span style="font-size: 10px; color: var(--text-muted);">De archivos locales a la nube</span>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-sync-pull-extractions" class="btn btn-secondary btn-sm" style="flex: 1; font-size: 11px; padding: 8px;" title="Descarga los datos de la nube">
+                            ⬇️ Descargar de la Nube
                         </button>
-                        <button id="btn-sync-pull-extractions" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Descarga productos de Supabase a los CSV locales">
-                            ⬇️ <strong>Descargar Capturas</strong><br>
-                            <span style="font-size: 10px; color: var(--text-muted);">De la nube a archivos locales</span>
-                        </button>
-                        <button id="btn-sync-push-stock" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube el inventario de stock actual a Supabase">
-                            📦 <strong>Subir Stock Almacén</strong><br>
-                            <span style="font-size: 10px; color: var(--text-muted);">Sincronizar inventario en la nube</span>
-                        </button>
-                        <button id="btn-sync-providers" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 8px; text-align: left;" title="Sube y descarga plantillas de proveedores">
-                            📋 <strong>Sincronizar Plantillas</strong><br>
-                            <span style="font-size: 10px; color: var(--text-muted);">Reglas Regex de tiendas</span>
+                        <button id="btn-test-supabase" class="btn btn-secondary btn-sm" style="flex: 1; font-size: 11px; padding: 8px;" title="Comprueba la latencia con la base de datos">
+                            🧪 Probar Conexión
                         </button>
                     </div>
                 </div>
 
-                <!-- Nota informativa esquema SQL -->
-                <div style="margin-top: 15px; background: rgba(62, 207, 142, 0.08); border-left: 3px solid #3ecf8e; padding: 10px 12px; border-radius: 6px; font-size: 11px; color: #a7f3d0; line-height: 1.4;">
-                    💡 <strong>¿Primera vez configurando Supabase?</strong><br>
-                    Ejecuta el archivo <code>supabase_schema.sql</code> en el <em>SQL Editor</em> de Supabase para crear las tablas con índices y claves únicas optimizadas.
-                </div>
+                <div id="supabase-feedback-msg" style="font-size: 12px; padding: 8px 12px; border-radius: 6px; display: none; margin-bottom: 10px;"></div>
+
+                <!-- Desplegable Técnico Oculto (por compatibilidad o consulta futura) -->
+                <details style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    <summary style="cursor: pointer; user-select: none;">⚙️ Estado del servidor (Avanzado)</summary>
+                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                        <input type="text" id="supabase-url-input" class="form-input" style="font-family: monospace; font-size: 11px; padding: 4px 8px;" readonly title="URL asignada">
+                        <span id="supabase-key-hint" style="font-size: 10px; color: var(--text-muted);"></span>
+                        <input type="checkbox" id="supabase-enabled-toggle" checked style="display: none;">
+                        <input type="checkbox" id="supabase-autosync-toggle" checked style="display: none;">
+                        <input type="hidden" id="supabase-key-input">
+                    </div>
+                </details>
             </div>
-            <div class="modal-footer" style="display: flex; justify-content: flex-end; margin-top: 15px;">
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; margin-top: 10px;">
                 <button id="btn-close-supabase-footer" class="btn btn-secondary btn-sm">Cerrar</button>
             </div>
         </div>
