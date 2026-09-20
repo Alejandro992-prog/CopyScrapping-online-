@@ -775,7 +775,7 @@
                         </div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 2fr 1.2fr 1fr auto; gap: 12px; align-items: flex-end;">
+                    <div style="display: grid; grid-template-columns: 1.5fr 1fr 1.3fr 90px auto; gap: 12px; align-items: flex-end;">
                         <div class="form-group" style="margin-bottom: 0;">
                             <label style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
                                 📁 Tarifa Activa a consultar:
@@ -786,18 +786,27 @@
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="select-audit-brand" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                🏷️ Marca que deseas consultar:
+                                🏷️ Marca:
                             </label>
                             <select id="select-audit-brand" class="form-select" style="font-size: 13px;">
                                 <option value="Todas">Todas las Marcas</option>
                             </select>
                         </div>
                         <div class="form-group" style="margin-bottom: 0;">
+                            <label for="input-audit-appliance" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
+                                🔌 Aparato / Tipo:
+                            </label>
+                            <div style="position: relative;">
+                                <input type="text" id="input-audit-appliance" placeholder="Ej: microondas, lavadora..." class="form-input" style="font-size: 13px; padding-right: 24px;" title="Escribe cualquier tipo de aparato (ej: microondas, lavadora, frigo, horno...)">
+                                <span id="btn-clear-audit-appliance" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-muted); font-size: 12px; display: none;" title="Limpiar filtro">✕</span>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
                             <label for="input-audit-threshold" style="font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">
-                                ⚠️ Avisar si quedan menos de:
+                                ⚠️ Umbral:
                             </label>
                             <div style="display: flex; align-items: center; gap: 6px;">
-                                <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 70px; padding: 6px 8px; text-align: center; font-size: 13px;">
+                                <input type="number" id="input-audit-threshold" value="2" min="1" max="50" class="form-input" style="width: 55px; padding: 6px 4px; text-align: center; font-size: 13px;">
                                 <span style="font-size: 12px; color: var(--text-muted);">uds</span>
                             </div>
                         </div>

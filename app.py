@@ -4357,18 +4357,78 @@ def extract_frigo_medida(dim_text: str, is_americano: bool = False) -> str:
     return f"{alto_str}x{ancho_str}"
 
 
+def arbitrate_ambiguous_stock_lines_with_gemini(
+    ambiguous_lines: List[Dict[str, Any]], 
+    api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Árbitro híbrido: utiliza Gemini solo para resolver un lote pequeño de líneas dudosas del ERP.
+    Gasto de tokens ultra bajo (apenas 150-300 tokens para resolver 5-10 líneas).
+    """
+    if not ambiguous_lines or not api_key:
+        return []
+    
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        
+        prompt_lines = []
+        for i, item in enumerate(ambiguous_lines[:25]):
+            raw = item.get("raw_line", "").strip()
+            prompt_lines.append(f"Ítem {i+1}: {raw}")
+            
+        lines_text = "\n".join(prompt_lines)
+        prompt = f"""Actúa como un extractor especializado de inventario de ERP de electrodomésticos.
+A continuación tienes líneas de texto de un PDF de almacén donde las columnas de stock y coste están desalineadas o dudosas.
+Para cada ítem, extrae con total precisión:
+- item_index: número del ítem (1, 2, ...)
+- model: modelo o código principal del aparato (ej: MWF230, 3TS998B)
+- stock: unidades reales de existencias en almacén (entero >= 0, ej: 32)
+- cost: precio de coste unitario en euros (flotante, ej: 74.17)
+
+LÍNEAS A RESOLVER:
+{lines_text}
+
+Devuelve ÚNICAMENTE un array JSON válido sin explicaciones adicionales:
+[
+  {{"item_index": 1, "model": "MWF230", "stock": 32, "cost": 74.17}}
+]"""
+        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+        for m in candidate_models:
+            try:
+                resp = client.models.generate_content(model=m, contents=prompt)
+                if resp and resp.text:
+                    clean_txt = re.sub(r'```json\s*', '', resp.text)
+                    clean_txt = re.sub(r'```', '', clean_txt).strip()
+                    parsed = json.loads(clean_txt)
+                    if isinstance(parsed, list):
+                        return parsed
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"Gemini árbitro no disponible: {e}")
+    return []
+
+
 def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     if _pypdf_module is None:
         add_log("error", "pypdf no está instalado. No se puede parsear el PDF.")
         return []
     pypdf = _pypdf_module
     products = []
+    ambiguous_candidates = []
     
     def clean_numeric_token(token: str) -> Optional[float]:
-        # Verificar que solo contiene dígitos, puntos, comas y opcionalmente signo
-        if not re.match(r'^\d[\d\.,]*$', token):
+        if not token:
             return None
-        s = token
+        # Limpiar cualquier símbolo de moneda, espacios no separables, asteriscos, etc.
+        s = re.sub(r'[\u20ac€EUR\$\s\*\xa0]', '', str(token), flags=re.IGNORECASE).strip()
+        if not s or not re.search(r'\d', s):
+            return None
+        # Quitar signos o paréntesis envolventes
+        s = s.strip('()[]-+~#')
+        if not re.match(r'^\d[\d\.,]*$', s):
+            return None
         if '.' in s and ',' in s:
             if s.find('.') < s.find(','): # Formato europeo: 11.908,59
                 s = s.replace('.', '').replace(',', '.')
@@ -4384,8 +4444,9 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 s = s.replace('.', '')
             else:
                 parts = s.split('.')
-                if len(parts) == 2 and len(parts[1]) == 3:
-                    s = s.replace('.', '')
+                # Si tiene 3 dígitos tras punto y la parte entera es pequeña (ej: 1.500 como mil quinientos)
+                if len(parts) == 2 and len(parts[1]) == 3 and len(parts[0]) <= 3 and int(parts[0]) >= 1:
+                    pass
         try:
             return float(s)
         except ValueError:
@@ -4411,9 +4472,9 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     continue
                     
                 # --- NUEVA LÓGICA PARA FORMATO TABULAR CON EURO (€) ---
-                if '\u20ac' in line_str or '€' in line_str:
-                    # Dividir la línea ignorando los caracteres de euro
-                    clean_line = line_str.replace('\u20ac', '').replace('€', '')
+                if '\u20ac' in line_str or '€' in line_str or 'EUR' in line_str:
+                    # Limpiar caracteres de moneda y espacios duros
+                    clean_line = re.sub(r'(\u20ac|€|\bEUR\b|\$|\xa0)', ' ', line_str, flags=re.IGNORECASE)
                     tokens = clean_line.split()
                     if len(tokens) >= 2:
                         # 1. Identificar EAN/Código (token con >= 8 dígitos escaneando de derecha a izquierda)
@@ -4449,50 +4510,82 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                             remaining_tokens.pop(ean_idx)
                             
                         if len(remaining_tokens) >= 1:
-                            # 2. Identificar Coste y Stock
+                            # 2. Identificar Coste y Stock con validación matemática
                             cost_val = None
                             stock_val = 1
                             desc_end_idx = len(remaining_tokens)
+                            is_ambiguous_line = False
                             
-                            last_token = remaining_tokens[-1]
+                            last_token = remaining_tokens[-1] if remaining_tokens else ""
                             last_num = clean_numeric_token(last_token)
                             
+                            prev_token = remaining_tokens[-2] if len(remaining_tokens) >= 2 else None
+                            prev_num = clean_numeric_token(prev_token) if prev_token else None
+                            
+                            third_token = remaining_tokens[-3] if len(remaining_tokens) >= 3 else None
+                            third_num = clean_numeric_token(third_token) if third_token else None
+                            
                             if last_num is not None:
-                                if len(remaining_tokens) >= 2:
-                                    prev_token = remaining_tokens[-2]
-                                    prev_num = clean_numeric_token(prev_token)
+                                if prev_num is not None and prev_num > 0:
+                                    # Dos importes presentes: Total y Coste Unitario
+                                    val_total = max(last_num, prev_num) if last_num != prev_num else last_num
+                                    val_unit = min(last_num, prev_num) if last_num != prev_num else last_num
                                     
-                                    if prev_num is not None:
-                                        if len(remaining_tokens) >= 3:
-                                            third_token = remaining_tokens[-3]
-                                            third_digits = re.sub(r'\D', '', third_token)
-                                            if third_digits and len(third_digits) < 5:
-                                                stock_val = int(third_digits)
-                                                cost_val = prev_num
+                                    # Opción A: third_num es la cantidad (Stock) y cuadra matemáticamente
+                                    if third_num is not None and 0 < third_num < 10000:
+                                        third_qty = int(round(third_num))
+                                        if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                            stock_val = max(1, third_qty)
+                                            cost_val = val_unit
+                                            desc_end_idx = -3
+                                        elif abs(third_qty * last_num - prev_num) < max(2.5, prev_num * 0.05):
+                                            stock_val = max(1, third_qty)
+                                            cost_val = last_num
+                                            desc_end_idx = -3
+                                            
+                                    # Opción B: Calcular cantidad = Total / Unitario (ej. MWF230: 2373.58 / 74.17 = 32 uds)
+                                    if cost_val is None:
+                                        calc_qty = round(val_total / val_unit)
+                                        if calc_qty > 0 and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                            stock_val = max(1, int(calc_qty))
+                                            cost_val = val_unit
+                                            third_digits = re.sub(r'\D', '', third_token or '')
+                                            if third_digits and int(third_digits) == stock_val:
                                                 desc_end_idx = -3
                                             else:
-                                                cost_val = prev_num
                                                 desc_end_idx = -2
                                         else:
-                                            if last_num > prev_num:
-                                                cost_val = last_num
-                                                stock_val = int(prev_num) if prev_num > 0 else 1
-                                            else:
-                                                cost_val = prev_num
-                                                stock_val = int(last_num) if last_num > 0 else 1
+                                            # Fallback: coste es el menor de los dos, stock 1
+                                            cost_val = val_unit
+                                            stock_val = 1
                                             desc_end_idx = -2
-                                    else:
-                                        cost_val = last_num
-                                        stock_digits = re.sub(r'\D', '', prev_token)
-                                        if stock_digits:
-                                            stock_val = int(stock_digits)
+                                            if val_total > 40 and val_total != val_unit:
+                                                is_ambiguous_line = True
+                                else:
+                                    # Solo tenemos last_num
+                                    cost_val = last_num
+                                    if prev_token:
+                                        prev_digits = re.sub(r'\D', '', prev_token)
+                                        # Si prev_token es un entero puro pequeño (sin comas ni decimales)
+                                        if prev_digits and len(prev_digits) <= 4 and ',' not in prev_token and '.' not in prev_token:
+                                            stock_val = max(1, int(prev_digits))
                                             desc_end_idx = -2
                                         else:
                                             stock_val = 1
                                             desc_end_idx = -1
-                                else:
-                                    cost_val = last_num
-                                    desc_end_idx = -1
+                                    else:
+                                        stock_val = 1
+                                        desc_end_idx = -1
+                                        
+                            # Protección de cordura: si por error de columna stock > 500 y coste > 15€, reevaluar
+                            if stock_val > 500 and cost_val is not None and cost_val > 15.0:
+                                price_cand = stock_val / 100.0
+                                if price_cand > 0:
+                                    ratio = cost_val / price_cand
+                                    r_qty = round(ratio)
+                                    if r_qty > 0 and abs(ratio - r_qty) < 0.15:
+                                        stock_val = int(r_qty)
+                                        cost_val = price_cand
                                     
                             if cost_val is not None:
                                 # Extraer descripción (todos los tokens antes del bloque de stock/coste/ean)
@@ -4504,6 +4597,15 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                     if rem_idx >= len(remaining_tokens) + desc_end_idx:
                                         continue
                                     desc_tokens.append(tok)
+                                    
+                                # Limpiar cantidad del final de la descripción si se quedó adherida (ej. DEFROST32 -> DEFROST)
+                                if desc_tokens and stock_val > 1:
+                                    last_dtok = desc_tokens[-1]
+                                    s_str = str(stock_val)
+                                    if last_dtok == s_str:
+                                        desc_tokens.pop()
+                                    elif last_dtok.endswith(s_str) and len(last_dtok) > len(s_str):
+                                        desc_tokens[-1] = last_dtok[:-len(s_str)].strip()
                                     
                                 raw_description = " ".join(desc_tokens).strip()
                                 
@@ -4664,7 +4766,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                         capacidad = medida
                                     
                                 color = extract_product_color(raw_description)
-                                products.append({
+                                p_entry = {
                                     "sku": model,
                                     "ean": ean,
                                     "code": code,
@@ -4675,7 +4777,16 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                     "color": color,
                                     "stock": stock_val,
                                     "cost": cost_val
-                                })
+                                }
+                                products.append(p_entry)
+                                if is_ambiguous_line and len(ambiguous_candidates) < 25:
+                                    ambiguous_candidates.append({
+                                        "product_idx": len(products) - 1,
+                                        "raw_line": line_str,
+                                        "model": model,
+                                        "stock": stock_val,
+                                        "cost": cost_val
+                                    })
                         continue
                         
                 # Saltar líneas de encabezados o metadatos de página
@@ -4987,6 +5098,39 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                 })
     except Exception as e:
         add_log("error", f"Error parseando PDF: {str(e)}")
+
+    # Árbitro híbrido: si hay líneas ambiguas y Gemini está configurado, resolverlas con IA
+    if ambiguous_candidates:
+        current_config = load_config()
+        api_key = (current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+        if api_key:
+            try:
+                resolved = arbitrate_ambiguous_stock_lines_with_gemini(ambiguous_candidates, api_key=api_key)
+                if resolved:
+                    adjusted_count = 0
+                    for r in resolved:
+                        idx = r.get("item_index")
+                        if idx is not None and 1 <= idx <= len(ambiguous_candidates):
+                            cand = ambiguous_candidates[idx - 1]
+                            p_idx = cand.get("product_idx")
+                            r_stock = r.get("stock")
+                            r_cost = r.get("cost")
+                            if p_idx is not None and 0 <= p_idx < len(products):
+                                if r_stock is not None:
+                                    try:
+                                        products[p_idx]["stock"] = max(0, int(r_stock))
+                                    except Exception:
+                                        pass
+                                if r_cost is not None:
+                                    try:
+                                        products[p_idx]["cost"] = float(r_cost)
+                                    except Exception:
+                                        pass
+                                adjusted_count += 1
+                    if adjusted_count > 0:
+                        add_log("info", f"🤖 Árbitro Gemini: resolvió con éxito {adjusted_count} línea(s) dudosa(s) del ERP (consumo: ~{len(ambiguous_candidates)*35} tokens).")
+            except Exception as e_arb:
+                logger.debug(f"Error en árbitro Gemini: {e_arb}")
         
     # Enriquecer productos usando los EANs online de forma asíncrona/concurrente
     valid_products = [p for p in products if p.get("ean") and p["ean"] != "N/D" and len(p["ean"]) >= 8]
@@ -5805,6 +5949,20 @@ async def upload_tariff_endpoint(
             items=items
         )
 
+        # Sincronizar tarifa con Supabase Cloud
+        client = get_supabase_client()
+        if client and client.is_configured:
+            def _sync_sb_tariff():
+                try:
+                    ok, err = client.upsert_tariff(tariff_record)
+                    if ok:
+                        add_log("info", f"☁️ Supabase: Tarifa '{tariff_name}' sincronizada en la nube.")
+                    elif err:
+                        add_log("warning", f"☁️ Supabase (tarifa): {err}")
+                except Exception as ex:
+                    logger.debug(f"Error sincronizando tarifa en Supabase: {ex}")
+            threading.Thread(target=_sync_sb_tariff, daemon=True).start()
+
         add_log("success", f"Tarifa de '{provider_name}' ('{tariff_name}') registrada con {len(items)} referencias.")
         return {
             "status": "success",
@@ -5825,7 +5983,26 @@ async def list_tariffs_endpoint():
     """Devuelve el listado de todas las tarifas de proveedores registradas."""
     if stock_analyzer is None:
         return []
-    return stock_analyzer.get_tariffs_list()
+    tariffs = stock_analyzer.get_tariffs_list()
+    if not tariffs:
+        # Si la carpeta local está vacía (reinicio en contenedor/Render), restaurar desde Supabase
+        client = get_supabase_client()
+        if client and client.is_configured:
+            remote_tariffs, _ = client.fetch_tariffs(include_items=True)
+            if remote_tariffs:
+                tariffs_dir = stock_analyzer.get_tariffs_dir()
+                for t in remote_tariffs:
+                    t_id = t.get("id")
+                    if t_id:
+                        safe_id = str(t_id).replace("tariff_", "").strip()
+                        filepath = os.path.join(tariffs_dir, f"tariff_{safe_id}.json")
+                        try:
+                            with open(filepath, "w", encoding="utf-8") as f:
+                                json.dump(t, f, indent=2, ensure_ascii=False)
+                        except Exception:
+                            pass
+                tariffs = stock_analyzer.get_tariffs_list()
+    return tariffs
 
 @app.get("/api/tariffs/{tariff_id}")
 async def get_tariff_detail_endpoint(tariff_id: str):
@@ -5845,6 +6022,17 @@ async def delete_tariff_endpoint(tariff_id: str):
     success = stock_analyzer.delete_tariff(tariff_id)
     if not success:
         raise HTTPException(status_code=404, detail="No se pudo eliminar la tarifa especificada.")
+
+    # Sincronizar borrado en Supabase
+    client = get_supabase_client()
+    if client and client.is_configured:
+        def _del_sb_tariff():
+            try:
+                client.delete_tariff_record(tariff_id)
+            except Exception as ex:
+                logger.debug(f"Error borrando tarifa en Supabase: {ex}")
+        threading.Thread(target=_del_sb_tariff, daemon=True).start()
+
     add_log("info", f"Tarifa {tariff_id} eliminada.")
     return {"status": "success", "message": "Tarifa eliminada con éxito."}
 
@@ -5887,6 +6075,8 @@ async def get_stock_brands(snapshot_id: Optional[str] = None):
 class AuditRequestModel(BaseModel):
     provider_id: str
     brand: Optional[str] = "Todas"
+    category: Optional[str] = None
+    appliance: Optional[str] = None
     snapshot_id: Optional[str] = None
     threshold: int = 2
 
@@ -5916,12 +6106,14 @@ async def audit_shortages_endpoint(req: AuditRequestModel):
     if not tariff_items:
         raise HTTPException(status_code=400, detail=f"No se pudieron cargar artículos de la tarifa '{req.provider_id}'.")
 
-    # 3. Comparar
+    # 3. Comparar con filtro de aparato / categoría
+    category_filter = (req.appliance or req.category or "").strip()
     result = stock_analyzer.compare_stock_vs_tariff(
         stock_items=stock_items,
         tariff_items=tariff_items,
         brand_filter=req.brand,
-        low_stock_threshold=req.threshold
+        low_stock_threshold=req.threshold,
+        category_filter=category_filter
     )
     return result
 
@@ -5952,6 +6144,8 @@ async def analyze_sales_endpoint(req: SalesAnalysisRequestModel):
 class GeminiReportRequestModel(BaseModel):
     provider_id: str
     brand: Optional[str] = "Todas"
+    category: Optional[str] = None
+    appliance: Optional[str] = None
     snapshot_old_id: Optional[str] = None
     snapshot_new_id: Optional[str] = None
     threshold: int = 2
@@ -5980,11 +6174,13 @@ async def gemini_stock_report_endpoint(req: GeminiReportRequestModel):
                 stock_items = json.load(f)
 
     tariff_items = stock_analyzer.load_provider_tariff_items(req.provider_id)
+    category_filter = (req.appliance or req.category or "").strip()
     shortages_result = stock_analyzer.compare_stock_vs_tariff(
         stock_items=stock_items,
         tariff_items=tariff_items,
         brand_filter=req.brand,
-        low_stock_threshold=req.threshold
+        low_stock_threshold=req.threshold,
+        category_filter=category_filter
     )
 
     # 2. Obtener datos de ventas si hay dos snapshots
@@ -6019,6 +6215,8 @@ async def gemini_stock_report_endpoint(req: GeminiReportRequestModel):
 async def export_audit_excel_endpoint(
     provider_id: str,
     brand: Optional[str] = "Todas",
+    category: Optional[str] = None,
+    appliance: Optional[str] = None,
     snapshot_new_id: Optional[str] = None,
     snapshot_old_id: Optional[str] = None,
     threshold: int = 2
@@ -6040,11 +6238,13 @@ async def export_audit_excel_endpoint(
                 stock_items = json.load(f)
 
     tariff_items = stock_analyzer.load_provider_tariff_items(provider_id)
+    category_filter = (appliance or category or "").strip()
     shortages_result = stock_analyzer.compare_stock_vs_tariff(
         stock_items=stock_items,
         tariff_items=tariff_items,
         brand_filter=brand,
-        low_stock_threshold=threshold
+        low_stock_threshold=threshold,
+        category_filter=category_filter
     )
 
     delta_result = None

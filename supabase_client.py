@@ -385,3 +385,86 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Error eliminando proveedor {p_id} en Supabase: {e}")
             return False, str(e)
+
+    def upsert_tariff(self, tariff_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """
+        Guarda o actualiza una tarifa completa en la tabla `tariffs` de Supabase.
+        """
+        if not self.is_configured:
+            return False, "Supabase no está configurado."
+        if not tariff_data or not tariff_data.get("id"):
+            return False, "Datos de tarifa inválidos."
+
+        endpoint = f"{self.url}/rest/v1/tariffs"
+        headers = self._headers(prefer_upsert="resolution=merge-duplicates")
+
+        safe_data = sanitize_for_json({
+            "id": tariff_data.get("id"),
+            "provider_name": tariff_data.get("provider_name") or "Proveedor",
+            "tariff_name": tariff_data.get("tariff_name") or "",
+            "file_type": tariff_data.get("file_type") or "",
+            "original_filename": tariff_data.get("original_filename") or "",
+            "upload_date": tariff_data.get("upload_date") or "",
+            "total_items": int(tariff_data.get("total_items") or len(tariff_data.get("items") or [])),
+            "items": tariff_data.get("items") or [],
+            "created_at": tariff_data.get("created_at") or datetime.now().isoformat()
+        })
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(endpoint, json=safe_data, headers=headers)
+                if resp.status_code in (200, 201, 204):
+                    return True, None
+                if resp.status_code == 404:
+                    return False, "La tabla 'tariffs' no existe aún en Supabase. Ejecuta supabase_schema.sql en tu SQL Editor."
+                return False, f"Supabase error ({resp.status_code}): {resp.text[:150]}"
+        except Exception as e:
+            logger.error(f"Error guardando tarifa en Supabase: {e}")
+            return False, str(e)
+
+    def fetch_tariffs(self, include_items: bool = True) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Descarga las tarifas guardadas en Supabase.
+        """
+        if not self.is_configured:
+            return [], "Supabase no está configurado."
+
+        select_cols = "*" if include_items else "id,provider_name,tariff_name,file_type,original_filename,upload_date,total_items,created_at"
+        endpoint = f"{self.url}/rest/v1/tariffs?select={select_cols}&order=created_at.desc"
+        headers = self._headers()
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.get(endpoint, headers=headers)
+                if resp.status_code == 200:
+                    return resp.json(), None
+                if resp.status_code == 404:
+                    return [], "Tabla 'tariffs' no encontrada en Supabase."
+                return [], f"Error obteniendo tarifas ({resp.status_code}): {resp.text[:150]}"
+        except Exception as e:
+            logger.error(f"Error cargando tarifas de Supabase: {e}")
+            return [], str(e)
+
+    def delete_tariff_record(self, tariff_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Elimina una tarifa de la tabla tariffs en Supabase.
+        """
+        if not self.is_configured:
+            return False, "Supabase no está configurado."
+        t_id = str(tariff_id).replace("tariff_", "").strip()
+        if not t_id:
+            return False, "tariff_id no válido."
+
+        endpoint = f"{self.url}/rest/v1/tariffs?id=eq.{t_id}"
+        headers = self._headers()
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.delete(endpoint, headers=headers)
+                if resp.status_code in (200, 204):
+                    return True, None
+                return False, f"Supabase delete tariff error ({resp.status_code}): {resp.text[:150]}"
+        except Exception as e:
+            logger.error(f"Error eliminando tarifa {t_id} en Supabase: {e}")
+            return False, str(e)
+

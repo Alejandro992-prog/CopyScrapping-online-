@@ -3169,6 +3169,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const selectAuditSnapshot = document.getElementById("select-audit-snapshot");
     const selectAuditProvider = document.getElementById("select-audit-provider");
     const selectAuditBrand = document.getElementById("select-audit-brand");
+    const inputAuditAppliance = document.getElementById("input-audit-appliance");
+    const btnClearAuditAppliance = document.getElementById("btn-clear-audit-appliance");
     const inputAuditThreshold = document.getElementById("input-audit-threshold");
     const btnRunAudit = document.getElementById("btn-run-audit");
     const btnUploadAuditPdf = document.getElementById("btn-upload-audit-pdf");
@@ -3635,6 +3637,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             const brand = selectAuditBrand?.value || "Todas";
+            const appliance = inputAuditAppliance?.value?.trim() || "";
             const snapId = selectAuditSnapshot?.value || "";
             const threshold = parseInt(inputAuditThreshold?.value || "2", 10);
 
@@ -3648,6 +3651,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     body: JSON.stringify({
                         provider_id: providerId,
                         brand: brand,
+                        category: appliance,
+                        appliance: appliance,
                         snapshot_id: snapId,
                         threshold: threshold
                     })
@@ -3669,19 +3674,45 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    function renderAuditResults(data) {
-        const kpis = data.kpis || {};
-        
+    function filterAuditItems(items, query) {
+        if (!query || !items) return items || [];
+        const norm = query.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        if (!norm) return items;
+        return items.filter(it => {
+            const text = ((it.category || "") + " " + (it.product || it.description || "") + " " + (it.model || it.sku || "")).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            return text.includes(norm);
+        });
+    }
+
+    function renderAuditResults(data, filterQuery = null) {
+        if (!data) return;
+        const query = (filterQuery !== null ? filterQuery : (inputAuditAppliance?.value || "")).trim();
+
+        let shortages = data.shortages || [];
+        let low_stock = data.low_stock || [];
+        let in_stock = data.in_stock || [];
+        let surplus = data.surplus || [];
+
+        if (query) {
+            shortages = filterAuditItems(shortages, query);
+            low_stock = filterAuditItems(low_stock, query);
+            in_stock = filterAuditItems(in_stock, query);
+            surplus = filterAuditItems(surplus, query);
+        }
+
+        const totalReorderCost = shortages.reduce((acc, it) => acc + (it.reorder_cost || 0), 0) +
+                                 low_stock.reduce((acc, it) => acc + (it.reorder_cost || 0), 0);
+
         // Actualizar KPIs
         const elShortages = document.getElementById("audit-kpi-shortages");
         const elLow = document.getElementById("audit-kpi-low");
         const elOk = document.getElementById("audit-kpi-ok");
         const elCost = document.getElementById("audit-kpi-cost");
 
-        if (elShortages) elShortages.textContent = kpis.shortages_count || 0;
-        if (elLow) elLow.textContent = kpis.low_stock_count || 0;
-        if (elOk) elOk.textContent = kpis.in_stock_count || 0;
-        if (elCost) elCost.textContent = `${(kpis.total_estimated_reorder_cost || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
+        if (elShortages) elShortages.textContent = shortages.length;
+        if (elLow) elLow.textContent = low_stock.length;
+        if (elOk) elOk.textContent = in_stock.length;
+        if (elCost) elCost.textContent = `${totalReorderCost.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
 
         // Actualizar badges en subtabs
         const bShortages = document.getElementById("count-badge-shortages");
@@ -3689,19 +3720,22 @@ document.addEventListener("DOMContentLoaded", () => {
         const bOk = document.getElementById("count-badge-ok");
         const bSurplus = document.getElementById("count-badge-surplus");
 
-        if (bShortages) bShortages.textContent = kpis.shortages_count || 0;
-        if (bLow) bLow.textContent = kpis.low_stock_count || 0;
-        if (bOk) bOk.textContent = kpis.in_stock_count || 0;
-        if (bSurplus) bSurplus.textContent = kpis.surplus_count || 0;
+        if (bShortages) bShortages.textContent = shortages.length;
+        if (bLow) bLow.textContent = low_stock.length;
+        if (bOk) bOk.textContent = in_stock.length;
+        if (bSurplus) bSurplus.textContent = surplus.length;
 
         // Renderizar tabla de Faltas (Roturas)
         const tbodyShortages = document.getElementById("table-body-shortages");
         if (tbodyShortages) {
             tbodyShortages.innerHTML = "";
-            if (!data.shortages || data.shortages.length === 0) {
-                tbodyShortages.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #10b981; padding: 25px;">🎉 ¡Excelente! No tienes ninguna falta para esta marca y tarifa.</td></tr>';
+            if (shortages.length === 0) {
+                const emptyMsg = query 
+                    ? `No hay roturas de stock que coincidan con "${escapeHtml(query)}".`
+                    : '🎉 ¡Excelente! No tienes ninguna falta para esta marca y tarifa.';
+                tbodyShortages.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #10b981; padding: 25px;">${emptyMsg}</td></tr>`;
             } else {
-                data.shortages.forEach(it => {
+                shortages.forEach(it => {
                     const tr = document.createElement("tr");
                     tr.style.background = "rgba(239, 68, 68, 0.05)";
                     tr.innerHTML = `
@@ -3722,10 +3756,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbodyLow = document.getElementById("table-body-low");
         if (tbodyLow) {
             tbodyLow.innerHTML = "";
-            if (!data.low_stock || data.low_stock.length === 0) {
-                tbodyLow.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">No hay productos en estado de stock bajo.</td></tr>';
+            if (low_stock.length === 0) {
+                const emptyMsg = query 
+                    ? `No hay artículos de stock bajo que coincidan con "${escapeHtml(query)}".`
+                    : 'No hay productos en estado de stock bajo.';
+                tbodyLow.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">${emptyMsg}</td></tr>`;
             } else {
-                data.low_stock.forEach(it => {
+                low_stock.forEach(it => {
                     const tr = document.createElement("tr");
                     tr.style.background = "rgba(245, 158, 11, 0.05)";
                     tr.innerHTML = `
@@ -3746,10 +3783,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbodyOk = document.getElementById("table-body-ok");
         if (tbodyOk) {
             tbodyOk.innerHTML = "";
-            if (!data.in_stock || data.in_stock.length === 0) {
-                tbodyOk.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">Sin referencias en esta categoría.</td></tr>';
+            if (in_stock.length === 0) {
+                const emptyMsg = query 
+                    ? `Sin referencias disponibles que coincidan con "${escapeHtml(query)}".`
+                    : 'Sin referencias en esta categoría.';
+                tbodyOk.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">${emptyMsg}</td></tr>`;
             } else {
-                data.in_stock.forEach(it => {
+                in_stock.forEach(it => {
                     const tr = document.createElement("tr");
                     tr.innerHTML = `
                         <td><strong>${escapeHtml(it.model)}</strong></td>
@@ -3767,10 +3807,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const tbodySurplus = document.getElementById("table-body-surplus");
         if (tbodySurplus) {
             tbodySurplus.innerHTML = "";
-            if (!data.surplus || data.surplus.length === 0) {
+            if (surplus.length === 0) {
                 tbodySurplus.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">Todo el stock de almacén coincide con la tarifa.</td></tr>';
             } else {
-                data.surplus.forEach(it => {
+                surplus.forEach(it => {
                     const tr = document.createElement("tr");
                     tr.innerHTML = `
                         <td><strong>${escapeHtml(it.sku)}</strong></td>
@@ -3783,6 +3823,39 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
         }
+    }
+
+    // Filtrado en vivo por aparato mientras se escribe
+    if (inputAuditAppliance) {
+        inputAuditAppliance.addEventListener("input", () => {
+            const val = inputAuditAppliance.value;
+            if (btnClearAuditAppliance) {
+                btnClearAuditAppliance.style.display = val.length > 0 ? "block" : "none";
+            }
+            if (auditShortagesData) {
+                renderAuditResults(auditShortagesData, val);
+            }
+        });
+
+        inputAuditAppliance.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                btnRunAudit?.click();
+            }
+        });
+    }
+
+    if (btnClearAuditAppliance) {
+        btnClearAuditAppliance.addEventListener("click", () => {
+            if (inputAuditAppliance) {
+                inputAuditAppliance.value = "";
+                inputAuditAppliance.focus();
+            }
+            btnClearAuditAppliance.style.display = "none";
+            if (auditShortagesData) {
+                renderAuditResults(auditShortagesData, "");
+            }
+        });
     }
 
     // Calcular Ventas y Delta entre 2 Snapshots
@@ -3896,6 +3969,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             const brand = selectAuditBrand?.value || "Todas";
+            const appliance = inputAuditAppliance?.value?.trim() || "";
             const threshold = parseInt(inputAuditThreshold?.value || "2", 10);
             const snapOldId = selectDeltaOld?.value || null;
             const snapNewId = selectDeltaNew?.value || selectAuditSnapshot?.value || null;
@@ -3919,6 +3993,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     body: JSON.stringify({
                         provider_id: providerId,
                         brand: brand,
+                        category: appliance,
+                        appliance: appliance,
                         snapshot_old_id: snapOldId,
                         snapshot_new_id: snapNewId,
                         threshold: threshold
@@ -3954,11 +4030,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             const brand = selectAuditBrand?.value || "Todas";
+            const appliance = inputAuditAppliance?.value?.trim() || "";
             const threshold = inputAuditThreshold?.value || "2";
             const snapNew = selectDeltaNew?.value || selectAuditSnapshot?.value || '';
             const snapOld = selectDeltaOld?.value || '';
 
-            const url = `/api/stock/audit/export/xlsx?provider_id=${encodeURIComponent(providerId)}&brand=${encodeURIComponent(brand)}&threshold=${encodeURIComponent(threshold)}&snapshot_new_id=${encodeURIComponent(snapNew)}&snapshot_old_id=${encodeURIComponent(snapOld)}`;
+            let url = `/api/stock/audit/export/xlsx?provider_id=${encodeURIComponent(providerId)}&brand=${encodeURIComponent(brand)}&threshold=${encodeURIComponent(threshold)}&snapshot_new_id=${encodeURIComponent(snapNew)}&snapshot_old_id=${encodeURIComponent(snapOld)}`;
+            if (appliance) {
+                url += `&appliance=${encodeURIComponent(appliance)}`;
+            }
             window.location.href = url;
         });
     }

@@ -548,11 +548,20 @@ def compare_stock_vs_tariff(
     stock_items: List[Dict[str, Any]],
     tariff_items: List[Dict[str, Any]],
     brand_filter: Optional[str] = None,
+    category_filter: Optional[str] = None,
     low_stock_threshold: int = 2
 ) -> Dict[str, Any]:
-    """Cruza la tarifa de un proveedor contra el stock de almacén."""
+    """Cruza la tarifa de un proveedor contra el stock de almacén con filtros opcionales de marca y aparato."""
     norm_brand_filter = brand_filter.strip().upper() if brand_filter and brand_filter.strip().upper() != "TODAS" else None
+    norm_cat_filter = category_filter.strip().lower() if category_filter and category_filter.strip() else None
     
+    def matches_appliance(text: str) -> bool:
+        if not norm_cat_filter:
+            return True
+        t_clean = text.lower().replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+        f_clean = norm_cat_filter.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+        return f_clean in t_clean
+
     # 1. Crear índice de búsqueda rápida en stock
     stock_by_sku: Dict[str, Dict[str, Any]] = {}
     stock_by_ean: Dict[str, Dict[str, Any]] = {}
@@ -562,6 +571,10 @@ def compare_stock_vs_tariff(
         b = str(item.get("brand", "")).strip().upper()
         if norm_brand_filter and norm_brand_filter not in b:
             continue
+        if norm_cat_filter:
+            item_text = f"{item.get('category', '')} {item.get('description', '')} {item.get('sku', '')}"
+            if not matches_appliance(item_text):
+                continue
             
         sku_clean = normalize_sku(item.get("sku") or item.get("model") or "")
         ean_clean = normalize_sku(item.get("ean", ""))
@@ -593,6 +606,12 @@ def compare_stock_vs_tariff(
         if norm_brand_filter:
             text_to_check = f"{model} {product} {brand}".upper()
             if norm_brand_filter not in text_to_check:
+                continue
+
+        # Filtro de aparato/categoría en la tarifa si está especificado
+        if norm_cat_filter:
+            t_text = f"{model} {product} {t_item.get('category', '')}"
+            if not matches_appliance(t_text):
                 continue
 
         norm_model = normalize_sku(model)

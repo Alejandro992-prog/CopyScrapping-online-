@@ -68,7 +68,25 @@ CREATE TABLE IF NOT EXISTS public.providers (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. TRIGGER AUTOMÁTICO PARA ACTUALIZAR updated_at
+-- 5. TABLA: TARIFFS (Catálogos y tarifas de proveedores subidos)
+CREATE TABLE IF NOT EXISTS public.tariffs (
+    id TEXT PRIMARY KEY,
+    provider_name TEXT NOT NULL,
+    tariff_name TEXT,
+    file_type TEXT,
+    original_filename TEXT,
+    upload_date TEXT,
+    total_items INTEGER DEFAULT 0,
+    items JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Índices para tarifas
+CREATE INDEX IF NOT EXISTS idx_tariffs_provider ON public.tariffs(provider_name);
+CREATE INDEX IF NOT EXISTS idx_tariffs_upload_date ON public.tariffs(upload_date DESC);
+
+-- 6. TRIGGER AUTOMÁTICO PARA ACTUALIZAR updated_at
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -95,14 +113,20 @@ CREATE TRIGGER trg_providers_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- 6. POLÍTICAS DE ACCESO (Row Level Security - RLS)
+DROP TRIGGER IF EXISTS trg_tariffs_updated_at ON public.tariffs;
+CREATE TRIGGER trg_tariffs_updated_at
+    BEFORE UPDATE ON public.tariffs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- 7. POLÍTICAS DE ACCESO (Row Level Security - RLS)
 -- Habilitar RLS en todas las tablas
 ALTER TABLE public.extractions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stock_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.providers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tariffs ENABLE ROW LEVEL SECURITY;
 
 -- Permitir lectura y escritura con clave anon o service_role
--- (Puedes restringir estas políticas según tus necesidades de producción)
 DROP POLICY IF EXISTS "Permitir acceso completo a extractions con anon o service_role" ON public.extractions;
 CREATE POLICY "Permitir acceso completo a extractions con anon o service_role"
     ON public.extractions FOR ALL
@@ -123,3 +147,11 @@ CREATE POLICY "Permitir acceso completo a providers con anon o service_role"
     TO anon, authenticated, service_role
     USING (true)
     WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir acceso completo a tariffs con anon o service_role" ON public.tariffs;
+CREATE POLICY "Permitir acceso completo a tariffs con anon o service_role"
+    ON public.tariffs FOR ALL
+    TO anon, authenticated, service_role
+    USING (true)
+    WITH CHECK (true);
+
