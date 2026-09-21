@@ -4536,342 +4536,282 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     
                 # --- NUEVA LÓGICA PARA FORMATO TABULAR CON EURO (€) ---
                 if '\u20ac' in line_str or '€' in line_str or 'EUR' in line_str:
-                    # Limpiar caracteres de moneda y espacios duros
-                    clean_line = re.sub(r'(\u20ac|€|\bEUR\b|\$|\xa0)', ' ', line_str, flags=re.IGNORECASE)
-                    tokens = clean_line.split()
+                    sep = '€' if '€' in line_str else ('\u20ac' if '\u20ac' in line_str else 'EUR')
+                    left_part, _, right_part = line_str.partition(sep)
+                    
+                    # 1. Extraer Código y EAN exclusivamente desde el bloque derecho de €
+                    right_digits = re.sub(r'\D', '', right_part)
+                    code = "N/D"
+                    ean = "N/D"
+                    if len(right_digits) >= 18:
+                        code = right_digits[:5]
+                        ean = right_digits[5:18]
+                    elif len(right_digits) >= 13:
+                        ean = right_digits[-13:]
+                        code = right_digits[:-13] or "N/D"
+                    elif len(right_digits) >= 8:
+                        ean = right_digits
+                    else:
+                        code = right_digits or "N/D"
+                        
+                    # 2. Extraer Descripción, Stock, Precio Unitario y Total exclusivamente desde el bloque izquierdo de €
+                    clean_left = re.sub(r'[\xa0\t]', ' ', left_part)
+                    tokens = clean_left.split()
                     if len(tokens) >= 2:
-                        # 1. Identificar EAN/Código (token con >= 8 dígitos escaneando de derecha a izquierda)
-                        code_ean = ""
-                        ean_idx = -1
-                        for idx in range(len(tokens) - 1, -1, -1):
-                            tok = tokens[idx]
-                            digits_only = re.sub(r'\D', '', tok)
-                            if len(digits_only) >= 8:
-                                code_ean = tok
-                                ean_idx = idx
-                                break
-                                
-                        # Extraer código y ean
-                        if code_ean:
-                            code_ean_digits = re.sub(r'\D', '', code_ean)
-                            if len(code_ean_digits) >= 18:
-                                code = code_ean_digits[:5]
-                                ean = code_ean_digits[5:18]
-                            elif len(code_ean_digits) >= 13:
-                                ean = code_ean_digits[-13:]
-                                code = code_ean_digits[:-13]
-                            else:
-                                ean = "N/D"
-                                code = code_ean_digits
-                        else:
-                            ean = "N/D"
-                            code = "N/D"
+                        cost_val = None
+                        stock_val = 1
+                        desc_end_idx = len(tokens)
+                        
+                        last_num = clean_numeric_token(tokens[-1])
+                        prev_num = clean_numeric_token(tokens[-2])
+                        third_num = clean_numeric_token(tokens[-3]) if len(tokens) >= 3 else None
+                        
+                        if last_num is not None and prev_num is not None and prev_num > 0:
+                            val_total = max(last_num, prev_num)
+                            val_unit = min(last_num, prev_num)
                             
-                        # Crear lista de tokens sin el token EAN/código
-                        remaining_tokens = tokens.copy()
-                        if ean_idx != -1:
-                            remaining_tokens.pop(ean_idx)
-                            
-                        if len(remaining_tokens) >= 1:
-                            # 2. Identificar Coste y Stock con validación matemática
-                            cost_val = None
-                            stock_val = 1
-                            desc_end_idx = len(remaining_tokens)
-                            is_ambiguous_line = False
-                            
-                            last_token = remaining_tokens[-1] if remaining_tokens else ""
-                            last_num = clean_numeric_token(last_token)
-                            
-                            prev_token = remaining_tokens[-2] if len(remaining_tokens) >= 2 else None
-                            prev_num = clean_numeric_token(prev_token) if prev_token else None
-                            
-                            third_token = remaining_tokens[-3] if len(remaining_tokens) >= 3 else None
-                            third_num = clean_numeric_token(third_token) if third_token else None
-                            
-                            if last_num is not None:
-                                if prev_num is not None and prev_num > 0:
-                                    # Dos importes presentes: Total y Coste Unitario
-                                    val_total = max(last_num, prev_num) if last_num != prev_num else last_num
-                                    val_unit = min(last_num, prev_num) if last_num != prev_num else last_num
-                                    
-                                    # Regla prioritaria 1: Si coste unitario y total son iguales (ej: 388,85 y 388,85), el stock es exactamente 1
-                                    if abs(val_total - val_unit) < 1.0 or (val_unit > 0 and abs(val_total / val_unit - 1.0) < 0.02):
-                                        cost_val = val_unit
-                                        stock_val = 1
-                                        if third_num is not None and int(round(third_num)) == 1:
-                                            desc_end_idx = -3
-                                        else:
-                                            desc_end_idx = -2
-                                    # Opción A: third_num es la cantidad (Stock) y cuadra matemáticamente
-                                    elif third_num is not None and 0 < third_num < 10000:
-                                        third_qty = int(round(third_num))
-                                        if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
-                                            stock_val = max(1, third_qty)
-                                            cost_val = val_unit
-                                            desc_end_idx = -3
-                                        elif abs(third_qty * last_num - prev_num) < max(2.5, prev_num * 0.05):
-                                            stock_val = max(1, third_qty)
-                                            cost_val = last_num
-                                            desc_end_idx = -3
-                                            
-                                    # Opción B: Calcular cantidad = Total / Unitario (ej. MWF230: 2373.58 / 74.17 = 32 uds)
-                                    if cost_val is None:
-                                        calc_qty = round(val_total / val_unit)
-                                        if calc_qty > 0 and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
-                                            stock_val = max(1, int(calc_qty))
-                                            cost_val = val_unit
-                                            third_digits = re.sub(r'\D', '', third_token or '')
-                                            if third_digits and int(third_digits) == stock_val:
-                                                desc_end_idx = -3
-                                            else:
-                                                desc_end_idx = -2
-                                        else:
-                                            # Fallback: coste es el menor de los dos, stock 1
-                                            cost_val = val_unit
-                                            stock_val = 1
-                                            desc_end_idx = -2
-                                            if val_total > 40 and val_total != val_unit:
-                                                is_ambiguous_line = True
-                                else:
-                                    # Solo tenemos last_num
-                                    cost_val = last_num
-                                    if prev_token:
-                                        prev_digits = re.sub(r'\D', '', prev_token)
-                                        # Si prev_token es un entero puro pequeño (sin comas ni decimales)
-                                        if prev_digits and len(prev_digits) <= 4 and ',' not in prev_token and '.' not in prev_token:
-                                            stock_val = max(1, int(prev_digits))
-                                            desc_end_idx = -2
-                                        else:
-                                            stock_val = 1
-                                            desc_end_idx = -1
-                                    else:
-                                        stock_val = 1
-                                        desc_end_idx = -1
-                                        
-                            # Protección de cordura: si por error de columna stock coincide con alturas/medidas típicas (175, 185, 186, 200, etc.) y coste > 50€
-                            if cost_val is not None and cost_val > 50.0 and stock_val in [144, 160, 170, 175, 177, 178, 180, 185, 186, 190, 200, 201, 203]:
+                            # Regla 1: Coste unitario == Total valorado (ej: 135.01 y 135.01) -> stock exactamente 1
+                            if abs(val_total - val_unit) < 1.0 or (val_unit > 0 and abs(val_total / val_unit - 1.0) < 0.02):
+                                cost_val = val_unit
                                 stock_val = 1
-
-                            # Protección de cordura: si por error de columna stock > 500 y coste > 15€, reevaluar
-                            if stock_val > 500 and cost_val is not None and cost_val > 15.0:
-                                price_cand = stock_val / 100.0
-                                if price_cand > 0:
-                                    ratio = cost_val / price_cand
-                                    r_qty = round(ratio)
-                                    if r_qty > 0 and abs(ratio - r_qty) < 0.15:
-                                        stock_val = int(r_qty)
-                                        cost_val = price_cand
+                                if third_num is not None and int(round(third_num)) == 1:
+                                    desc_end_idx = -3
+                                else:
+                                    desc_end_idx = -2
+                            # Regla 2: El antepenúltimo token es la cantidad (Stock) y cuadra matemáticamente
+                            elif third_num is not None and 0 < third_num < 10000:
+                                third_qty = int(round(third_num))
+                                if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                    stock_val = max(1, third_qty)
+                                    cost_val = val_unit
+                                    desc_end_idx = -3
+                                elif abs(third_qty * last_num - prev_num) < max(2.5, prev_num * 0.05):
+                                    stock_val = max(1, third_qty)
+                                    cost_val = last_num
+                                    desc_end_idx = -3
                                     
-                            if cost_val is not None:
-                                # Extraer descripción (todos los tokens antes del bloque de stock/coste/ean)
-                                desc_tokens = []
-                                for idx, tok in enumerate(tokens):
-                                    if idx == ean_idx:
-                                        continue
-                                    rem_idx = idx if (ean_idx == -1 or idx < ean_idx) else idx - 1
-                                    if rem_idx >= len(remaining_tokens) + desc_end_idx:
-                                        continue
-                                    desc_tokens.append(tok)
+                            # Regla 3: Si stock viene pegado al texto (ej: DEFROST32, CLASE E10) o calculable Total / Unitario
+                            if cost_val is None and val_unit > 0:
+                                ratio = val_total / val_unit
+                                calc_qty = round(ratio)
+                                if calc_qty > 0 and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                    stock_val = max(1, int(calc_qty))
+                                    cost_val = val_unit
+                                    desc_end_idx = -2
+                                else:
+                                    cost_val = val_unit
+                                    stock_val = 1
+                                    desc_end_idx = -2
+                        elif last_num is not None:
+                            cost_val = last_num
+                            if prev_num and 0 < prev_num < 1000 and ',' not in tokens[-2] and '.' not in tokens[-2]:
+                                stock_val = max(1, int(prev_num))
+                                desc_end_idx = -2
+                            else:
+                                stock_val = 1
+                                desc_end_idx = -1
+                                
+                        if cost_val is not None:
+                            # Extraer tokens de descripción
+                            desc_tokens = tokens[:desc_end_idx] if desc_end_idx < 0 else tokens[:]
+                            
+                            # Limpiar prefijos de almacén pegados (ej: tienda+16)
+                            desc_tokens = [re.sub(r'^(?:tienda\+|alm\+)', '', t) for t in desc_tokens if t]
+                            
+                            # Limpiar stock si quedó adherido al final de una palabra de descripción (ej: DEFROST32 -> DEFROST, E10 -> E)
+                            if desc_tokens and stock_val > 1:
+                                last_dtok = desc_tokens[-1]
+                                s_str = str(stock_val)
+                                if last_dtok.endswith(s_str) and len(last_dtok) > len(s_str) and not last_dtok[-len(s_str)-1].isdigit():
+                                    desc_tokens[-1] = last_dtok[:-len(s_str)].strip()
                                     
-                                # Limpiar cantidad o coste del final de la descripción si se quedó adherida
-                                while desc_tokens:
-                                    last_dtok = desc_tokens[-1]
-                                    s_str = str(stock_val)
-                                    if last_dtok == s_str or last_dtok == "1":
+                            # Limpiar cantidad o coste del final de la descripción si se quedó residual
+                            while desc_tokens:
+                                last_dtok = desc_tokens[-1]
+                                s_str = str(stock_val)
+                                if last_dtok == s_str or last_dtok == "1":
+                                    desc_tokens.pop()
+                                    continue
+                                if cost_val is not None:
+                                    cost_str1 = f"{cost_val:.2f}"
+                                    cost_str2 = cost_str1.replace('.', ',')
+                                    if last_dtok in (cost_str1, cost_str2):
                                         desc_tokens.pop()
                                         continue
-                                    if cost_val is not None:
-                                        cost_str1 = f"{cost_val:.2f}"
-                                        cost_str2 = cost_str1.replace('.', ',')
-                                        if last_dtok in (cost_str1, cost_str2):
-                                            desc_tokens.pop()
-                                            continue
-                                    if stock_val > 1 and last_dtok.endswith(s_str) and len(last_dtok) > len(s_str):
-                                        desc_tokens[-1] = last_dtok[:-len(s_str)].strip()
-                                    elif last_dtok.endswith("1") and len(last_dtok) > 2 and not last_dtok[-2].isdigit():
-                                        desc_tokens[-1] = last_dtok[:-1].strip()
+                                break
+                                
+                            raw_description = " ".join(desc_tokens).strip()
+                            
+                            # Buscar marca
+                            brand = "Genérico"
+                            desc_lower = raw_description.lower()
+                            for brand_key, brand_variants in marcas_dict.items():
+                                if any(re.search(rf'\b{re.escape(v)}\b', desc_lower) for v in brand_variants):
+                                    brand = brand_key
                                     break
                                     
-                                raw_description = " ".join(desc_tokens).strip()
-                                
-                                # Buscar marca
-                                brand = "Genérico"
-                                desc_lower = raw_description.lower()
-                                for brand_key, brand_variants in marcas_dict.items():
-                                    if any(re.search(rf'\b{re.escape(v)}\b', desc_lower) for v in brand_variants):
-                                        brand = brand_key
-                                        break
-                                        
-                                # Buscar categoría — prioridad especial para Lavadoras-Secadoras
-                                categoria = "Otros"
-                                desc_lower_cat = raw_description.lower()
-                                # Detectar lavasecadoras ANTES del bucle general
-                                if ("lavadora" in desc_lower_cat and "secadora" in desc_lower_cat) or any(s in desc_lower_cat for s in ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer"]):
-                                    categoria = "Lavadoras-Secadoras"
-                                else:
-                                    for cat_key, cat_val in categorias_dict.items():
-                                        if cat_key in ("Lavadoras-Secadoras", "Lavavajillas 45cm", "Lavavajillas 60cm"):
-                                            continue
-                                        if not check_category_prefix_rules(cat_key, desc_lower):
-                                            continue
-                                        sinonimos = cat_val.get("sinonimos", [])
-                                        if any(s in desc_lower for s in sinonimos):
-                                            categoria = cat_key
-                                            break
-                                    # Subcategoría Lavavajillas por ancho
-                                    if categoria == "Lavavajillas":
-                                        categoria = classify_lavavajillas(raw_description)
-                                    # Subcategoría Vitrocerámicas por tipo de tecnología
-                                    # También aplica si ya viene con categoría genérica o variantes ortográficas
-                                    if categoria in ("Vitrocerámicas", "Vitrocerámica", "Inducción", "Placa de Gas", "Cristal Gas"):
-                                        categoria = classify_placa(raw_description)
-                                        
-                                # Unidades para capacidad
-                                cat_info = categorias_dict.get(categoria, {})
-                                attrs_info = cat_info.get("atributos_clave", {})
-                                size_units = []
-                                for attr_name, units in attrs_info.items():
-                                    if attr_name in ["capacidad", "servicios", "extraccion", "zonas"]:
-                                        size_units.extend(units)
-                                if not size_units:
-                                    size_units = universal_units
-                                    
-                                # Intentar extraer dimensiones físicas si es categoría de frigoríficos
-                                is_frigo_category = "frigo" in categoria.lower() or "frigorífico" in categoria.lower() or "frigorico" in categoria.lower()
-                                capacidad = "N/D"
-                                if is_frigo_category:
-                                    is_americano = "americano" in categoria.lower()
-                                    capacidad = extract_frigo_medida(raw_description, is_americano)
-                                    
-                                desc_words = []
-                                
-                                i = 0
-                                while i < len(desc_tokens):
-                                    token = desc_tokens[i]
-                                    token_upper = token.upper()
-                                    is_tech_spec = False
-                                    
-                                    # Caso 1: Unidad pegada
-                                    unit_match = re.match(r'^(\d+[\.,]?\d*)([A-Z][A-Z0-9/]*)$', token_upper)
-                                    if unit_match:
-                                        val = unit_match.group(1)
-                                        unit = unit_match.group(2).lower()
-                                        if unit in size_units:
-                                            unit_label = "kg" if unit in ["kg", "kilogramos", "kilos"] else ("L" if unit in ["l", "litros", "lts"] else unit)
-                                            if not (is_frigo_category and capacidad != "N/D"):
-                                                capacidad = f"{val} {unit_label}"
-                                            is_tech_spec = True
-                                        elif any(unit in unit_list for unit_list in attrs_info.values()) or unit in ["w", "v", "hz", "db", "rpm"]:
-                                                is_tech_spec = True
-                                                
-                                    # Caso 2: Unidad separada
-                                    elif i + 1 < len(desc_tokens):
-                                        next_token_lower = desc_tokens[i+1].lower()
-                                        if re.match(r'^\d+[\.,]?\d*$', token):
-                                            if next_token_lower in size_units:
-                                                unit_label = "kg" if next_token_lower in ["kg", "kilogramos", "kilos"] else ("L" if next_token_lower in ["l", "litros", "lts"] else next_token_lower)
-                                                if not (is_frigo_category and capacidad != "N/D"):
-                                                    capacidad = f"{token} {unit_label}"
-                                                is_tech_spec = True
-                                                i += 1
-                                            elif any(next_token_lower in unit_list for unit_list in attrs_info.values()) or next_token_lower in ["w", "v", "hz", "db", "rpm"]:
-                                                is_tech_spec = True
-                                                i += 1
-                                                
-                                    if is_tech_spec:
-                                        i += 1
+                            # Buscar categoría — prioridad especial para Lavadoras-Secadoras
+                            categoria = "Otros"
+                            desc_lower_cat = raw_description.lower()
+                            # Detectar lavasecadoras ANTES del bucle general
+                            if ("lavadora" in desc_lower_cat and "secadora" in desc_lower_cat) or any(s in desc_lower_cat for s in ["lavasecadora", "lavasecadoras", "lavadora secadora", "washer dryer"]):
+                                categoria = "Lavadoras-Secadoras"
+                            else:
+                                for cat_key, cat_val in categorias_dict.items():
+                                    if cat_key in ("Lavadoras-Secadoras", "Lavavajillas 45cm", "Lavavajillas 60cm"):
                                         continue
-                                        
-                                    if token.lower() not in ["de", "con", "el", "la", "en", "para"]:
-                                        desc_words.append(token)
-                                    i += 1
+                                    if not check_category_prefix_rules(cat_key, desc_lower):
+                                        continue
+                                    sinonimos = cat_val.get("sinonimos", [])
+                                    if any(s in desc_lower for s in sinonimos):
+                                        categoria = cat_key
+                                        break
+                                # Subcategoría Lavavajillas por ancho
+                                if categoria == "Lavavajillas":
+                                    categoria = classify_lavavajillas(raw_description)
+                                # Subcategoría Vitrocerámicas por tipo de tecnología
+                                # También aplica si ya viene con categoría genérica o variantes ortográficas
+                                if categoria in ("Vitrocerámicas", "Vitrocerámica", "Inducción", "Placa de Gas", "Cristal Gas"):
+                                    categoria = classify_placa(raw_description)
                                     
-                                # Fallback adaptativo para marca/categoría si son Genéricos/Otros
-                                if brand == "Genérico" and categoria == "Otros":
-                                    clean_words = []
+                            # Unidades para capacidad
+                            cat_info = categorias_dict.get(categoria, {})
+                            attrs_info = cat_info.get("atributos_clave", {})
+                            size_units = []
+                            for attr_name, units in attrs_info.items():
+                                if attr_name in ["capacidad", "servicios", "extraccion", "zonas"]:
+                                    size_units.extend(units)
+                            if not size_units:
+                                size_units = universal_units
+                                
+                            # Intentar extraer dimensiones físicas si es categoría de frigoríficos
+                            is_frigo_category = "frigo" in categoria.lower() or "frigorífico" in categoria.lower() or "frigorico" in categoria.lower()
+                            capacidad = "N/D"
+                            if is_frigo_category:
+                                is_americano = "americano" in categoria.lower()
+                                capacidad = extract_frigo_medida(raw_description, is_americano)
+                                
+                            desc_words = []
+                            
+                            i = 0
+                            while i < len(desc_tokens):
+                                token = desc_tokens[i]
+                                token_upper = token.upper()
+                                is_tech_spec = False
+                                
+                                # Caso 1: Unidad pegada
+                                unit_match = re.match(r'^(\d+[\.,]?\d*)([A-Z][A-Z0-9/]*)$', token_upper)
+                                if unit_match:
+                                    val = unit_match.group(1)
+                                    unit = unit_match.group(2).lower()
+                                    if unit in size_units:
+                                        unit_label = "kg" if unit in ["kg", "kilogramos", "kilos"] else ("L" if unit in ["l", "litros", "lts"] else unit)
+                                        if not (is_frigo_category and capacidad != "N/D"):
+                                            capacidad = f"{val} {unit_label}"
+                                        is_tech_spec = True
+                                    elif any(unit in unit_list for unit_list in attrs_info.values()) or unit in ["w", "v", "hz", "db", "rpm"]:
+                                            is_tech_spec = True
+                                            
+                                # Caso 2: Unidad separada
+                                elif i + 1 < len(desc_tokens):
+                                    next_token_lower = desc_tokens[i+1].lower()
+                                    if re.match(r'^\d+[\.,]?\d*$', token):
+                                        if next_token_lower in size_units:
+                                            unit_label = "kg" if next_token_lower in ["kg", "kilogramos", "kilos"] else ("L" if next_token_lower in ["l", "litros", "lts"] else next_token_lower)
+                                            if not (is_frigo_category and capacidad != "N/D"):
+                                                capacidad = f"{token} {unit_label}"
+                                            is_tech_spec = True
+                                            i += 1
+                                        elif any(next_token_lower in unit_list for unit_list in attrs_info.values()) or next_token_lower in ["w", "v", "hz", "db", "rpm"]:
+                                            is_tech_spec = True
+                                            i += 1
+                                            
+                                if is_tech_spec:
+                                    i += 1
+                                    continue
+                                    
+                                if token.lower() not in ["de", "con", "el", "la", "en", "para"]:
+                                    desc_words.append(token)
+                                i += 1
+                                
+                            # Fallback adaptativo para marca/categoría si son Genéricos/Otros
+                            if brand == "Genérico" and categoria == "Otros":
+                                clean_words = []
+                                for word in desc_words:
+                                    word_clean = word.strip().strip(",.-/()").title()
+                                    if len(word_clean) >= 3:
+                                        clean_words.append(word_clean)
+                                if len(clean_words) >= 2:
+                                    categoria = clean_words[0]
+                                    brand = clean_words[1]
+                                elif len(clean_words) == 1:
+                                    categoria = clean_words[0]
+                                    brand = "Genérico"
+                            else:
+                                if brand == "Genérico":
                                     for word in desc_words:
                                         word_clean = word.strip().strip(",.-/()").title()
                                         if len(word_clean) >= 3:
-                                            clean_words.append(word_clean)
-                                    if len(clean_words) >= 2:
-                                        categoria = clean_words[0]
-                                        brand = clean_words[1]
-                                    elif len(clean_words) == 1:
-                                        categoria = clean_words[0]
-                                        brand = "Genérico"
-                                else:
-                                    if brand == "Genérico":
-                                        for word in desc_words:
-                                            word_clean = word.strip().strip(",.-/()").title()
-                                            if len(word_clean) >= 3:
-                                                is_cat_synonym = False
-                                                for cat_val in categorias_dict.values():
-                                                    if word_clean.lower() in cat_val.get("sinonimos", []):
-                                                        is_cat_synonym = True
-                                                        break
-                                                if not is_cat_synonym:
-                                                    brand = word_clean
+                                            is_cat_synonym = False
+                                            for cat_val in categorias_dict.values():
+                                                if word_clean.lower() in cat_val.get("sinonimos", []):
+                                                    is_cat_synonym = True
                                                     break
-                                                    
-                                    if categoria == "Otros":
-                                        for word in desc_words:
-                                            word_clean = word.strip().strip(",.-/()").title()
-                                            if len(word_clean) >= 3 and word_clean.lower() != brand.lower():
-                                                categoria = word_clean
+                                            if not is_cat_synonym:
+                                                brand = word_clean
                                                 break
                                                 
-                                desc = " ".join(desc_words)
-                                desc = re.sub(r'\s+', ' ', desc).strip()
-                                if not desc:
-                                    desc = f"Electrodoméstico {brand}"
-                                    
-                                # Buscar SKU/Modelo en la descripción limpia o en los tokens de la descripción
-                                model_match = re.search(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{4,15}\b', raw_description.upper())
-                                if model_match:
-                                    model = model_match.group(0)
-                                else:
-                                    model = code
+                                if categoria == "Otros":
+                                    for word in desc_words:
+                                        word_clean = word.strip().strip(",.-/()").title()
+                                        if len(word_clean) >= 3 and word_clean.lower() != brand.lower():
+                                            categoria = word_clean
+                                            break
+                                            
+                            desc = " ".join(desc_words)
+                            desc = re.sub(r'\s+', ' ', desc).strip()
+                            if not desc:
+                                desc = f"Electrodoméstico {brand}"
+                                
+                            # Buscar SKU/Modelo en la descripción limpia o en los tokens de la descripción
+                            model_match = re.search(r'\b(?=[A-Z0-9-]*[0-9])(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{4,15}\b', raw_description.upper())
+                            if model_match:
+                                model = model_match.group(0)
+                            else:
+                                model = code
 
-                                # Asegurar que los frigoríficos se subdividen y clasifican por medida
-                                is_frigo = (
-                                    categoria == "Frigoríficos" or 
-                                    "frigo" in categoria.lower() or 
-                                    "frigorífico" in categoria.lower() or 
-                                    "frigorico" in categoria.lower() or
-                                    any(w in desc.lower() for w in ["congelador", "freezer", "combi"])
-                                )
-                                if is_frigo:
-                                    is_americano = "americano" in categoria.lower() or any(w in desc.lower() for w in ["americano", "americanos", "side by side", "multipuerta"])
-                                    medida = extract_frigo_medida(desc, is_americano)
-                                    if medida == "N/D":
-                                        medida = extract_frigo_medida(raw_description, is_americano)
-                                    
-                                    categoria = classify_refrigerator(desc)
-                                    if medida != "N/D":
-                                        capacidad = medida
-                                    
-                                color = extract_product_color(raw_description)
-                                p_entry = {
-                                    "sku": model,
-                                    "ean": ean,
-                                    "code": code,
-                                    "brand": brand,
-                                    "category": categoria,
-                                    "description": desc,
-                                    "capacity": capacidad,
-                                    "color": color,
-                                    "stock": stock_val,
-                                    "cost": cost_val
-                                }
-                                products.append(p_entry)
-                                if is_ambiguous_line and len(ambiguous_candidates) < 25:
-                                    ambiguous_candidates.append({
-                                        "product_idx": len(products) - 1,
-                                        "raw_line": line_str,
-                                        "model": model,
-                                        "stock": stock_val,
-                                        "cost": cost_val
-                                    })
+                            # Asegurar que los frigoríficos se subdividen y clasifican por medida
+                            is_frigo = (
+                                categoria == "Frigoríficos" or 
+                                "frigo" in categoria.lower() or 
+                                "frigorífico" in categoria.lower() or 
+                                "frigorico" in categoria.lower() or
+                                any(w in desc.lower() for w in ["congelador", "freezer", "combi"])
+                            )
+                            if is_frigo:
+                                is_americano = "americano" in categoria.lower() or any(w in desc.lower() for w in ["americano", "americanos", "side by side", "multipuerta"])
+                                medida = extract_frigo_medida(desc, is_americano)
+                                if medida == "N/D":
+                                    medida = extract_frigo_medida(raw_description, is_americano)
+                                
+                                categoria = classify_refrigerator(desc)
+                                if medida != "N/D":
+                                    capacidad = medida
+                                
+                            color = extract_product_color(raw_description)
+                            p_entry = {
+                                "sku": model,
+                                "ean": ean,
+                                "code": code,
+                                "brand": brand,
+                                "category": categoria,
+                                "description": desc,
+                                "capacity": capacidad,
+                                "color": color,
+                                "stock": stock_val,
+                                "cost": cost_val
+                            }
+                            products.append(p_entry)
                         continue
                         
                 # Saltar líneas de encabezados o metadatos de página
