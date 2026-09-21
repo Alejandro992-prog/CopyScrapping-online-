@@ -4097,31 +4097,174 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    function renderSalesDeltaResults(data) {
-        const kpis = data.kpis || {};
-        const period = data.period || {};
+    // ─────────────────────────────────────────────────────────────────────────
+    // GESTIÓN DE FILTROS Y ORDENACIÓN DE PRODUCTOS VENDIDOS
+    // ─────────────────────────────────────────────────────────────────────────
+    let currentSalesSort = "units_desc"; // 'units_desc', 'units_asc', 'rate_desc', 'rate_asc', 'burn_asc', or `${col}_asc` / `${col}_desc`
+    let currentSalesSearch = "";
+    let currentSalesMinUnits = 0;
 
-        // Actualizar KPI Card de ventas
-        const elSales = document.getElementById("audit-kpi-sales");
-        const elSalesSub = document.getElementById("audit-kpi-sales-sub");
-        const bSales = document.getElementById("count-badge-sales");
+    function updateSalesSummaryCounts(visibleCount, totalCount, visibleUnits) {
+        const elVisCount = document.getElementById("sales-visible-count");
+        const elTotalCount = document.getElementById("sales-total-count");
+        const elVisUnits = document.getElementById("sales-visible-units");
+        if (elVisCount) elVisCount.textContent = (visibleCount || 0).toLocaleString('es-ES');
+        if (elTotalCount) elTotalCount.textContent = (totalCount || 0).toLocaleString('es-ES');
+        if (elVisUnits) elVisUnits.textContent = (visibleUnits || 0).toLocaleString('es-ES');
+    }
 
-        if (elSales) elSales.textContent = `${kpis.total_units_sold || 0} uds`;
-        if (elSalesSub) elSalesSub.textContent = `En ${period.days_elapsed || 1} días (${kpis.average_sales_per_day || 0} uds/día)`;
-        if (bSales) bSales.textContent = kpis.products_with_sales || 0;
+    function updateSalesHeaderVisuals() {
+        // 1. Sincronizar botones de ordenación rápida
+        document.querySelectorAll(".sales-sort-btn").forEach(btn => {
+            const btnSort = btn.dataset.sort;
+            if (btnSort === currentSalesSort) {
+                btn.classList.add("btn-primary", "active");
+                btn.classList.remove("btn-secondary");
+            } else {
+                btn.classList.remove("btn-primary", "active");
+                btn.classList.add("btn-secondary");
+            }
+        });
 
-        // Renderizar tabla de ventas
+        // 2. Sincronizar encabezados de columna ordenables (flechas e indicador activo)
+        document.querySelectorAll(".sortable-sales-th").forEach(th => {
+            const col = th.dataset.sortCol;
+            const icon = th.querySelector(".sort-icon");
+            let isActive = false;
+            let isDesc = false;
+
+            if (currentSalesSort === `${col}_desc` || 
+               (col === "units_sold" && currentSalesSort === "units_desc") || 
+               (col === "sales_rate_per_day" && currentSalesSort === "rate_desc") ||
+               (col === "days_to_stockout" && currentSalesSort === "burn_desc")) {
+                isActive = true;
+                isDesc = true;
+            } else if (currentSalesSort === `${col}_asc` || 
+                      (col === "units_sold" && currentSalesSort === "units_asc") || 
+                      (col === "sales_rate_per_day" && currentSalesSort === "rate_asc") || 
+                      (col === "days_to_stockout" && currentSalesSort === "burn_asc")) {
+                isActive = true;
+                isDesc = false;
+            }
+
+            if (isActive) {
+                th.classList.add("active-sort");
+                if (icon) icon.textContent = isDesc ? "▼" : "▲";
+            } else {
+                th.classList.remove("active-sort");
+                if (icon) icon.textContent = "↕";
+            }
+        });
+    }
+
+    function renderSalesTable() {
         const tbody = document.getElementById("table-body-sales");
         if (!tbody) return;
-        tbody.innerHTML = "";
 
-        const allSold = data.all_sold || [];
-        if (allSold.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 25px;">No se registraron ventas netas en el periodo (${period.date_old} a ${period.date_new}).</td></tr>`;
+        if (!auditDeltaData || !auditDeltaData.all_sold) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Selecciona dos fechas de inventario arriba y pulsa "Calcular Ventas".</td></tr>`;
+            updateSalesSummaryCounts(0, 0, 0);
             return;
         }
 
-        allSold.forEach(it => {
+        const allSold = auditDeltaData.all_sold || [];
+        const period = auditDeltaData.period || {};
+
+        if (allSold.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 25px;">No se registraron ventas netas en el periodo (${period.date_old || ''} a ${period.date_new || ''}).</td></tr>`;
+            updateSalesSummaryCounts(0, 0, 0);
+            return;
+        }
+
+        // 1. Filtrado de artículos
+        let filtered = allSold.filter(it => {
+            // Filtro por unidades mínimas vendidas
+            if (currentSalesMinUnits > 0 && (it.units_sold || 0) < currentSalesMinUnits) {
+                return false;
+            }
+            // Filtro por texto en modelo, marca o descripción
+            if (currentSalesSearch) {
+                const normSearch = currentSalesSearch.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                if (normSearch) {
+                    const haystack = `${it.sku || ""} ${it.brand || ""} ${it.description || ""}`.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                    if (!haystack.includes(normSearch)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        });
+
+        // 2. Ordenación
+        filtered.sort((a, b) => {
+            switch (currentSalesSort) {
+                case "units_desc":
+                    return (b.units_sold || 0) - (a.units_sold || 0);
+                case "units_asc":
+                    return (a.units_sold || 0) - (b.units_sold || 0);
+                case "rate_desc":
+                    return (b.sales_rate_per_day || 0) - (a.sales_rate_per_day || 0);
+                case "rate_asc":
+                    return (a.sales_rate_per_day || 0) - (b.sales_rate_per_day || 0);
+                case "burn_asc": {
+                    // Primero productos agotados (stock_new == 0), luego los que tienen menos días de cobertura
+                    const aVal = (a.stock_new === 0) ? -1 : (a.days_to_stockout || 9999);
+                    const bVal = (b.stock_new === 0) ? -1 : (b.days_to_stockout || 9999);
+                    return aVal - bVal;
+                }
+                case "burn_desc": {
+                    const aVal = (a.stock_new === 0) ? 0 : (a.days_to_stockout || 0);
+                    const bVal = (b.stock_new === 0) ? 0 : (b.days_to_stockout || 0);
+                    return bVal - aVal;
+                }
+                case "days_to_stockout_asc": {
+                    const aVal = (a.stock_new === 0) ? -1 : (a.days_to_stockout || 9999);
+                    const bVal = (b.stock_new === 0) ? -1 : (b.days_to_stockout || 9999);
+                    return aVal - bVal;
+                }
+                case "days_to_stockout_desc": {
+                    const aVal = (a.stock_new === 0) ? 0 : (a.days_to_stockout || 0);
+                    const bVal = (b.stock_new === 0) ? 0 : (b.days_to_stockout || 0);
+                    return bVal - aVal;
+                }
+                case "stock_old_desc":
+                    return (b.stock_old || 0) - (a.stock_old || 0);
+                case "stock_old_asc":
+                    return (a.stock_old || 0) - (b.stock_old || 0);
+                case "stock_new_desc":
+                    return (b.stock_new || 0) - (a.stock_new || 0);
+                case "stock_new_asc":
+                    return (a.stock_new || 0) - (b.stock_new || 0);
+                case "sku_asc":
+                    return (a.sku || "").localeCompare(b.sku || "");
+                case "sku_desc":
+                    return (b.sku || "").localeCompare(a.sku || "");
+                case "brand_asc":
+                    return (a.brand || "").localeCompare(b.brand || "");
+                case "brand_desc":
+                    return (b.brand || "").localeCompare(a.brand || "");
+                case "description_asc":
+                    return (a.description || "").localeCompare(b.description || "");
+                case "description_desc":
+                    return (b.description || "").localeCompare(a.description || "");
+                default:
+                    return (b.units_sold || 0) - (a.units_sold || 0);
+            }
+        });
+
+        // 3. Contadores y cabeceras
+        const visibleUnits = filtered.reduce((acc, it) => acc + (it.units_sold || 0), 0);
+        updateSalesSummaryCounts(filtered.length, allSold.length, visibleUnits);
+        updateSalesHeaderVisuals();
+
+        // 4. Renderizar filas en el DOM
+        tbody.innerHTML = "";
+        if (filtered.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 25px;">No hay productos vendidos que coincidan con los filtros aplicados.</td></tr>`;
+            return;
+        }
+
+        filtered.forEach(it => {
             const tr = document.createElement("tr");
             const isCritical = it.is_critical_burn;
             if (isCritical) {
@@ -4146,6 +4289,99 @@ document.addEventListener("DOMContentLoaded", () => {
             tbody.appendChild(tr);
         });
     }
+
+    function renderSalesDeltaResults(data) {
+        const kpis = data.kpis || {};
+        const period = data.period || {};
+
+        // Actualizar KPI Card de ventas
+        const elSales = document.getElementById("audit-kpi-sales");
+        const elSalesSub = document.getElementById("audit-kpi-sales-sub");
+        const bSales = document.getElementById("count-badge-sales");
+
+        if (elSales) elSales.textContent = `${kpis.total_units_sold || 0} uds`;
+        if (elSalesSub) elSalesSub.textContent = `En ${period.days_elapsed || 1} días (${kpis.average_sales_per_day || 0} uds/día)`;
+        if (bSales) bSales.textContent = kpis.products_with_sales || 0;
+
+        // Renderizar tabla con filtros y ordenación aplicados
+        renderSalesTable();
+    }
+
+    // Inicializar eventos de la barra de filtros y ordenación de Ventas
+    function initSalesFilterEvents() {
+        // Botones de ordenación rápida
+        const sortBtns = document.querySelectorAll(".sales-sort-btn");
+        sortBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                currentSalesSort = btn.dataset.sort || "units_desc";
+                renderSalesTable();
+            });
+        });
+
+        // Selector de mínimo de unidades vendidas
+        const filterMin = document.getElementById("filter-sales-min");
+        if (filterMin) {
+            filterMin.addEventListener("change", () => {
+                currentSalesMinUnits = parseInt(filterMin.value, 10) || 0;
+                renderSalesTable();
+            });
+        }
+
+        // Buscador de texto en ventas
+        const searchInput = document.getElementById("filter-sales-search");
+        const btnClearSearch = document.getElementById("btn-clear-sales-search");
+        if (searchInput) {
+            searchInput.addEventListener("input", () => {
+                currentSalesSearch = searchInput.value;
+                if (btnClearSearch) {
+                    btnClearSearch.style.display = currentSalesSearch.length > 0 ? "block" : "none";
+                }
+                renderSalesTable();
+            });
+        }
+
+        if (btnClearSearch && searchInput) {
+            btnClearSearch.addEventListener("click", () => {
+                searchInput.value = "";
+                currentSalesSearch = "";
+                btnClearSearch.style.display = "none";
+                renderSalesTable();
+                searchInput.focus();
+            });
+        }
+
+        // Clics en los encabezados de columna para ordenar
+        const sortableThs = document.querySelectorAll(".sortable-sales-th");
+        sortableThs.forEach(th => {
+            th.addEventListener("click", () => {
+                const col = th.dataset.sortCol;
+                if (!col) return;
+
+                if (col === "units_sold") {
+                    currentSalesSort = (currentSalesSort === "units_desc") ? "units_asc" : "units_desc";
+                } else if (col === "sales_rate_per_day") {
+                    currentSalesSort = (currentSalesSort === "rate_desc") ? "rate_asc" : "rate_desc";
+                } else if (col === "days_to_stockout") {
+                    currentSalesSort = (currentSalesSort === "burn_asc" || currentSalesSort === "days_to_stockout_asc") ? "days_to_stockout_desc" : "burn_asc";
+                } else if (currentSalesSort === `${col}_desc`) {
+                    currentSalesSort = `${col}_asc`;
+                } else if (currentSalesSort === `${col}_asc`) {
+                    currentSalesSort = `${col}_desc`;
+                } else {
+                    // Por defecto: texto asc, numérico desc
+                    if (["sku", "brand", "description"].includes(col)) {
+                        currentSalesSort = `${col}_asc`;
+                    } else {
+                        currentSalesSort = `${col}_desc`;
+                    }
+                }
+                renderSalesTable();
+            });
+        });
+    }
+
+    initSalesFilterEvents();
+
 
     // Generar informe cognitivo con Gemini
     if (btnTriggerGemini) {

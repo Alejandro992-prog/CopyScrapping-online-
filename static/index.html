@@ -1001,19 +1001,85 @@
                 </div>
 
                 <!-- Subtab 4: Sales & Delta Table -->
+                <!-- Subtab 4: Sales & Delta Table -->
                 <div id="audit-subtab-sales" class="audit-subtab-content" style="display: none;">
+                    
+                    <!-- Barra de filtros y ordenación rápida de Ventas -->
+                    <div class="sales-filter-toolbar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px; background: rgba(15, 23, 42, 0.55); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border-color); box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
+                        <!-- Botones de ordenación rápida -->
+                        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;" id="sales-quick-sorts">
+                            <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px;">Ordenar:</span>
+                            <button type="button" class="btn btn-xs btn-primary sales-sort-btn active" data-sort="units_desc" title="Ver los artículos más vendidos primero (Mayor número de unidades)">
+                                🔥 Más Vendidos (Uds ↓)
+                            </button>
+                            <button type="button" class="btn btn-xs btn-secondary sales-sort-btn" data-sort="units_asc" title="Ver los artículos que menos se venden (Menor número de unidades)">
+                                📉 Menos Vendidos (Uds ↑)
+                            </button>
+                            <button type="button" class="btn btn-xs btn-secondary sales-sort-btn" data-sort="rate_desc" title="Mayor ritmo de rotación diario (Ventas/Día más altas)">
+                                ⚡ Mayor Ritmo (Ventas/Día ↓)
+                            </button>
+                            <button type="button" class="btn btn-xs btn-secondary sales-sort-btn" data-sort="rate_asc" title="Menor ritmo de rotación diario (Ventas/Día más bajas)">
+                                🐌 Menor Ritmo (Ventas/Día ↑)
+                            </button>
+                            <button type="button" class="btn btn-xs btn-secondary sales-sort-btn" data-sort="burn_asc" title="Artículos agotados o próximos a agotar existencias">
+                                ⚠️ En Riesgo de Rotura
+                            </button>
+                        </div>
+
+                        <!-- Controles de filtrado adicional: Mínimo Uds, Buscador y Contador -->
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label for="filter-sales-min" style="font-size: 11px; font-weight: 600; color: var(--text-muted); white-space: nowrap;">Mín. Uds:</label>
+                                <select id="filter-sales-min" class="form-control" style="font-size: 12px; padding: 2px 8px; width: auto; height: 28px; background: var(--bg-card); border-color: var(--border-color); color: var(--text-main); border-radius: 6px; cursor: pointer;">
+                                    <option value="0">Todas (≥ 0)</option>
+                                    <option value="1">Con ventas (≥ 1)</option>
+                                    <option value="2">≥ 2 uds</option>
+                                    <option value="5">≥ 5 uds</option>
+                                    <option value="10">≥ 10 uds</option>
+                                    <option value="25">≥ 25 uds</option>
+                                    <option value="50">≥ 50 uds</option>
+                                </select>
+                            </div>
+
+                            <div style="position: relative; display: flex; align-items: center;">
+                                <input type="text" id="filter-sales-search" class="form-control" placeholder="Buscar ref, marca, producto..." style="font-size: 12px; padding: 4px 26px 4px 10px; height: 28px; width: 180px; background: var(--bg-card); border-color: var(--border-color); color: var(--text-main); border-radius: 6px;">
+                                <button type="button" id="btn-clear-sales-search" style="display: none; position: absolute; right: 6px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px;" title="Borrar búsqueda">✕</button>
+                            </div>
+
+                            <div style="font-size: 12px; color: var(--text-muted); background: rgba(255,255,255,0.04); padding: 4px 10px; border-radius: 6px; white-space: nowrap; border: 1px solid rgba(255,255,255,0.06);">
+                                Mostrando <strong id="sales-visible-count" style="color: #60a5fa;">0</strong> de <span id="sales-total-count">0</span> (<strong id="sales-visible-units" style="color: #34d399;">0</strong> uds)
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="table-container">
-                        <table>
+                        <table id="table-sales">
                             <thead>
                                 <tr>
-                                    <th>Modelo / Referencia</th>
-                                    <th>Marca</th>
-                                    <th>Descripción del Producto</th>
-                                    <th style="text-align: center;">Stock Anterior</th>
-                                    <th style="text-align: center;">Stock Actual</th>
-                                    <th style="text-align: center;">Uds Vendidas</th>
-                                    <th style="text-align: right;">Ventas/Día</th>
-                                    <th style="text-align: center;">Días hasta Agotarse</th>
+                                    <th class="sortable-sales-th" data-sort-col="sku" title="Clic para ordenar por Modelo / SKU">
+                                        Modelo / Referencia <span class="sort-icon" data-col-icon="sku">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="brand" title="Clic para ordenar por Marca">
+                                        Marca <span class="sort-icon" data-col-icon="brand">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="description" title="Clic para ordenar por Descripción">
+                                        Descripción del Producto <span class="sort-icon" data-col-icon="description">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="stock_old" style="text-align: center;" title="Clic para ordenar por Stock Anterior">
+                                        Stock Anterior <span class="sort-icon" data-col-icon="stock_old">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="stock_new" style="text-align: center;" title="Clic para ordenar por Stock Actual">
+                                        Stock Actual <span class="sort-icon" data-col-icon="stock_new">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th active-sort" data-sort-col="units_sold" style="text-align: center;" title="Clic para alternar Más / Menos Uds Vendidas">
+                                        Uds Vendidas <span class="sort-icon" data-col-icon="units_sold">▼</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="sales_rate_per_day" style="text-align: right;" title="Clic para alternar Mayor / Menor Ritmo de Ventas/Día">
+                                        Ventas/Día <span class="sort-icon" data-col-icon="sales_rate_per_day">↕</span>
+                                    </th>
+                                    <th class="sortable-sales-th" data-sort-col="days_to_stockout" style="text-align: center;" title="Clic para ordenar por Días hasta Agotarse">
+                                        Días hasta Agotarse <span class="sort-icon" data-col-icon="days_to_stockout">↕</span>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody id="table-body-sales">
