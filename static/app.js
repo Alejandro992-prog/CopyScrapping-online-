@@ -3702,6 +3702,26 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    function renderMatchBadge(it) {
+        if (!it.matched_in_warehouse) {
+            return `<div style="font-size: 10px; color: #94a3b8; margin-top: 3px; font-weight: 500;" title="No registrado en el inventario actual">🆕 No en almacén</div>`;
+        }
+        if (it.match_type === "FUZZY") {
+            const pct = Math.round((it.match_confidence || 0) * 100);
+            return `<div style="font-size: 10px; color: #f59e0b; margin-top: 3px; font-weight: 600;" title="${escapeHtml(it.match_label || 'Coincidencia difusa')}">⚡ Difuso: ${escapeHtml(it.matched_warehouse_sku || '')} (${pct}%)</div>`;
+        }
+        if (it.match_type === "BASE") {
+            return `<div style="font-size: 10px; color: #38bdf8; margin-top: 3px; font-weight: 600;" title="${escapeHtml(it.match_label || 'Coincidencia por modelo base')}">🔗 Base: ${escapeHtml(it.matched_warehouse_sku || '')}</div>`;
+        }
+        if (it.match_type === "EAN" && it.matched_warehouse_sku && it.matched_warehouse_sku !== it.model) {
+            return `<div style="font-size: 10px; color: #10b981; margin-top: 3px; font-weight: 600;" title="${escapeHtml(it.match_label || 'Cruce por código de barras')}">🏷️ EAN: ${escapeHtml(it.matched_warehouse_sku || '')}</div>`;
+        }
+        if (it.match_type === "SUBSTR" && it.matched_warehouse_sku && it.matched_warehouse_sku !== it.model) {
+            return `<div style="font-size: 10px; color: #a78bfa; margin-top: 3px; font-weight: 600;" title="${escapeHtml(it.match_label || 'Variante de modelo')}">🔀 Var: ${escapeHtml(it.matched_warehouse_sku || '')}</div>`;
+        }
+        return "";
+    }
+
     function renderAuditResults(data, filterQuery = null) {
         if (!data) return;
         const query = (filterQuery !== null ? filterQuery : (inputAuditAppliance?.value || "")).trim();
@@ -3739,8 +3759,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (elTotalTariff) elTotalTariff.textContent = tariffView.length;
         if (elTotalTariffSub) {
-            const pendingOrder = shortages.length + low_stock.length;
-            elTotalTariffSub.textContent = `${pendingOrder} a pedir • ${in_stock.length} cubiertos`;
+            const mStats = data.matching_stats;
+            if (mStats && mStats.match_rate_pct !== undefined) {
+                elTotalTariffSub.textContent = `${mStats.match_rate_pct}% cruzados en stock (${mStats.total_matched}/${tariffView.length})`;
+            } else {
+                const pendingOrder = shortages.length + low_stock.length;
+                elTotalTariffSub.textContent = `${pendingOrder} a pedir • ${in_stock.length} cubiertos`;
+            }
         }
         if (elShortages) elShortages.textContent = shortages.length;
         if (elLow) elLow.textContent = low_stock.length;
@@ -3822,7 +3847,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
                     tr.innerHTML = `
                         <td><span class="badge" style="background: rgba(99, 102, 241, 0.15); color: #818cf8; font-weight: 700; font-size: 11px; border: 1px solid rgba(99,102,241,0.3);">${escapeHtml(it.category || 'Otros')}</span></td>
-                        <td><strong style="font-size: 13px; color: #f8fafc;">${escapeHtml(it.model)}</strong></td>
+                        <td>
+                            <strong style="font-size: 13px; color: #f8fafc;">${escapeHtml(it.model)}</strong>
+                            ${renderMatchBadge(it)}
+                        </td>
                         <td style="max-width: 320px;">
                             <div style="font-size: 12px; font-weight: 500; color: #cbd5e1;">${escapeHtml(it.product)}</div>
                             ${featuresHtml}
@@ -3852,7 +3880,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     const tr = document.createElement("tr");
                     tr.style.background = "rgba(239, 68, 68, 0.05)";
                     tr.innerHTML = `
-                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td>
+                            <strong>${escapeHtml(it.model)}</strong>
+                            ${renderMatchBadge(it)}
+                        </td>
                         <td style="max-width: 320px; font-size: 12px;">${escapeHtml(it.product)}</td>
                         <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
                         <td style="text-align: center;"><span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700;">0 uds</span></td>
@@ -3879,7 +3910,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     const tr = document.createElement("tr");
                     tr.style.background = "rgba(245, 158, 11, 0.05)";
                     tr.innerHTML = `
-                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td>
+                            <strong>${escapeHtml(it.model)}</strong>
+                            ${renderMatchBadge(it)}
+                        </td>
                         <td style="max-width: 320px; font-size: 12px;">${escapeHtml(it.product)}</td>
                         <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
                         <td style="text-align: center;"><span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; font-weight: 700;">${it.stock} uds</span></td>
@@ -3905,7 +3939,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 in_stock.forEach(it => {
                     const tr = document.createElement("tr");
                     tr.innerHTML = `
-                        <td><strong>${escapeHtml(it.model)}</strong></td>
+                        <td>
+                            <strong>${escapeHtml(it.model)}</strong>
+                            ${renderMatchBadge(it)}
+                        </td>
                         <td style="max-width: 380px; font-size: 12px;">${escapeHtml(it.product)}</td>
                         <td><span class="badge" style="font-size: 11px;">${escapeHtml(it.category)}</span></td>
                         <td style="text-align: center;"><span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; font-weight: 700;">${it.stock} uds</span></td>

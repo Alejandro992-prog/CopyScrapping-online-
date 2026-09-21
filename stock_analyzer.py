@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+from difflib import SequenceMatcher
 
 try:
     import pandas as pd
@@ -127,6 +128,99 @@ def normalize_sku(sku: str) -> str:
     s = str(sku).upper().strip()
     s = re.sub(r'[\s\-/\._]', '', s)
     return s
+
+def extract_base_model(sku: str) -> str:
+    """
+    Extrae el modelo base eliminando revisiones de fabricante (/01, /02), sufijos de país
+    (-ES, -XPN, -IB) y acabados/colores industriales (-WH, -IX, -BK, etc.).
+    """
+    if not sku:
+        return ""
+    s = str(sku).upper().strip()
+    # 1. Eliminar revisiones de fabricante ej. /01, /02, .01
+    s = re.sub(r'[/\.]\d{1,2}$', '', s)
+    # 2. Eliminar sufijos precedidos de separador (- _ / .)
+    s = re.sub(r'[-_/\.](?:ES|XPN|SP|IB|EU|FR|IT|PT|WH|WHITE|BL|BLANCO|BK|BLACK|NEG|NEGRO|IX|INX|INOX|STEEL|ACERO|SL|SILVER|PLATA|GR|GREY|GRIS|W|B|X)$', '', s)
+    # 3. Eliminar sufijos de color o mercado pegados tras números si la base resultante tiene al menos 4 caracteres
+    m = re.search(r'^([A-Z0-9]{3,}[0-9])(?:ES|XPN|SP|IB|WH|WHITE|BL|BK|BLACK|IX|INX|INOX|W|B|X)$', s)
+    if m:
+        s = m.group(1)
+    s = re.sub(r'[\s\-/\._]', '', s)
+    return s
+
+def extract_model_color(model: str, text: str = "") -> str:
+    """
+    Identifica el color o acabado de un electrodoméstico (INOX, BLANCO, NEGRO, TITANIO).
+    Previene que variantes de distinto color (ej. MWF230-IX y MWF230-B) se crucen erróneamente.
+    """
+    combined = f"{model} {text}".upper()
+    if any(k in combined for k in ["TITANIO", "TITANIUM", "GRAFITO", "GRAPHITE", "DARK INOX", "SILVER", "PLATA", "-SL", "-GR"]):
+        return "TITANIO"
+    if any(k in combined for k in ["-IX", "/IX", " INOX", "-INOX", "ACERO INOX", "STAINLESS", "ACERO"]) or model.upper().endswith(("IX", "INX", "X")):
+        return "INOX"
+    if any(k in combined for k in ["-WH", "-BL", "-WHITE", "WHITE", "BLANCO", "-B", "/B"]) or model.upper().endswith(("WH", "BL", "W")):
+        return "BLANCO"
+    if any(k in combined for k in ["-BK", "-NEG", "-BLACK", "NEGRO", "BLACK"]) or model.upper().endswith(("BK", "NB")):
+        return "NEGRO"
+    return ""
+
+def normalize_ean_variants(ean_raw: str) -> List[str]:
+    """Genera variantes comunes de EAN para evitar discrepancias por ceros a la izquierda o formatos 12/13/14 dígitos."""
+    if not ean_raw:
+        return []
+    digits = re.sub(r'\D', '', str(ean_raw).strip())
+    if len(digits) < 7:
+        return []
+    variants = {digits}
+    if len(digits) == 12:
+        variants.add("0" + digits)
+    elif len(digits) == 13 and digits.startswith("0"):
+        variants.add(digits[1:])
+    elif len(digits) > 8:
+        variants.add(digits.zfill(13))
+    return list(variants)
+
+def fuzzy_match_sku(
+    norm_model: str, 
+    candidates: Dict[str, Dict[str, Any]], 
+    min_ratio: float = 0.85
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """
+    Busca la mejor coincidencia difusa (fuzzy) para un modelo en el diccionario de candidatos.
+    Aplica filtros de coherencia numérica para evitar emparejamientos erróneos entre distintas gamas.
+    """
+    if not norm_model or len(norm_model) < 4:
+        return None
+        
+    nums1 = re.findall(r'\d{2,}', norm_model)
+    best_cand_item = None
+    best_score = 0.0
+    best_cand_sku = ""
+    
+    # Ajustar ratio mínimo según longitud (códigos más cortos requieren mayor precisión)
+    effective_min_ratio = 0.88 if len(norm_model) <= 6 else min_ratio
+
+    for cand_sku, cand_item in candidates.items():
+        if abs(len(cand_sku) - len(norm_model)) > 3:
+            continue
+            
+        # Si ambos tienen secuencias numéricas de 2+ dígitos, deben coincidir o contenerse
+        if nums1:
+            nums2 = re.findall(r'\d{2,}', cand_sku)
+            if nums2:
+                n1, n2 = nums1[0], nums2[0]
+                if n1 != n2 and n1 not in n2 and n2 not in n1:
+                    continue
+
+        ratio = SequenceMatcher(None, norm_model, cand_sku).ratio()
+        if ratio >= effective_min_ratio and ratio > best_score:
+            best_score = ratio
+            best_cand_item = cand_item
+            best_cand_sku = cand_sku
+
+    if best_cand_item:
+        return (best_cand_item, round(best_score, 2), best_cand_sku)
+    return None
 
 # Caché persistente de clasificación de modelos (evita re-consultar a Gemini o recalcular)
 _appliance_cache = None
@@ -694,14 +788,6 @@ Texto del PDF:
 
     return items
 
-def normalize_sku(sku: str) -> str:
-    """Normaliza un SKU/Modelo eliminando espacios, guiones, barras y pasando a mayúsculas."""
-    if not sku:
-        return ""
-    s = str(sku).upper().strip()
-    s = re.sub(r'[\s\-/\._]', '', s)
-    return s
-
 def extract_date_from_text(text: str) -> Optional[str]:
     """Extrae una fecha (YYYY-MM-DD) desde el texto de cabecera o metadatos de un PDF/informe."""
     if not text:
@@ -913,9 +999,10 @@ def compare_stock_vs_tariff(
         f_clean = norm_cat_filter.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
         return f_clean in t_clean
 
-    # 1. Crear índice de búsqueda rápida en stock de almacén (ignorando precios de almacén)
+    # 1. Crear índices de búsqueda rápida en stock de almacén
     stock_by_sku: Dict[str, Dict[str, Any]] = {}
     stock_by_ean: Dict[str, Dict[str, Any]] = {}
+    stock_by_base_model: Dict[str, Dict[str, Any]] = {}
     stock_by_desc: List[Dict[str, Any]] = []
     
     for item in stock_items:
@@ -932,8 +1019,17 @@ def compare_stock_vs_tariff(
         
         if sku_clean:
             stock_by_sku[sku_clean] = item
-        if ean_clean and len(ean_clean) >= 8 and ean_clean != "ND":
-            stock_by_ean[ean_clean] = item
+            base_m = extract_base_model(sku_clean)
+            if base_m:
+                s_col = extract_model_color(item.get("sku") or item.get("model") or "", item.get("description") or "")
+                if s_col:
+                    stock_by_base_model[(base_m, s_col)] = item
+                if base_m not in stock_by_base_model:
+                    stock_by_base_model[base_m] = item
+                
+        if ean_clean and ean_clean != "ND":
+            for e_var in normalize_ean_variants(ean_clean):
+                stock_by_ean[e_var] = item
             
         stock_by_desc.append(item)
 
@@ -946,7 +1042,19 @@ def compare_stock_vs_tariff(
     
     total_order_cost = 0.0
 
-    # 2. Evaluar cada producto de la tarifa del proveedor
+    matching_stats = {
+        "exact_ean": 0,
+        "exact_sku": 0,
+        "base_model": 0,
+        "substr_variant": 0,
+        "fuzzy": 0,
+        "desc_pattern": 0,
+        "unmatched": 0,
+        "total_matched": 0,
+        "match_rate_pct": 0.0
+    }
+
+    # 2. Evaluar cada producto de la tarifa del proveedor con el motor de matching jerárquico
     for t_item in tariff_items:
         model = t_item.get("model", "")
         product = t_item.get("product", "")
@@ -967,24 +1075,75 @@ def compare_stock_vs_tariff(
                 continue
 
         norm_model = normalize_sku(model)
-        norm_ean = normalize_sku(t_item.get("ean", ""))
-        matched = None
+        base_model = extract_base_model(model)
+        tariff_ean_vars = normalize_ean_variants(t_item.get("ean", ""))
         
-        # 1. Match directo por código EAN
-        if norm_ean and len(norm_ean) >= 8 and norm_ean in stock_by_ean:
-            matched = stock_by_ean[norm_ean]
-        # 2. Match directo por Modelo / SKU
-        elif norm_model and norm_model != brand_upper and norm_model in stock_by_sku:
-            matched = stock_by_sku[norm_model]
-        # 3. Match por SKU similar (sufijos de país ej: ES, XPN, etc.)
-        elif norm_model and len(norm_model) >= 5 and norm_model != brand_upper:
+        matched = None
+        match_type = None
+        match_confidence = 0.0
+        match_label = "No localizado en almacén"
+        matched_warehouse_sku = ""
+
+        # Nivel 1. Match directo por código EAN (100% Confianza)
+        if tariff_ean_vars:
+            for e_var in tariff_ean_vars:
+                if e_var in stock_by_ean:
+                    matched = stock_by_ean[e_var]
+                    match_type = "EAN"
+                    match_confidence = 1.0
+                    match_label = "Match exacto por EAN"
+                    matched_warehouse_sku = matched.get("sku") or matched.get("model") or ""
+                    break
+
+        # Nivel 2. Match directo por Modelo / SKU (100% Confianza)
+        if not matched and norm_model and norm_model != brand_upper:
+            if norm_model in stock_by_sku:
+                matched = stock_by_sku[norm_model]
+                match_type = "SKU"
+                match_confidence = 1.0
+                match_label = "Match exacto por SKU"
+                matched_warehouse_sku = matched.get("sku") or matched.get("model") or ""
+
+        # Nivel 3. Match por Modelo Base (respetando estrictamente el color) (95% Confianza)
+        if not matched and base_model and base_model != brand_upper:
+            t_col = extract_model_color(model, product)
+            if t_col and (base_model, t_col) in stock_by_base_model:
+                matched = stock_by_base_model[(base_model, t_col)]
+                match_type = "BASE"
+                match_confidence = 0.95
+                match_label = f"Match modelo base ({base_model} - {t_col.title()})"
+                matched_warehouse_sku = matched.get("sku") or matched.get("model") or ""
+            elif not t_col and base_model in stock_by_base_model:
+                matched = stock_by_base_model[base_model]
+                match_type = "BASE"
+                match_confidence = 0.95
+                match_label = f"Match modelo base ({base_model})"
+                matched_warehouse_sku = matched.get("sku") or matched.get("model") or ""
+
+        # Nivel 4. Match por variante de subcadena o prefijo (90% Confianza)
+        if not matched and norm_model and len(norm_model) >= 5 and norm_model != brand_upper:
             for s_sku, s_item in stock_by_sku.items():
                 if len(s_sku) >= 5 and (norm_model in s_sku or s_sku in norm_model):
-                    if abs(len(norm_model) - len(s_sku)) <= 4:
+                    if abs(len(norm_model) - len(s_sku)) <= 3:
                         matched = s_item
+                        match_type = "SUBSTR"
+                        match_confidence = 0.90
+                        match_label = "Variante de modelo / sufijo"
+                        matched_warehouse_sku = s_item.get("sku") or s_item.get("model") or s_sku
                         break
 
-        # 4. Búsqueda en descripción de stock con límites de palabra (nunca si coincide con marca o palabra genérica)
+        # Nivel 5. Matching Difuso Inteligente (Fuzzy Levenshtein) (85%-95% Confianza)
+        if not matched and norm_model and len(norm_model) >= 4 and norm_model != brand_upper:
+            fuzzy_res = fuzzy_match_sku(norm_model, stock_by_sku, min_ratio=0.85)
+            if fuzzy_res:
+                cand_item, score, cand_sku = fuzzy_res
+                matched = cand_item
+                match_type = "FUZZY"
+                match_confidence = score
+                match_label = f"Match difuso ({int(score * 100)}%)"
+                matched_warehouse_sku = cand_item.get("sku") or cand_item.get("model") or cand_sku
+
+        # Nivel 6. Búsqueda en descripción de stock con límites de palabra (80% Confianza)
         if not matched and norm_model and len(norm_model) >= 5 and norm_model != brand_upper:
             generic_words = {"BLANCO", "NEGRO", "ACERO", "CRISTAL", "LAVADORA", "FRIGORIFICO", "HORNO", "PLACA", "CAMPANA", "INTEGRABLE", "OFERTA", "NUEVO", "COMBI"}
             if norm_model not in generic_words:
@@ -994,7 +1153,45 @@ def compare_stock_vs_tariff(
                     s_desc_norm = normalize_sku(s_desc)
                     if re.search(pattern, s_desc_norm):
                         matched = s_item
+                        match_type = "DESC"
+                        match_confidence = 0.80
+                        match_label = "Localizado en descripción"
+                        matched_warehouse_sku = s_item.get("sku") or s_item.get("model") or ""
                         break
+
+        # Verificación estricta de color: un modelo Inox NUNCA puede emparejarse con uno Blanco
+        if matched and match_type != "EAN":
+            t_color = extract_model_color(model, product)
+            s_color = extract_model_color(matched.get("sku") or matched.get("model") or "", matched.get("description") or "")
+            if t_color and s_color and t_color != s_color:
+                # Conflicto de color detectado: abortar emparejamiento erróneo
+                matched = None
+                match_type = None
+                match_confidence = 0.0
+                match_label = "No localizado en almacén"
+                matched_warehouse_sku = ""
+
+        # Registrar estadísticas de cruce
+        if match_type == "EAN":
+            matching_stats["exact_ean"] += 1
+            matching_stats["total_matched"] += 1
+        elif match_type == "SKU":
+            matching_stats["exact_sku"] += 1
+            matching_stats["total_matched"] += 1
+        elif match_type == "BASE":
+            matching_stats["base_model"] += 1
+            matching_stats["total_matched"] += 1
+        elif match_type == "SUBSTR":
+            matching_stats["substr_variant"] += 1
+            matching_stats["total_matched"] += 1
+        elif match_type == "FUZZY":
+            matching_stats["fuzzy"] += 1
+            matching_stats["total_matched"] += 1
+        elif match_type == "DESC":
+            matching_stats["desc_pattern"] += 1
+            matching_stats["total_matched"] += 1
+        else:
+            matching_stats["unmatched"] += 1
 
         current_qty = 0
         stock_sku = model
@@ -1032,7 +1229,11 @@ def compare_stock_vs_tariff(
             "stock": current_qty,
             "supplier_price": price,
             "attributes": resolved_attributes,
-            "matched_in_warehouse": matched is not None
+            "matched_in_warehouse": matched is not None,
+            "match_type": match_type,
+            "match_confidence": match_confidence,
+            "match_label": match_label,
+            "matched_warehouse_sku": matched_warehouse_sku
         }
 
         if current_qty == 0:
@@ -1076,6 +1277,10 @@ def compare_stock_vs_tariff(
                 "cost": s_item.get("cost", 0.0)
             })
 
+    # Calcular porcentaje global de emparejamiento
+    total_t_items = max(1, len(tariff_view))
+    matching_stats["match_rate_pct"] = round((matching_stats["total_matched"] / total_t_items) * 100, 1)
+
     return {
         "brand": brand_filter or "Todas",
         "low_stock_threshold": low_stock_threshold,
@@ -1088,6 +1293,7 @@ def compare_stock_vs_tariff(
             "total_estimated_reorder_cost": round(total_order_cost, 2),
             "total_items_to_order": len(shortages) + len(low_stock)
         },
+        "matching_stats": matching_stats,
         "tariff_view": tariff_view,
         "shortages": shortages,
         "low_stock": low_stock,
@@ -1330,9 +1536,9 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
     ws1 = wb.active
     ws1.title = "Faltas y Pedido"
     
-    headers1 = ["Modelo / SKU", "Descripción", "Categoría", "Stock Actual", "Pedido Sugerido", "Coste Tarifa (€)", "Total Línea (€)"]
+    headers1 = ["Modelo Tarifa", "SKU Almacén", "Tipo Cruce", "Descripción", "Categoría", "Stock Actual", "Pedido Sugerido", "Coste Tarifa (€)", "Total Línea (€)"]
     ws1.append(["AUDITORÍA DE FALTAS Y PROPUESTA DE PEDIDO"])
-    ws1.merge_cells("A1:G1")
+    ws1.merge_cells("A1:I1")
     title_cell = ws1["A1"]
     title_cell.font = Font(size=14, bold=True, color=C_WHITE)
     title_cell.fill = PatternFill(start_color="DC2626", end_color="DC2626", fill_type="solid")
@@ -1351,6 +1557,8 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
     for it in shortages_result.get("shortages", []):
         ws1.append([
             it.get("model", ""),
+            it.get("matched_warehouse_sku") or it.get("sku") or "N/D",
+            it.get("match_label", "No localizado"),
             it.get("product", ""),
             it.get("category", ""),
             it.get("stock", 0),
@@ -1359,16 +1567,16 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
             it.get("reorder_cost", 0.0)
         ])
         ws1.row_dimensions[row_num].height = 20
-        for c_idx in range(1, 8):
+        for c_idx in range(1, 10):
             cell = ws1.cell(row=row_num, column=c_idx)
             cell.border = thin_border
-            if c_idx == 4: # Stock actual
+            if c_idx == 6: # Stock actual
                 cell.fill = PatternFill(start_color=C_SHORTAGE, end_color=C_SHORTAGE, fill_type="solid")
                 cell.font = Font(color=C_SHORTAGE_TXT, bold=True)
                 cell.alignment = Alignment(horizontal="center")
-            elif c_idx in [5, 6, 7]:
+            elif c_idx in [7, 8, 9]:
                 cell.alignment = Alignment(horizontal="right")
-                if c_idx in [6, 7]:
+                if c_idx in [8, 9]:
                     cell.number_format = '#,##0.00 €'
         row_num += 1
 
@@ -1377,7 +1585,7 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
     # ─────────────────────────────────────────────────────────────────────────
     ws2 = wb.create_sheet(title="Stock Bajo")
     ws2.append(["ALERTAS DE STOCK BAJO (REPOSICIÓN INMINENTE)"])
-    ws2.merge_cells("A1:G1")
+    ws2.merge_cells("A1:I1")
     t2 = ws2["A1"]
     t2.font = Font(size=14, bold=True, color=C_WHITE)
     t2.fill = PatternFill(start_color="D97706", end_color="D97706", fill_type="solid")
@@ -1396,6 +1604,8 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
     for it in shortages_result.get("low_stock", []):
         ws2.append([
             it.get("model", ""),
+            it.get("matched_warehouse_sku") or it.get("sku") or "N/D",
+            it.get("match_label", "No localizado"),
             it.get("product", ""),
             it.get("category", ""),
             it.get("stock", 0),
@@ -1404,16 +1614,16 @@ def export_audit_to_excel(shortages_result: Dict[str, Any], delta_result: Option
             it.get("reorder_cost", 0.0)
         ])
         ws2.row_dimensions[row_num2].height = 20
-        for c_idx in range(1, 8):
+        for c_idx in range(1, 10):
             cell = ws2.cell(row=row_num2, column=c_idx)
             cell.border = thin_border
-            if c_idx == 4:
+            if c_idx == 6:
                 cell.fill = PatternFill(start_color=C_LOW, end_color=C_LOW, fill_type="solid")
                 cell.font = Font(color=C_LOW_TXT, bold=True)
                 cell.alignment = Alignment(horizontal="center")
-            elif c_idx in [5, 6, 7]:
+            elif c_idx in [7, 8, 9]:
                 cell.alignment = Alignment(horizontal="right")
-                if c_idx in [6, 7]:
+                if c_idx in [8, 9]:
                     cell.number_format = '#,##0.00 €'
         row_num2 += 1
 
