@@ -4410,6 +4410,69 @@ Devuelve ÚNICAMENTE un array JSON válido sin explicaciones adicionales:
     return []
 
 
+def resolve_unknown_models_with_gemini(
+    models_to_resolve: List[str], 
+    brand: str = "", 
+    api_key: Optional[str] = None
+) -> Dict[str, str]:
+    """
+    Identifica en lote compacto el tipo de aparato de modelos desconocidos usando Gemini.
+    Consumo ultra bajo (~10-15 tokens por modelo).
+    Guarda los resultados en la caché local persistente.
+    """
+    if not models_to_resolve or not api_key:
+        return {}
+        
+    unique_models = list(dict.fromkeys([m.strip() for m in models_to_resolve if m and m.strip()]))
+    if not unique_models:
+        return {}
+        
+    resolved_map: Dict[str, str] = {}
+    
+    batch_size = 40
+    for i in range(0, len(unique_models), batch_size):
+        batch = unique_models[i:i+batch_size]
+        try:
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            
+            prompt = f"""Actúa como un experto en electrodomésticos para el mercado español y europeo.
+Marca / Proveedor: '{brand or "General"}'
+Identifica a qué categoría o tipo de aparato corresponde cada uno de los siguientes modelos:
+{json.dumps(batch, ensure_ascii=False)}
+
+Categorías estándar canónicas sugeridas: "Frigo Combi", "Frigo 2 puertas", "Frigo 1 puerta", "Frigos americanos", "Congelador Vertical", "Congelador Horizontal", "Lavadoras", "Secadoras", "Lavadoras-Secadoras", "Lavavajillas 60cm", "Lavavajillas 45cm", "Hornos", "Microondas", "Inducción", "Vitrocerámica", "Placa de Gas", "Campana", "Termos y Calentadores", "Aire Acondicionado", "Vinotecas", "Deshumidificadores", "Purificadores de Aire", "Cocinas", "Televisor".
+
+Devuelve ÚNICAMENTE un JSON con un objeto clave-valor (clave: modelo original exacto, valor: tipo de aparato canónico):
+{{"MODELO": "CATEGORIA"}}
+"""
+            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
+            for m in candidate_models:
+                try:
+                    resp = client.models.generate_content(model=m, contents=prompt)
+                    if resp and resp.text:
+                        clean_txt = re.sub(r'```json\s*', '', resp.text)
+                        clean_txt = re.sub(r'```', '', clean_txt).strip()
+                        parsed = json.loads(clean_txt)
+                        if isinstance(parsed, dict):
+                            for k, v in parsed.items():
+                                if v and str(v).strip() != "Otros":
+                                    resolved_map[k] = str(v).strip()
+                            break
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"Error en resolve_unknown_models_with_gemini: {e}")
+            
+    if resolved_map and stock_analyzer is not None:
+        try:
+            stock_analyzer.update_appliance_cache(resolved_map)
+        except Exception as ex_cache:
+            logger.debug(f"Error guardando en caché: {ex_cache}")
+            
+    return resolved_map
+
+
 def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     if _pypdf_module is None:
         add_log("error", "pypdf no está instalado. No se puede parsear el PDF.")
@@ -4531,8 +4594,16 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                     val_total = max(last_num, prev_num) if last_num != prev_num else last_num
                                     val_unit = min(last_num, prev_num) if last_num != prev_num else last_num
                                     
+                                    # Regla prioritaria 1: Si coste unitario y total son iguales (ej: 388,85 y 388,85), el stock es exactamente 1
+                                    if abs(val_total - val_unit) < 1.0 or (val_unit > 0 and abs(val_total / val_unit - 1.0) < 0.02):
+                                        cost_val = val_unit
+                                        stock_val = 1
+                                        if third_num is not None and int(round(third_num)) == 1:
+                                            desc_end_idx = -3
+                                        else:
+                                            desc_end_idx = -2
                                     # Opción A: third_num es la cantidad (Stock) y cuadra matemáticamente
-                                    if third_num is not None and 0 < third_num < 10000:
+                                    elif third_num is not None and 0 < third_num < 10000:
                                         third_qty = int(round(third_num))
                                         if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
                                             stock_val = max(1, third_qty)
@@ -4577,6 +4648,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                         stock_val = 1
                                         desc_end_idx = -1
                                         
+                            # Protección de cordura: si por error de columna stock coincide con alturas/medidas típicas (175, 185, 186, 200, etc.) y coste > 50€
+                            if cost_val is not None and cost_val > 50.0 and stock_val in [144, 160, 170, 175, 177, 178, 180, 185, 186, 190, 200, 201, 203]:
+                                stock_val = 1
+
                             # Protección de cordura: si por error de columna stock > 500 y coste > 15€, reevaluar
                             if stock_val > 500 and cost_val is not None and cost_val > 15.0:
                                 price_cand = stock_val / 100.0
@@ -4598,14 +4673,24 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                         continue
                                     desc_tokens.append(tok)
                                     
-                                # Limpiar cantidad del final de la descripción si se quedó adherida (ej. DEFROST32 -> DEFROST)
-                                if desc_tokens and stock_val > 1:
+                                # Limpiar cantidad o coste del final de la descripción si se quedó adherida
+                                while desc_tokens:
                                     last_dtok = desc_tokens[-1]
                                     s_str = str(stock_val)
-                                    if last_dtok == s_str:
+                                    if last_dtok == s_str or last_dtok == "1":
                                         desc_tokens.pop()
-                                    elif last_dtok.endswith(s_str) and len(last_dtok) > len(s_str):
+                                        continue
+                                    if cost_val is not None:
+                                        cost_str1 = f"{cost_val:.2f}"
+                                        cost_str2 = cost_str1.replace('.', ',')
+                                        if last_dtok in (cost_str1, cost_str2):
+                                            desc_tokens.pop()
+                                            continue
+                                    if stock_val > 1 and last_dtok.endswith(s_str) and len(last_dtok) > len(s_str):
                                         desc_tokens[-1] = last_dtok[:-len(s_str)].strip()
+                                    elif last_dtok.endswith("1") and len(last_dtok) > 2 and not last_dtok[-2].isdigit():
+                                        desc_tokens[-1] = last_dtok[:-1].strip()
+                                    break
                                     
                                 raw_description = " ".join(desc_tokens).strip()
                                 
@@ -4992,6 +5077,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     elif c1_val > 0 and c2_val > 0 and abs(c2_val * c1_val - c3_val) < max(5.0, c3_val * 0.02):
                         stock = int(c2_val)
                         cost = c1_val
+                    elif c2_val > 0 and c3_val > 0 and abs(c2_val - c3_val) < 1.0:
+                        # Si Coste Unitario == Total Valorado, stock es exactamente 1
+                        cost = c2_val
+                        stock = 1
                     else:
                         # Fallback a los últimos 2 usando la lógica de 2 candidatos
                         val1 = c2_val
@@ -5000,7 +5089,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         c2_token = c3_token
                         has_decimal1 = ("," in c1_token) or ("." in c1_token)
                         has_decimal2 = ("," in c2_token) or ("." in c2_token)
-                        if has_decimal1 and not has_decimal2:
+                        if abs(val1 - val2) < 1.0:
+                            cost = val1
+                            stock = 1
+                        elif has_decimal1 and not has_decimal2:
                             cost = val1
                             stock = int(val2)
                         elif not has_decimal1 and has_decimal2:
@@ -5024,6 +5116,20 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                 cost = val2
                                 stock = int(val1)
                                 
+                # Protección de cordura: si stock coincide con medidas típicas de electrodomésticos y coste > 50€
+                if cost > 50.0 and stock in [144, 160, 170, 175, 177, 178, 180, 185, 186, 190, 200, 201, 203]:
+                    stock = 1
+
+                while desc_words:
+                    last_dw = desc_words[-1]
+                    if last_dw in [str(stock), "1", f"{cost:.2f}", f"{cost:.2f}".replace('.', ','), str(int(round(cost)))]:
+                        desc_words.pop()
+                    elif last_dw.endswith("1") and len(last_dw) > 2 and not last_dw[-2].isdigit():
+                        desc_words[-1] = last_dw[:-1].strip()
+                        break
+                    else:
+                        break
+                        
                 desc = " ".join(desc_words)
                 desc = re.sub(r'\s+', ' ', desc).strip()
                 
@@ -6035,6 +6141,96 @@ async def delete_tariff_endpoint(tariff_id: str):
 
     add_log("info", f"Tarifa {tariff_id} eliminada.")
     return {"status": "success", "message": "Tarifa eliminada con éxito."}
+
+@app.post("/api/tariffs/{tariff_id}/resolve-unknown-appliances")
+async def resolve_tariff_unknown_appliances_endpoint(tariff_id: str):
+    """
+    Identifica con IA (Gemini) en lote ultra-económico los modelos no especificados o en 'Otros'
+    de una tarifa, enriqueciendo la tarifa y guardando en la caché persistente.
+    """
+    if stock_analyzer is None:
+        raise HTTPException(status_code=500, detail="Módulo stock_analyzer no disponible.")
+        
+    tariff = stock_analyzer.load_tariff(tariff_id)
+    if not tariff:
+        raise HTTPException(status_code=404, detail="Tarifa no encontrada.")
+        
+    items = tariff.get("items", [])
+    if not items:
+        return {"status": "success", "message": "La tarifa no tiene artículos.", "resolved_count": 0}
+        
+    # Identificar modelos pendientes de clasificar
+    unknown_models = []
+    for it in items:
+        cat = it.get("category")
+        mod = str(it.get("model", "")).strip()
+        prod = str(it.get("product", "")).strip()
+        # Verificar si por reglas ya se resuelve
+        if not cat or cat in ["Otros", "N/D", ""]:
+            resolved_cat = stock_analyzer.classify_appliance_type(prod + " " + mod, mod)
+            if resolved_cat != "Otros":
+                it["category"] = resolved_cat
+            elif mod:
+                unknown_models.append(mod)
+                
+    unique_unknown = list(dict.fromkeys(unknown_models))
+    resolved: Dict[str, str] = {}
+    
+    if unique_unknown:
+        api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Se requiere una clave API de Gemini configurada para identificar modelos con IA.")
+            
+        provider_name = tariff.get("provider_name") or tariff.get("tariff_name") or ""
+        add_log("info", f"🤖 Identificando {len(unique_unknown)} modelo(s) desconocido(s) de '{provider_name}' con Gemini...")
+        
+        resolved = resolve_unknown_models_with_gemini(unique_unknown, brand=provider_name, api_key=api_key)
+        
+    # Actualizar los items de la tarifa
+    updated_count = 0
+    for it in items:
+        m = str(it.get("model", "")).strip()
+        norm_m = stock_analyzer.normalize_sku(m)
+        if m in resolved:
+            it["category"] = resolved[m]
+            updated_count += 1
+        elif norm_m in resolved:
+            it["category"] = resolved[norm_m]
+            updated_count += 1
+        # También enriquecer atributos si no los tenía
+        if not it.get("attributes"):
+            it["attributes"] = stock_analyzer.extract_appliance_features(str(it.get("product", "")), m)
+            
+    # Guardar tarifa actualizada en disco
+    safe_id = str(tariff_id).replace("tariff_", "").strip()
+    tariffs_dir = stock_analyzer.get_tariffs_dir()
+    fpath = os.path.join(tariffs_dir, f"tariff_{safe_id}.json")
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(tariff, f, indent=2, ensure_ascii=False)
+    except Exception as ex:
+        logger.debug(f"Error guardando tarifa actualizada: {ex}")
+        
+    # Sincronizar actualización con Supabase si está disponible
+    client = get_supabase_client()
+    if client and client.is_configured:
+        def _sync_sb():
+            try:
+                client.upsert_tariff(tariff)
+            except Exception:
+                pass
+        threading.Thread(target=_sync_sb, daemon=True).start()
+        
+    msg = f"✨ Se identificaron modelos con éxito. {updated_count} artículos enriquecidos en la tarifa."
+    add_log("success", msg)
+    
+    return {
+        "status": "success",
+        "resolved_count": len(resolved),
+        "updated_items_count": updated_count,
+        "resolved_map": resolved
+    }
+
 
 @app.get("/api/stock/history")
 async def get_stock_history():

@@ -3164,6 +3164,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // ─────────────────────────────────────────────────────────────────────────
     let auditShortagesData = null;
     let auditDeltaData = null;
+    let currentTariffStatusFilter = "all";
 
     // Elementos del DOM de Auditoría
     const selectAuditSnapshot = document.getElementById("select-audit-snapshot");
@@ -3234,6 +3235,23 @@ document.addEventListener("DOMContentLoaded", () => {
             btn.classList.remove("btn-secondary");
             const targetEl = document.getElementById(btn.dataset.subtab);
             if (targetEl) targetEl.style.display = "block";
+        });
+    });
+
+    // Filtros rápidos dentro de la vista global de tarifa
+    const tariffFilterBtns = document.querySelectorAll(".tariff-filter-btn");
+    tariffFilterBtns.forEach(btn => {
+        btn.addEventListener("click", () => {
+            tariffFilterBtns.forEach(b => {
+                b.classList.remove("btn-primary", "active");
+                b.classList.add("btn-secondary");
+            });
+            btn.classList.add("btn-primary", "active");
+            btn.classList.remove("btn-secondary");
+            currentTariffStatusFilter = btn.dataset.status || "all";
+            if (auditShortagesData) {
+                renderAuditResults(auditShortagesData);
+            }
         });
     });
 
@@ -3688,44 +3706,139 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!data) return;
         const query = (filterQuery !== null ? filterQuery : (inputAuditAppliance?.value || "")).trim();
 
+        let tariffView = data.tariff_view || [];
         let shortages = data.shortages || [];
         let low_stock = data.low_stock || [];
         let in_stock = data.in_stock || [];
         let surplus = data.surplus || [];
 
         if (query) {
+            tariffView = filterAuditItems(tariffView, query);
             shortages = filterAuditItems(shortages, query);
             low_stock = filterAuditItems(low_stock, query);
             in_stock = filterAuditItems(in_stock, query);
             surplus = filterAuditItems(surplus, query);
         }
 
+        // Filtrado por estado en la vista global de la tarifa
+        let filteredTariff = tariffView;
+        if (currentTariffStatusFilter && currentTariffStatusFilter !== "all") {
+            filteredTariff = tariffView.filter(it => it.status === currentTariffStatusFilter);
+        }
+
         const totalReorderCost = shortages.reduce((acc, it) => acc + (it.reorder_cost || 0), 0) +
                                  low_stock.reduce((acc, it) => acc + (it.reorder_cost || 0), 0);
 
         // Actualizar KPIs
+        const elTotalTariff = document.getElementById("audit-kpi-total-tariff");
+        const elTotalTariffSub = document.getElementById("audit-kpi-total-tariff-sub");
         const elShortages = document.getElementById("audit-kpi-shortages");
         const elLow = document.getElementById("audit-kpi-low");
         const elOk = document.getElementById("audit-kpi-ok");
         const elCost = document.getElementById("audit-kpi-cost");
 
+        if (elTotalTariff) elTotalTariff.textContent = tariffView.length;
+        if (elTotalTariffSub) {
+            const pendingOrder = shortages.length + low_stock.length;
+            elTotalTariffSub.textContent = `${pendingOrder} a pedir • ${in_stock.length} cubiertos`;
+        }
         if (elShortages) elShortages.textContent = shortages.length;
         if (elLow) elLow.textContent = low_stock.length;
         if (elOk) elOk.textContent = in_stock.length;
         if (elCost) elCost.textContent = `${totalReorderCost.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`;
 
         // Actualizar badges en subtabs
+        const bTariff = document.getElementById("count-badge-tariff");
         const bShortages = document.getElementById("count-badge-shortages");
         const bLow = document.getElementById("count-badge-low");
         const bOk = document.getElementById("count-badge-ok");
         const bSurplus = document.getElementById("count-badge-surplus");
 
+        if (bTariff) bTariff.textContent = tariffView.length;
         if (bShortages) bShortages.textContent = shortages.length;
         if (bLow) bLow.textContent = low_stock.length;
         if (bOk) bOk.textContent = in_stock.length;
         if (bSurplus) bSurplus.textContent = surplus.length;
 
-        // Renderizar tabla de Faltas (Roturas)
+        // Comprobar artículos pendientes de identificar para el botón de IA
+        const rawTariff = data.tariff_view || [];
+        const unknownCount = rawTariff.filter(it => !it.category || it.category === "Otros" || it.category === "N/D").length;
+        const btnResolveAi = document.getElementById("btn-resolve-tariff-ai");
+        const countSpan = document.getElementById("unknown-appliances-count");
+        if (btnResolveAi) {
+            if (unknownCount > 0) {
+                btnResolveAi.style.display = "inline-flex";
+                if (countSpan) countSpan.textContent = unknownCount;
+            } else {
+                btnResolveAi.style.display = "none";
+            }
+        }
+
+        // 1. Renderizar tabla unificada: Vista Global sobre la Tarifa del Proveedor
+        const tbodyTariff = document.getElementById("table-body-tariff");
+        const elTariffVisibleCount = document.getElementById("tariff-visible-count");
+        if (elTariffVisibleCount) elTariffVisibleCount.textContent = filteredTariff.length;
+
+        if (tbodyTariff) {
+            tbodyTariff.innerHTML = "";
+            if (filteredTariff.length === 0) {
+                const emptyMsg = query || currentTariffStatusFilter !== "all"
+                    ? `No hay artículos en la tarifa que coincidan con los filtros aplicados.`
+                    : 'No se encontraron artículos en la tarifa activa.';
+                tbodyTariff.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">${emptyMsg}</td></tr>`;
+            } else {
+                filteredTariff.forEach(it => {
+                    const tr = document.createElement("tr");
+                    let rowBg = "transparent";
+                    let badgeState = "";
+                    let qtyBadge = "";
+
+                    if (it.status === "ROTURA") {
+                        rowBg = "rgba(239, 68, 68, 0.05)";
+                        badgeState = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(239, 68, 68, 0.18); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);">🔴 Pedir urgente</span>`;
+                        qtyBadge = `<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: 700;">0 uds</span>`;
+                    } else if (it.status === "BAJO") {
+                        rowBg = "rgba(245, 158, 11, 0.05)";
+                        badgeState = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(245, 158, 11, 0.18); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3);">🟡 Reponer stock</span>`;
+                        qtyBadge = `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; font-weight: 700;">${it.stock} uds</span>`;
+                    } else {
+                        badgeState = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(16, 185, 129, 0.18); color: #10b981; border: 1px solid rgba(16,185,129,0.3);">🟢 Cubierto</span>`;
+                        qtyBadge = `<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; font-weight: 700;">${it.stock} uds</span>`;
+                    }
+
+                    tr.style.background = rowBg;
+
+                    const featuresHtml = it.attributes 
+                        ? `<div style="color: #38bdf8; font-size: 11px; margin-top: 3px; font-weight: 500;">⚙️ ${escapeHtml(it.attributes)}</div>` 
+                        : '';
+
+                    const orderSuggestedHtml = it.suggested_reorder > 0 
+                        ? `<strong style="color: #3b82f6; font-size: 13px;">+${it.suggested_reorder} uds</strong>` 
+                        : `<span style="color: var(--text-muted); font-size: 12px;">0</span>`;
+
+                    const orderCostHtml = it.reorder_cost > 0 
+                        ? `<strong style="color: ${it.status === 'ROTURA' ? '#ef4444' : '#f59e0b'}; font-size: 13px;">${it.reorder_cost.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</strong>` 
+                        : `<span style="color: var(--text-muted); font-size: 12px;">0,00 €</span>`;
+
+                    tr.innerHTML = `
+                        <td><span class="badge" style="background: rgba(99, 102, 241, 0.15); color: #818cf8; font-weight: 700; font-size: 11px; border: 1px solid rgba(99,102,241,0.3);">${escapeHtml(it.category || 'Otros')}</span></td>
+                        <td><strong style="font-size: 13px; color: #f8fafc;">${escapeHtml(it.model)}</strong></td>
+                        <td style="max-width: 320px;">
+                            <div style="font-size: 12px; font-weight: 500; color: #cbd5e1;">${escapeHtml(it.product)}</div>
+                            ${featuresHtml}
+                        </td>
+                        <td style="text-align: center;">${qtyBadge}</td>
+                        <td style="text-align: center;">${badgeState}</td>
+                        <td style="text-align: center;">${orderSuggestedHtml}</td>
+                        <td style="text-align: right; font-weight: 600; font-size: 12px; color: #e2e8f0;">${it.supplier_price.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €</td>
+                        <td style="text-align: right;">${orderCostHtml}</td>
+                    `;
+                    tbodyTariff.appendChild(tr);
+                });
+            }
+        }
+
+        // 2. Renderizar tabla de Faltas (Roturas)
         const tbodyShortages = document.getElementById("table-body-shortages");
         if (tbodyShortages) {
             tbodyShortages.innerHTML = "";
@@ -3752,7 +3865,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
 
-        // Renderizar tabla de Stock Bajo
+        // 3. Renderizar tabla de Stock Bajo
         const tbodyLow = document.getElementById("table-body-low");
         if (tbodyLow) {
             tbodyLow.innerHTML = "";
@@ -3779,7 +3892,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
 
-        // Renderizar tabla de En Stock
+        // 4. Renderizar tabla de En Stock
         const tbodyOk = document.getElementById("table-body-ok");
         if (tbodyOk) {
             tbodyOk.innerHTML = "";
@@ -3803,7 +3916,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
 
-        // Renderizar tabla de Excedentes / No en Tarifa
+        // 5. Renderizar tabla de Excedentes / No en Tarifa
         const tbodySurplus = document.getElementById("table-body-surplus");
         if (tbodySurplus) {
             tbodySurplus.innerHTML = "";
@@ -3854,6 +3967,44 @@ document.addEventListener("DOMContentLoaded", () => {
             btnClearAuditAppliance.style.display = "none";
             if (auditShortagesData) {
                 renderAuditResults(auditShortagesData, "");
+            }
+        });
+    }
+
+    // Identificar modelos dudosos de la tarifa con Gemini (ultra-bajo consumo de tokens)
+    const btnResolveTariffAi = document.getElementById("btn-resolve-tariff-ai");
+    if (btnResolveTariffAi) {
+        btnResolveTariffAi.addEventListener("click", async () => {
+            const providerId = selectAuditProvider?.value;
+            if (!providerId) {
+                alert("Por favor selecciona una tarifa de proveedor activa.");
+                return;
+            }
+
+            btnResolveTariffAi.disabled = true;
+            const originalHtml = btnResolveTariffAi.innerHTML;
+            btnResolveTariffAi.innerHTML = `<span>⏳ Consultando Gemini...</span>`;
+
+            try {
+                const res = await fetch(`/api/tariffs/${encodeURIComponent(providerId)}/resolve-unknown-appliances`, {
+                    method: "POST"
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.detail || "Error al identificar modelos con IA");
+                }
+
+                alert(`✨ ¡Completado! Se identificaron ${data.resolved_count || 0} modelos con Gemini (${data.updated_items_count || 0} artículos enriquecidos).`);
+
+                // Re-ejecutar comprobación para actualizar la tabla con los tipos canónicos resueltos
+                if (btnRunAudit) {
+                    btnRunAudit.click();
+                }
+            } catch (err) {
+                alert(`❌ ${err.message}`);
+            } finally {
+                btnResolveTariffAi.disabled = false;
+                btnResolveTariffAi.innerHTML = originalHtml;
             }
         });
     }

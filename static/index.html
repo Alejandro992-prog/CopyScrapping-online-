@@ -819,26 +819,31 @@
                 </div>
 
                 <!-- KPI Cards Row -->
-                <div class="grid-4col mb-20" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                <div class="grid-4col mb-20" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
+                    <div class="card" style="border-left: 4px solid #6366f1; padding: 15px;">
+                        <div style="font-size: 11px; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.5px;">📑 TOTAL EN TARIFA</div>
+                        <div id="audit-kpi-total-tariff" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
+                        <div id="audit-kpi-total-tariff-sub" style="font-size: 11px; color: var(--text-muted);">Referencias en catálogo</div>
+                    </div>
                     <div class="card" style="border-left: 4px solid #ef4444; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">🔴 PRODUCTOS AGOTADOS</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">🔴 A PEDIR (ROTURAS)</div>
                         <div id="audit-kpi-shortages" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
                         <div style="font-size: 11px; color: var(--text-muted);">0 existencias en almacén</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #f59e0b; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">🟡 CASI AGOTADOS</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">🟡 REPONER (STOCK BAJO)</div>
                         <div id="audit-kpi-low" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
                         <div style="font-size: 11px; color: var(--text-muted);">Menos del umbral marcado</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #10b981; padding: 15px;">
-                        <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">🟢 HAY STOCK SUFICIENTE</div>
+                        <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase; letter-spacing: 0.5px;">🟢 CUBIERTOS (STOCK OK)</div>
                         <div id="audit-kpi-ok" style="font-size: 28px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Existencias disponibles</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Existencias suficientes</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #3b82f6; padding: 15px;">
                         <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">💶 COSTE ESTIMADO DEL PEDIDO</div>
                         <div id="audit-kpi-cost" style="font-size: 24px; font-weight: 800; color: var(--text-color); margin: 6px 0 2px 0;">0,00 €</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">Inversión necesaria para reponer</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">Inversión a precio tarifa</div>
                     </div>
                     <div class="card" style="border-left: 4px solid #8b5cf6; padding: 15px;">
                         <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">📦 VENTAS REGISTRADAS</div>
@@ -863,7 +868,10 @@
 
                 <!-- Sub-Navigation for Result Tables -->
                 <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; flex-wrap: wrap;">
-                    <button class="btn btn-sm audit-subtab-btn active" data-subtab="audit-subtab-shortages" style="display: flex; align-items: center; gap: 6px;">
+                    <button class="btn btn-sm audit-subtab-btn active" data-subtab="audit-subtab-tariff" style="display: flex; align-items: center; gap: 6px;">
+                        📑 Tarifa Proveedor (Visión Global) (<span id="count-badge-tariff">0</span>)
+                    </button>
+                    <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-shortages" style="display: flex; align-items: center; gap: 6px;">
                         🔴 Agotados / Sin Stock (<span id="count-badge-shortages">0</span>)
                     </button>
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-low" style="display: flex; align-items: center; gap: 6px;">
@@ -878,6 +886,50 @@
                     <button class="btn btn-sm audit-subtab-btn btn-secondary" data-subtab="audit-subtab-surplus" style="display: flex; align-items: center; gap: 6px;">
                         ⚪ En Almacén fuera de Catálogo (<span id="count-badge-surplus">0</span>)
                     </button>
+                </div>
+
+                <!-- Subtab 0: Vista Global sobre la Tarifa del Proveedor -->
+                <div id="audit-subtab-tariff" class="audit-subtab-content">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; background: rgba(15, 23, 42, 0.4); padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border-color);">
+                        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;" id="tariff-quick-filters">
+                            <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-right: 4px;">Mostrar:</span>
+                            <button type="button" class="btn btn-xs btn-primary tariff-filter-btn active" data-status="all">Todos</button>
+                            <button type="button" class="btn btn-xs btn-secondary tariff-filter-btn" data-status="ROTURA" style="color: #ef4444; border-color: rgba(239,68,68,0.3);">🔴 Solo a Pedir (0 uds)</button>
+                            <button type="button" class="btn btn-xs btn-secondary tariff-filter-btn" data-status="BAJO" style="color: #f59e0b; border-color: rgba(245,158,11,0.3);">🟡 Reponer (Stock bajo)</button>
+                            <button type="button" class="btn btn-xs btn-secondary tariff-filter-btn" data-status="OK" style="color: #10b981; border-color: rgba(16,185,129,0.3);">🟢 Cubiertos</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button type="button" id="btn-resolve-tariff-ai" class="btn btn-xs btn-primary" style="display: none; align-items: center; gap: 5px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none; padding: 5px 12px; font-weight: 600; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35); cursor: pointer;">
+                                <span>✨ Identificar con IA (<span id="unknown-appliances-count">0</span> dudosas)</span>
+                            </button>
+                            <div style="font-size: 12px; color: var(--text-muted);" id="tariff-table-summary">
+                                Mostrando <strong id="tariff-visible-count">0</strong> artículos de la tarifa
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Tipo de Aparato</th>
+                                    <th>Modelo / Ref.</th>
+                                    <th>Descripción y Características</th>
+                                    <th style="text-align: center;">Stock Almacén</th>
+                                    <th style="text-align: center;">¿Qué hacer? (Estado)</th>
+                                    <th style="text-align: center;">Cantidad a Pedir</th>
+                                    <th style="text-align: right;">Coste Tarifa (€)</th>
+                                    <th style="text-align: right;">Total Pedido (€)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-body-tariff">
+                                <tr>
+                                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                                        Selecciona una tarifa y pulsa "Comprobar Faltas" para examinar el catálogo completo y tu stock de almacén.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- Subtab 1: Shortages / Reorder Table -->
@@ -1218,7 +1270,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=1.0.6"></script>
+    <script src="/static/app.js?v=1.0.7"></script>
 </body>
 </html>
 

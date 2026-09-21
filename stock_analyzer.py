@@ -120,6 +120,329 @@ def delete_tariff(tariff_id: str) -> bool:
             return False
     return False
 
+def normalize_sku(sku: str) -> str:
+    """Normaliza un SKU/Modelo eliminando espacios, guiones, barras y pasando a mayúsculas."""
+    if not sku:
+        return ""
+    s = str(sku).upper().strip()
+    s = re.sub(r'[\s\-/\._]', '', s)
+    return s
+
+# Caché persistente de clasificación de modelos (evita re-consultar a Gemini o recalcular)
+_appliance_cache = None
+
+def get_appliance_cache_file() -> str:
+    return os.path.join(get_base_data_dir(), "appliance_models_cache.json")
+
+def load_appliance_cache() -> Dict[str, str]:
+    """Carga el diccionario de modelos ya clasificados desde disco."""
+    global _appliance_cache
+    if _appliance_cache is not None:
+        return _appliance_cache
+    fpath = get_appliance_cache_file()
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                _appliance_cache = json.load(f)
+                return _appliance_cache
+        except Exception:
+            _appliance_cache = {}
+            return _appliance_cache
+    _appliance_cache = {}
+    return _appliance_cache
+
+def update_appliance_cache(new_entries: Dict[str, str]):
+    """Actualiza la caché persistente con nuevos modelos clasificados."""
+    global _appliance_cache
+    cache = load_appliance_cache()
+    changed = False
+    for k, v in new_entries.items():
+        clean_k = normalize_sku(k)
+        clean_v = str(v).strip()
+        if clean_k and clean_v and clean_v != "Otros":
+            if cache.get(clean_k) != clean_v:
+                cache[clean_k] = clean_v
+                changed = True
+    if changed:
+        _appliance_cache = cache
+        fpath = get_appliance_cache_file()
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error persistiendo caché de electrodomésticos: {e}")
+
+def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
+    """
+    Decodifica el tipo de aparato basándose en la nomenclatura estándar y prefijos de fabricantes
+    (Infiniton, Beko, Balay/BSH, Teka, Cecotec, Candy, etc.). Gasto: 0 tokens, instantáneo.
+    """
+    if not model:
+        return None
+    m = normalize_sku(model)
+    
+    # 1. Lavado y Secado combinado
+    if m.startswith(('WSD', 'LAVASECADORA', 'WASHERDRYER', 'HTV', 'WDU', 'WD')):
+        return 'Lavadoras-Secadoras'
+        
+    # 2. Lavadoras
+    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WTE', 'BM3WFU', 'B3WFU', 'TKD', 'WMT', 'EVO', 'CSS', 'RO', 'RP')):
+        return 'Lavadoras'
+        
+    # 3. Secadoras
+    if m.startswith(('SD', '3SB', 'WTN', 'WQG', 'B3T', 'DH7', 'DH8', 'DH9', 'DF7', 'DF8', 'CSOE', 'NDPE')):
+        return 'Secadoras'
+        
+    # 4. Lavavajillas (distinguiendo 45cm y 60cm si es posible)
+    if m.startswith(('DIW45', 'DW45', 'DFS', 'DIS', 'SPS', '3VN', 'CDPH', 'CDP45')):
+        return 'Lavavajillas 45cm'
+    if m.startswith(('DIW', 'DW', '3VS', '3VT', 'SMS', 'SMV', 'BDEN', 'DFN', 'DIN', 'DFI', 'CDPN', 'CDIN', 'HIA')):
+        return 'Lavavajillas 60cm'
+        
+    # 5. Frigoríficos y Congeladores
+    if m.startswith(('SBS', 'FRD', 'AMCB', 'GNE', 'KAD', 'FD', 'HCR')):
+        return 'Frigos americanos'
+    if m.startswith(('FGC', '3KFE', '3KFC', 'KGN', 'KGF', 'RCNE', 'RCNT', 'B5RCNE', 'B3RCNE', 'NFL', 'NFE', 'RBF', 'CCE', 'HBE')):
+        return 'Frigo Combi'
+    if m.startswith(('CLR', 'CL', 'KSW', '3FCE', 'SVE')):
+        return 'Frigo 1 puerta'
+    if m.startswith(('CVF', 'CV', 'GSN', '3GIE', 'GF', 'HCE')):
+        return 'Congelador Vertical'
+    if m.startswith(('FCH', 'CH', 'HSMCONG', 'CF', 'OF')):
+        return 'Congelador Horizontal'
+    if m.startswith(('FG2', 'FGD', 'FG', 'RDNT', 'KD', 'CTE')):
+        return 'Frigo 2 puertas'
+        
+    # 6. Cocción, Hornos y Microondas
+    if m.startswith(('HOR', 'HSM', '3HB', 'HBA', 'HBJ', 'BBIE', 'BBIM', 'BIE', 'HLC', 'HLB', 'HBE', 'FCP', 'FIDC')):
+        return 'Hornos'
+    if m.startswith(('IMW', 'MW', '3CG', '3CP', 'MGB', 'BMO', 'MIC', 'CMI')):
+        return 'Microondas'
+    if m.startswith(('INPT', 'IND', 'BIN', '3EB', 'PIE', 'PUJ', 'HII', 'IBC', 'IZC', 'CI', 'CTP')):
+        return 'Inducción'
+    if m.startswith(('VIT', '3ET', 'HIC', 'TZ', 'TB', 'CH', 'EVT')):
+        return 'Vitrocerámica'
+    if m.startswith(('GGP', 'GAS', 'GG', '3ETG', 'HIZG', 'HIA', 'CG', 'GPC')):
+        return 'Placa de Gas'
+    if m.startswith(('CC9', 'CC', 'CG9', 'CGE')):
+        return 'Cocinas'
+        
+    # 7. Extracción
+    if m.startswith(('CMPTRAL', 'CMPT', 'CMPP', 'CMPG', 'CMPB', 'CMP', '3BC', '3BD', 'DWK', 'HCA', 'BHCA', 'CTB', 'GFH', 'CNL', 'TL', 'DBB', '76AGX', '78GLN', 'HHW')):
+        return 'Campana'
+        
+    # 8. Climatización, Agua y Vinotecas
+    if m.startswith(('CAS', 'SPLIT', 'AC', 'INV')):
+        return 'Aire Acondicionado'
+    if m.startswith(('WCL', 'WFL', 'CWC', 'DIV')):
+        return 'Vinotecas'
+    if m.startswith(('CAB3HV', 'HV', 'HWR', 'GWA', 'GWB', 'GWN', 'TS', 'TRE')):
+        return 'Termos y Calentadores'
+    if m.startswith(('DHM', 'DEHUM')):
+        return 'Deshumidificadores'
+    if m.startswith(('AP2', 'AP3', 'AIRPUR')):
+        return 'Purificadores de Aire'
+    if m.startswith(('GRILL',)):
+        return 'Microondas'
+        
+    return None
+
+def classify_appliance_type(text: str, model: str = "") -> str:
+    """
+    Identifica el tipo de aparato (categoría canónica).
+    Flujo de alta eficiencia:
+    1. Caché local persistente (0 tokens).
+    2. Reglas por texto descriptivo.
+    3. Decodificador de prefijos de fabricante (0 tokens).
+    4. Diccionario de sinónimos.
+    """
+    if not text and not model:
+        return "Otros"
+        
+    # 1. Comprobar primero en la caché persistente de modelos
+    if model:
+        norm_m = normalize_sku(model)
+        cache = load_appliance_cache()
+        if norm_m in cache:
+            return cache[norm_m]
+
+    combined = f"{text} {model}".lower()
+    
+    # 2. Caso especial combinado
+    if ("lavadora" in combined and "secadora" in combined) or any(s in combined for s in ["lavasecadora", "lavasecadoras", "washer dryer", "washer-dryer", "lava-secadora"]):
+        return "Lavadoras-Secadoras"
+    
+    # 3. Lavavajillas
+    if any(s in combined for s in ["lavavajillas 45", "lavaplatos 45", "45 cm", "45cm", "estrecho"]) and any(s in combined for s in ["lavavajillas", "lavaplatos", "dishwasher"]):
+        return "Lavavajillas 45cm"
+    if any(s in combined for s in ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos"]):
+        return "Lavavajillas 60cm"
+        
+    # 4. Frigoríficos
+    if any(s in combined for s in ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "french door", "4 puertas"]):
+        return "Frigos americanos"
+    if any(s in combined for s in ["combi", "combis", "combinado"]):
+        return "Frigo Combi"
+    if any(s in combined for s in ["1 puerta", "una puerta", "monopuerta", "cooler", "table top", "tabletop", "congelador vertical", "congeladores verticales"]):
+        return "Frigo 1 puerta"
+    if any(s in combined for s in ["2 puertas", "dos puertas", "2 ptas", "dos-puertas"]):
+        return "Frigo 2 puertas"
+    if any(s in combined for s in ["integrable", "integrables", "encastrable", "panelable"]) and any(s in combined for s in ["frigo", "frigorifico", "frigorífico", "nevera"]):
+        return "Frigos integrables"
+    if any(s in combined for s in ["congelador horizontal", "arcon", "arcón", "chest freezer"]):
+        return "Congelador Horizontal"
+    if any(s in combined for s in ["frigorifico", "frigorífico", "frigo", "refrigerador", "congelador", "freezer", "nevera"]):
+        return "Frigoríficos"
+        
+    # 5. Lavado y secado
+    if any(s in combined for s in ["lavadora", "washer", "lavarropa", "carga frontal", "carga superior"]):
+        return "Lavadoras"
+    if any(s in combined for s in ["secadora", "dryer", "bomba de calor", "heat pump"]):
+        return "Secadoras"
+        
+    # 6. Cocción y extracción
+    if any(s in combined for s in ["induccion", "inducción", "flex induction", "flexinduccion"]):
+        return "Inducción"
+    if any(s in combined for s in ["vitroceramica", "vitrocerámica", "radiante", "hilight"]):
+        return "Vitrocerámica"
+    if any(s in combined for s in ["placa gas", "cristal gas", "butano", "gas natural", "encimera gas"]) or (any(s in combined for s in ["placa", "encimera"]) and "gas" in combined):
+        return "Placa de Gas"
+    if any(s in combined for s in ["vitro", "placa", "encimera"]):
+        return "Vitrocerámicas"
+    if any(s in combined for s in ["horno", "oven", "pirolitico", "pirolítico", "multifuncion", "multifunción"]):
+        return "Hornos"
+    if any(s in combined for s in ["microondas", "microwave"]):
+        return "Microondas"
+    if any(s in combined for s in ["campana", "extractor", "decorativa", "grupo filtrante"]):
+        return "Campana"
+    if any(s in combined for s in ["televisor", "television", "televisión", "smart tv", "tv", "qled", "oled"]):
+        return "Televisor"
+    if any(s in combined for s in ["termo", "calentador", "acumulador agua"]):
+        return "Termos y Calentadores"
+    if any(s in combined for s in ["aire acondicionado", "climatizador", "split"]):
+        return "Aire Acondicionado"
+    if any(s in combined for s in ["vinoteca", "cava de vino", "vinera"]):
+        return "Vinotecas"
+    if any(s in combined for s in ["deshumidificador"]):
+        return "Deshumidificadores"
+        
+    # 7. Decodificación precisa por prefijo/código de modelo del fabricante
+    if model:
+        decoded = decode_model_prefix(model)
+        if decoded:
+            return decoded
+            
+    # 8. Fallback a data/dictionary.json si existe
+    try:
+        dict_path = os.path.join(get_base_data_dir(), "dictionary.json")
+        if os.path.exists(dict_path):
+            with open(dict_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                cats = d.get("categorias", {})
+                for cat_k, cat_v in cats.items():
+                    syns = cat_v.get("sinonimos", [])
+                    if any(syn in combined for syn in syns):
+                        return cat_k
+    except Exception:
+        pass
+        
+    return "Otros"
+
+def extract_appliance_features(text: str, model: str = "") -> str:
+    """Extrae características técnicas clave (capacidad, revoluciones, zonas, tecnología, color/acabado) de texto y modelo."""
+    if not text and not model:
+        return ""
+    combined_raw = f"{text} {model}".strip()
+    features = []
+    
+    # 1. Capacidad en kg (Lavadoras / Secadoras)
+    m_kg = re.search(r'\b(\d+(?:[\.,]\d+)?)\s*(?:kg|kilos|kilogramos)\b', combined_raw, re.IGNORECASE)
+    if not m_kg and model:
+        m_kg_code = re.search(r'(?:WM|TLW|SD|WSD)[-_]?(\d{1,2})(?:\d{2})?', model.upper())
+        if m_kg_code and int(m_kg_code.group(1)) in range(5, 16):
+            m_kg = m_kg_code
+    if m_kg:
+        features.append(f"{m_kg.group(1)} kg")
+        
+    # 2. Revoluciones (rpm)
+    m_rpm = re.search(r'\b(\d{3,4})\s*(?:rpm|r\.p\.m\.|rev)\b', combined_raw, re.IGNORECASE)
+    if not m_rpm and model:
+        m_rpm_code = re.search(r'(?:WM|WSD)[-_]?\d{1,2}(\d{2})\b', model.upper())
+        if m_rpm_code:
+            digits = m_rpm_code.group(1)
+            if digits in ["10", "12", "14", "16"]:
+                features.append(f"{digits}00 rpm")
+    elif m_rpm:
+        features.append(f"{m_rpm.group(1)} rpm")
+        
+    # 3. Capacidad en litros (Frigoríficos / Hornos / Microondas / Termos / Deshumidificadores)
+    m_l = re.search(r'\b(\d{2,3})\s*(?:l|litros|lts)\b', combined_raw, re.IGNORECASE)
+    if not m_l and model:
+        m_l_code = re.search(r'[-_](\d{2,3})[lL]\b|HV(\d{2,3})T|[-_](\d{2,3})[A-Z]?$', model.upper())
+        if m_l_code:
+            found_l = m_l_code.group(1) or m_l_code.group(2) or m_l_code.group(3)
+            if found_l and 10 <= int(found_l) <= 650:
+                features.append(f"{found_l} L")
+    elif m_l:
+        features.append(f"{m_l.group(1)} L")
+        
+    # 4. Servicios / cubiertos (Lavavajillas)
+    m_serv = re.search(r'\b(\d{1,2})\s*(?:cubiertos|servicios)\b', combined_raw, re.IGNORECASE)
+    if m_serv:
+        features.append(f"{m_serv.group(1)} cubiertos")
+        
+    # 5. Zonas de cocción (Placas)
+    m_zonas = re.search(r'\b([2-5])\s*(?:zonas|fuegos)\b', combined_raw, re.IGNORECASE)
+    if m_zonas:
+        features.append(f"{m_zonas.group(1)} zonas")
+        
+    # 6. Altura/Medida en cm (Frigoríficos / Lavavajillas)
+    m_cm = re.search(r'\b(1[4-9]\d|20\d)\s*(?:cm)?\b', combined_raw)
+    if not m_cm and model:
+        m_cm_code = re.search(r'(?:FGC|FG|CL|CV)[-_]?(\d{3})\b', model.upper())
+        if m_cm_code and 140 <= int(m_cm_code.group(1)) <= 205:
+            features.append(f"{m_cm_code.group(1)} cm")
+    elif m_cm and any(k in combined_raw.lower() for k in ["frigo", "combi", "nevera", "congelador", "fgc"]):
+        features.append(f"{m_cm.group(1)} cm")
+        
+    # Medida lavavajillas en modelo
+    if "45" in model and any(k in model.upper() for k in ["DIW45", "DW45", "DFS", "3VN"]):
+        features.append("45 cm")
+    elif any(k in model.upper() for k in ["DIW60", "DW60", "3VS", "DFN"]):
+        features.append("60 cm")
+        
+    # 7. Tecnología relevante
+    t_lower = combined_raw.lower()
+    if "no frost" in t_lower or "total no frost" in t_lower:
+        features.append("No Frost")
+    elif "low frost" in t_lower:
+        features.append("Low Frost")
+    if "bomba de calor" in t_lower or "heat pump" in t_lower:
+        features.append("Bomba de calor")
+    if "pirolitico" in t_lower or "pirolítico" in t_lower or "pirólisis" in t_lower:
+        features.append("Pirolítico")
+    if "inverter" in t_lower:
+        features.append("Inverter")
+        
+    # 8. Acabado / Color
+    if re.search(r'\b(?:inox|acero|acero inoxidable)\b', t_lower) or model.upper().endswith(('X', 'IX', 'INX')):
+        features.append("Inox")
+    elif re.search(r'\b(?:blanco|white)\b', t_lower) or model.upper().endswith(('W', 'WH', 'BL')):
+        features.append("Blanco")
+    elif re.search(r'\b(?:negro|black|cristal negro)\b', t_lower) or model.upper().endswith(('B', 'BK', 'NB')):
+        features.append("Negro")
+        
+    # Eliminar duplicados manteniendo orden
+    seen = set()
+    unique_feats = []
+    for f in features:
+        if f.lower() not in seen:
+            seen.add(f.lower())
+            unique_feats.append(f)
+            
+    return " • ".join(unique_feats)
+
+
 def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[str, Any]]:
     """Extrae productos y precios desde un archivo Excel o CSV de tarifa de proveedor con detección inteligente de cabecera y columnas."""
     if pd is None:
@@ -261,6 +584,9 @@ def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[s
 
         final_brand = brand_val or default_provider
         final_product = product_val or f"{final_brand} {model_val}"
+        
+        cat_val = classify_appliance_type(final_product + " " + model_val, model_val)
+        feat_val = extract_appliance_features(final_product)
 
         items.append({
             "model": model_val or product_val[:25],
@@ -268,7 +594,8 @@ def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[s
             "ean": ean_val if ean_val not in ["nan", "None"] else "",
             "price": round(price_val, 2),
             "brand": final_brand,
-            "attributes": ""
+            "category": cat_val,
+            "attributes": feat_val
         })
     return items
 
@@ -303,12 +630,15 @@ def parse_pdf_tariff(filepath: str, default_provider: str = "", api_key: Optiona
                         desc_str = line_str.replace(model_str, "").replace(price_match.group(0), "").strip()
                         if not desc_str:
                             desc_str = f"{default_provider} {model_str}"
+                        cat_val = classify_appliance_type(desc_str + " " + model_str, model_str)
+                        feat_val = extract_appliance_features(desc_str)
                         items.append({
                             "model": model_str,
                             "product": desc_str,
-                            "price": p_val,
+                            "price": round(p_val, 2),
                             "brand": default_provider,
-                            "attributes": ""
+                            "category": cat_val,
+                            "attributes": feat_val
                         })
     except Exception as e:
         print(f"Error parseando PDF de tarifa: {e}")
@@ -343,13 +673,22 @@ Texto del PDF:
             clean_json = re.sub(r'^```json\s*|^```\s*|```$', '', resp_text.strip(), flags=re.MULTILINE)
             gemini_items = json.loads(clean_json)
             if isinstance(gemini_items, list) and len(gemini_items) > 0:
-                items = [{
-                    "model": str(it.get("model", "")),
-                    "product": str(it.get("product", "")),
-                    "price": float(it.get("price", 0.0)),
-                    "brand": default_provider,
-                    "attributes": ""
-                } for it in gemini_items]
+                items = []
+                for it in gemini_items:
+                    m = str(it.get("model", "")).strip()
+                    p = str(it.get("product", "")).strip()
+                    pr = float(it.get("price", 0.0))
+                    if m:
+                        cat_val = classify_appliance_type(p + " " + m, m)
+                        feat_val = extract_appliance_features(p)
+                        items.append({
+                            "model": m,
+                            "product": p,
+                            "price": round(pr, 2),
+                            "brand": default_provider,
+                            "category": cat_val,
+                            "attributes": feat_val
+                        })
         except Exception as e_gem:
             print(f"Gemini fallback en PDF de tarifa: {e_gem}")
 
@@ -477,11 +816,23 @@ def load_snapshot(snapshot_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 def load_provider_tariff_items(provider_filename_or_id: str) -> List[Dict[str, Any]]:
-    """Carga los artículos de una tarifa de proveedor desde data/tariffs/ o data/extractions/."""
+    """Carga los artículos de una tarifa de proveedor desde data/tariffs/ o data/extractions/ enriqueciendo categoría y atributos."""
+    def _enrich_tariff_items(raw_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for it in raw_items:
+            prod = str(it.get("product") or "")
+            mod = str(it.get("model") or "")
+            if not it.get("category") or it.get("category") in ["N/D", "Otros", ""]:
+                cat = classify_appliance_type(prod + " " + mod, mod)
+                if cat != "Otros" or not it.get("category"):
+                    it["category"] = cat
+            if not it.get("attributes"):
+                it["attributes"] = extract_appliance_features(prod, mod)
+        return raw_items
+
     # 1. Comprobar si es un ID de tarifa guardada en data/tariffs/
     tariff_obj = load_tariff(provider_filename_or_id)
     if tariff_obj and "items" in tariff_obj:
-        return tariff_obj["items"]
+        return _enrich_tariff_items(tariff_obj["items"])
 
     # 2. Comprobar en data/tariffs/ por coincidencia de nombre
     tariffs_dir = get_tariffs_dir()
@@ -489,7 +840,7 @@ def load_provider_tariff_items(provider_filename_or_id: str) -> List[Dict[str, A
         if fname.endswith(".json") and provider_filename_or_id in fname:
             t = load_tariff(fname.replace("tariff_", "").replace(".json", ""))
             if t and "items" in t:
-                return t["items"]
+                return _enrich_tariff_items(t["items"])
 
     # 3. Fallback a data/extractions/ para compatibilidad con archivos previos
     extractions_dir = os.path.join(get_base_data_dir(), "extractions")
@@ -539,7 +890,7 @@ def load_provider_tariff_items(provider_filename_or_id: str) -> List[Dict[str, A
                     "attributes": str(row_dict.get("attributes") or row_dict.get("atributos_tecnicos") or ""),
                     "raw_row": row_dict
                 })
-        return items
+        return _enrich_tariff_items(items)
     except Exception as e:
         print(f"Error cargando tarifa {provider_filename_or_id}: {e}")
         return []
@@ -562,7 +913,7 @@ def compare_stock_vs_tariff(
         f_clean = norm_cat_filter.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
         return f_clean in t_clean
 
-    # 1. Crear índice de búsqueda rápida en stock
+    # 1. Crear índice de búsqueda rápida en stock de almacén (ignorando precios de almacén)
     stock_by_sku: Dict[str, Dict[str, Any]] = {}
     stock_by_ean: Dict[str, Dict[str, Any]] = {}
     stock_by_desc: List[Dict[str, Any]] = []
@@ -588,9 +939,10 @@ def compare_stock_vs_tariff(
 
     matched_stock_skus = set()
     
-    shortages = []   # Roturas totales (0 uds o ausentes en almacén)
-    low_stock = []   # Stock crítico (1 a threshold uds)
-    in_stock = []    # Stock saludable (> threshold uds)
+    tariff_view = [] # Vista unificada completa de la tarifa con el estado de existencias
+    shortages = []   # Roturas totales (0 uds o ausentes en almacén) -> Pedir
+    low_stock = []   # Stock crítico (1 a threshold uds) -> Reponer
+    in_stock = []    # Stock saludable (> threshold uds) -> Cubierto
     
     total_order_cost = 0.0
 
@@ -646,7 +998,18 @@ def compare_stock_vs_tariff(
 
         current_qty = 0
         stock_sku = model
-        category = "N/D"
+        
+        # Priorizar categorización de la tarifa, luego de stock, luego inferir
+        resolved_category = (
+            t_item.get("category") or 
+            (matched.get("category") if matched and matched.get("category") not in ["N/D", "Otros", ""] else "") or 
+            classify_appliance_type(product + " " + model, model)
+        )
+        resolved_attributes = (
+            t_item.get("attributes") or 
+            (matched.get("capacity") if matched else "") or 
+            extract_appliance_features(product, model)
+        )
         description = product
         
         if matched:
@@ -658,7 +1021,6 @@ def compare_stock_vs_tariff(
                     current_qty = int(float(matched.get("stock", 0)))
                 except Exception:
                     current_qty = 0
-            category = matched.get("category") or "N/D"
             description = matched.get("description") or product
             stock_sku = matched.get("sku") or model
 
@@ -666,29 +1028,40 @@ def compare_stock_vs_tariff(
             "model": model,
             "sku": stock_sku,
             "product": description,
-            "category": category,
+            "category": resolved_category,
             "stock": current_qty,
             "supplier_price": price,
-            "attributes": t_item.get("attributes", ""),
+            "attributes": resolved_attributes,
             "matched_in_warehouse": matched is not None
         }
 
         if current_qty == 0:
             suggested_reorder = max(1, low_stock_threshold * 2)
+            entry["status"] = "ROTURA"
+            entry["status_label"] = "🔴 Pedir (0 uds)"
+            entry["action"] = "PEDIR"
             entry["suggested_reorder"] = suggested_reorder
             entry["reorder_cost"] = round(suggested_reorder * price, 2)
             total_order_cost += entry["reorder_cost"]
             shortages.append(entry)
         elif current_qty <= low_stock_threshold:
             suggested_reorder = max(1, (low_stock_threshold * 2) - current_qty)
+            entry["status"] = "BAJO"
+            entry["status_label"] = f"🟡 Reponer ({current_qty} uds)"
+            entry["action"] = "REPONER"
             entry["suggested_reorder"] = suggested_reorder
             entry["reorder_cost"] = round(suggested_reorder * price, 2)
             total_order_cost += entry["reorder_cost"]
             low_stock.append(entry)
         else:
+            entry["status"] = "OK"
+            entry["status_label"] = f"🟢 Cubierto ({current_qty} uds)"
+            entry["action"] = "CUBIERTO"
             entry["suggested_reorder"] = 0
             entry["reorder_cost"] = 0.0
             in_stock.append(entry)
+
+        tariff_view.append(entry)
 
     # 3. Detectar referencias del almacén que no están en la tarifa (posible descatalogado o excedente)
     surplus_items = []
@@ -707,13 +1080,15 @@ def compare_stock_vs_tariff(
         "brand": brand_filter or "Todas",
         "low_stock_threshold": low_stock_threshold,
         "kpis": {
-            "total_tariff_items": len(shortages) + len(low_stock) + len(in_stock),
+            "total_tariff_items": len(tariff_view),
             "shortages_count": len(shortages),
             "low_stock_count": len(low_stock),
             "in_stock_count": len(in_stock),
             "surplus_count": len(surplus_items),
-            "total_estimated_reorder_cost": round(total_order_cost, 2)
+            "total_estimated_reorder_cost": round(total_order_cost, 2),
+            "total_items_to_order": len(shortages) + len(low_stock)
         },
+        "tariff_view": tariff_view,
         "shortages": shortages,
         "low_stock": low_stock,
         "in_stock": in_stock,
