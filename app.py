@@ -4521,6 +4521,38 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
     marcas_dict = dct.get("marcas", {})
     universal_units = ["kg", "l", "cubiertos", "servicios", "botellas", "zonas", "fuegos", "m3/h", "db", "w", "v", "rpm", "r.p.m.", "r.p.m", "rev", "revoluciones", "r/min", "rev/min", "tr/min"]
     
+    def normalize_erp_lines(raw_lines: List[str]) -> List[str]:
+        """Fusiona líneas partidas por el formato de columnas del PDF o saltos antes del símbolo €."""
+        merged = []
+        idx = 0
+        while idx < len(raw_lines):
+            line = raw_lines[idx].strip()
+            if not line:
+                idx += 1
+                continue
+            if '€' not in line and '\u20ac' not in line:
+                if idx + 1 < len(raw_lines):
+                    next_l = raw_lines[idx+1].strip()
+                    if next_l == '€' or next_l == '\u20ac':
+                        if idx + 2 < len(raw_lines) and re.match(r'^\d+$', raw_lines[idx+2].strip()):
+                            line = f"{line} € {raw_lines[idx+2].strip()}"
+                            idx += 3
+                            merged.append(line)
+                            continue
+                        else:
+                            line = f"{line} €"
+                            idx += 2
+                            merged.append(line)
+                            continue
+                    elif next_l.startswith('€') or next_l.startswith('\u20ac'):
+                        line = f"{line} {next_l}"
+                        idx += 2
+                        merged.append(line)
+                        continue
+            merged.append(line)
+            idx += 1
+        return merged
+
     try:
         reader = pypdf.PdfReader(pdf_path)
         for page in reader.pages:
@@ -4528,7 +4560,8 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
             if not text:
                 continue
             
-            lines = text.split('\n')
+            raw_lines = text.split('\n')
+            lines = normalize_erp_lines(raw_lines)
             for line in lines:
                 line_str = line.strip()
                 if not line_str:
@@ -4558,7 +4591,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                     clean_left = re.sub(r'[\xa0\t]', ' ', left_part)
                     tokens = clean_left.split()
                     if len(tokens) >= 2:
-                        cost_val = None
+                        cost_val = 0.0
                         stock_val = 1
                         desc_end_idx = len(tokens)
                         
@@ -4566,7 +4599,25 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         prev_num = clean_numeric_token(tokens[-2])
                         third_num = clean_numeric_token(tokens[-3]) if len(tokens) >= 3 else None
                         
-                        if last_num is not None and prev_num is not None and prev_num > 0:
+                        # Caso 1: Artículos con coste 0.00 / 0.00 (ej: Cargador Sunstech DCU30BK, cables, promos)
+                        if last_num is not None and prev_num is not None and last_num == 0.0 and prev_num == 0.0:
+                            cost_val = 0.0
+                            if third_num is not None and third_num > 0:
+                                stock_val = max(1, int(round(third_num)))
+                                desc_end_idx = -3
+                            elif len(tokens) >= 3:
+                                m_stuck = re.search(r'(\d+)$', tokens[-3])
+                                if m_stuck:
+                                    stock_val = max(1, int(m_stuck.group(1)))
+                                    tokens[-3] = tokens[-3][:-len(m_stuck.group(1))].strip()
+                                    desc_end_idx = -2
+                                else:
+                                    stock_val = 1
+                                    desc_end_idx = -2
+                            else:
+                                stock_val = 1
+                                desc_end_idx = -2
+                        elif last_num is not None and prev_num is not None:
                             val_total = max(last_num, prev_num)
                             val_unit = min(last_num, prev_num)
                             
@@ -4578,30 +4629,39 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                                     desc_end_idx = -3
                                 else:
                                     desc_end_idx = -2
-                            # Regla 2: El antepenúltimo token es la cantidad (Stock) y cuadra matemáticamente
-                            elif third_num is not None and 0 < third_num < 10000:
-                                third_qty = int(round(third_num))
-                                if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
-                                    stock_val = max(1, third_qty)
-                                    cost_val = val_unit
-                                    desc_end_idx = -3
-                                elif abs(third_qty * last_num - prev_num) < max(2.5, prev_num * 0.05):
-                                    stock_val = max(1, third_qty)
-                                    cost_val = last_num
-                                    desc_end_idx = -3
-                                    
-                            # Regla 3: Si stock viene pegado al texto (ej: DEFROST32, CLASE E10) o calculable Total / Unitario
-                            if cost_val is None and val_unit > 0:
+                            elif val_unit > 0:
                                 ratio = val_total / val_unit
                                 calc_qty = round(ratio)
+                                cost_val = val_unit
+                                
+                                # Verificación matemática precisa de ratio Total / Unitario
                                 if calc_qty > 0 and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
-                                    stock_val = max(1, int(calc_qty))
-                                    cost_val = val_unit
-                                    desc_end_idx = -2
+                                    stock_val = int(calc_qty)
+                                    s_str = str(stock_val)
+                                    # Comprobar si tokens[-3] era el stock como número independiente
+                                    if third_num is not None and int(round(third_num)) == stock_val:
+                                        desc_end_idx = -3
+                                    elif len(tokens) >= 3 and tokens[-3].endswith(s_str):
+                                        # Despegar stock que vino adherido al final de una palabra (ej: GRILL15 -> GRILL)
+                                        tokens[-3] = tokens[-3][:-len(s_str)].strip()
+                                        desc_end_idx = -2
+                                    else:
+                                        desc_end_idx = -2
+                                elif third_num is not None and 0 < third_num < 10000:
+                                    third_qty = int(round(third_num))
+                                    if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                        stock_val = max(1, third_qty)
+                                        desc_end_idx = -3
+                                    else:
+                                        stock_val = 1
+                                        desc_end_idx = -2
                                 else:
-                                    cost_val = val_unit
                                     stock_val = 1
                                     desc_end_idx = -2
+                            else:
+                                cost_val = val_total
+                                stock_val = 1
+                                desc_end_idx = -2
                         elif last_num is not None:
                             cost_val = last_num
                             if prev_num and 0 < prev_num < 1000 and ',' not in tokens[-2] and '.' not in tokens[-2]:
@@ -4618,18 +4678,18 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                             # Limpiar prefijos de almacén pegados (ej: tienda+16)
                             desc_tokens = [re.sub(r'^(?:tienda\+|alm\+)', '', t) for t in desc_tokens if t]
                             
-                            # Limpiar stock si quedó adherido al final de una palabra de descripción (ej: DEFROST32 -> DEFROST, E10 -> E)
+                            # Limpiar stock si quedó adherido al final de una palabra de descripción
                             if desc_tokens and stock_val > 1:
                                 last_dtok = desc_tokens[-1]
                                 s_str = str(stock_val)
-                                if last_dtok.endswith(s_str) and len(last_dtok) > len(s_str) and not last_dtok[-len(s_str)-1].isdigit():
+                                if last_dtok.endswith(s_str) and len(last_dtok) > len(s_str):
                                     desc_tokens[-1] = last_dtok[:-len(s_str)].strip()
                                     
                             # Limpiar cantidad o coste del final de la descripción si se quedó residual
                             while desc_tokens:
-                                last_dtok = desc_tokens[-1]
+                                last_dtok = desc_tokens[-1].strip()
                                 s_str = str(stock_val)
-                                if last_dtok == s_str or last_dtok == "1":
+                                if not last_dtok or last_dtok == s_str or last_dtok == "1":
                                     desc_tokens.pop()
                                     continue
                                 if cost_val is not None:
@@ -4927,14 +4987,10 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         i += 1
                         continue
                         
-                    # Si no es atributo técnico, comprobar si es un número puro candidato a stock/coste
-                    number_match = re.match(r'^\d+(?:[\.,]\d+)?$', token)
-                    if number_match:
-                        try:
-                            val = float(token.replace(",", "."))
-                            candidate_numbers.append((token, val))
-                        except ValueError:
-                            pass
+                    # Si no es atributo técnico, comprobar si es un número candidato a stock/coste
+                    val = clean_numeric_token(token)
+                    if val is not None:
+                        candidate_numbers.append((token, val))
                     else:
                         # Si es palabra de descripción
                         if token.lower() not in ["de", "con", "el", "la", "en", "para"]:
