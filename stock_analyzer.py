@@ -129,6 +129,21 @@ def normalize_sku(sku: str) -> str:
     s = re.sub(r'[\s\-/\._]', '', s)
     return s
 
+def is_valid_Main_SKU(val: Any) -> bool:
+    """Verifica si un string tiene características de código de modelo o SKU principal."""
+    if val is None:
+        return False
+    s = str(val).strip()
+    if len(s) < 2 or len(s) > 40:
+        return False
+    if " " in s and len(s.split()) > 2:
+        return False
+    if not re.search(r'\d', s):
+        return False
+    if re.match(r'^\d{1,4}[-/\.]\d{1,2}[-/\.]\d{2,4}$', s):
+        return False
+    return True
+
 def extract_base_model(sku: str) -> str:
     """
     Extrae el modelo base eliminando revisiones de fabricante (/01, /02), sufijos de país

@@ -34,6 +34,22 @@ def _trim_sessions(store: Dict[str, Any]):
         store.pop(oldest_key, None)
 
 
+def is_valid_sku(val: Any) -> bool:
+    """Verifica si un string tiene características de código de modelo o SKU principal."""
+    if val is None:
+        return False
+    s = str(val).strip()
+    if len(s) < 2 or len(s) > 40:
+        return False
+    if " " in s and len(s.split()) > 2:
+        return False
+    if not re.search(r'\d', s):
+        return False
+    if re.match(r'^\d{1,4}[-/\.]\d{1,2}[-/\.]\d{2,4}$', s):
+        return False
+    return True
+
+
 def clean_price_value(val: Any) -> Optional[float]:
     """Convierte cualquier representación de precio (europea o anglosajona) a float."""
     if val is None:
@@ -220,7 +236,7 @@ def _detect_header_and_columns(df: pd.DataFrame, forced_header_row: Optional[int
             is_ean = len(digits_only) >= 8 and (',' not in val and '.' not in val)
             if p_val is not None and not is_ean and 5.0 <= p_val <= 15000.0:
                 price_hits += 1
-            if stock_analyzer.is_valid_Main_SKU(val):
+            if is_valid_sku(val):
                 sku_hits += 1
             if len(val) >= 15 and " " in val:
                 desc_hits += 1
@@ -453,7 +469,7 @@ def extract_tariff_with_mapping(
         raw_model = re.split(r'[\r\n]+', raw_model)[0].strip()
         if len(raw_model) < 2 or not any(ch.isdigit() for ch in raw_model):
             # En tarifas reales los modelos/SKUs tienen al menos un dígito o código alfanumérico
-            if not stock_analyzer.is_valid_Main_SKU(raw_model):
+            if not is_valid_sku(raw_model):
                 skipped_rows += 1
                 continue
 
@@ -1070,3 +1086,4 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
     wb.save(output)
     output.seek(0)
     return output
+
