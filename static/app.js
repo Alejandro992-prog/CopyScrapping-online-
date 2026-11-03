@@ -4917,7 +4917,631 @@ document.addEventListener("DOMContentLoaded", () => {
     loadGeminiConfig();
     initAuditTab();
     initSupabase();
+    // -------------------------------------------------------------------------
+    // ARQUITECTURA MULTI-AGENTE DE COMPRAS (TARIFA EXCEL/CSV + STOCK PDF + MATCHING)
+    // -------------------------------------------------------------------------
+    function initPurchaseAgents() {
+        const tariffDropzone = document.getElementById("agent-tariff-dropzone");
+        const tariffFileInput = document.getElementById("agent-tariff-file-input");
+        const tariffDropzoneTitle = document.getElementById("agent-tariff-dropzone-title");
+        const tariffStatusBadge = document.getElementById("agent-tariff-status-badge");
+        const tariffWorkspace = document.getElementById("agent-tariff-workspace");
+        const sheetSelect = document.getElementById("agent-tariff-sheet-select");
+        const headerRowInput = document.getElementById("agent-tariff-header-row");
+        const providerNameInput = document.getElementById("agent-tariff-provider-name");
+        const selectPriceCol = document.getElementById("agent-select-price-col");
+        const selectModelCol = document.getElementById("agent-select-model-col");
+        const selectDescCol = document.getElementById("agent-select-desc-col");
+        const previewThead = document.getElementById("agent-tariff-preview-thead");
+        const previewTbody = document.getElementById("agent-tariff-preview-tbody");
+        const btnConfirmTariff = document.getElementById("btn-agent-confirm-tariff");
+        const extractSummary = document.getElementById("agent-tariff-extract-summary");
+        const saveGlobalCheckbox = document.getElementById("agent-save-global-tariff");
+
+        const stockDropzone = document.getElementById("agent-stock-dropzone");
+        const stockFileInput = document.getElementById("agent-stock-file-input");
+        const stockDropzoneTitle = document.getElementById("agent-stock-dropzone-title");
+        const stockStatusBadge = document.getElementById("agent-stock-status-badge");
+        const btnUseExistingStock = document.getElementById("btn-agent-use-existing-stock");
+        const stockWorkspace = document.getElementById("agent-stock-workspace");
+        const stockKpiRefs = document.getElementById("agent-stock-kpi-refs");
+        const stockKpiUnits = document.getElementById("agent-stock-kpi-units");
+        const stockKpiVal = document.getElementById("agent-stock-kpi-val");
+        const stockPreviewTbody = document.getElementById("agent-stock-preview-tbody");
+        const stockRawText = document.getElementById("agent-stock-raw-text");
+
+        const chatFeed = document.getElementById("agent-chat-feed");
+        const btnRunCross = document.getElementById("btn-agent-run-cross");
+        const btnExportExcel = document.getElementById("btn-agent-export-excel");
+        const fuzzyThresholdSelect = document.getElementById("agent-fuzzy-threshold");
+        const lowStockInput = document.getElementById("agent-low-stock-threshold");
+        const useGeminiCheckbox = document.getElementById("agent-use-gemini");
+
+        const resultsDashboard = document.getElementById("agent-results-dashboard");
+        const searchInput = document.getElementById("agent-results-search");
+
+        if (!tariffDropzone || !stockDropzone) return;
+
+        let agentState = {
+            tariffSessionId: null,
+            stockSessionId: null,
+            activeClickRole: "price", // Por defecto, hacer clic en una columna asigna el PRECIO
+            columns: [],
+            previewRows: [],
+            priceCol: 1,
+            modelCol: 0,
+            descCol: -1,
+            crossData: null,
+            chatInitialized: false
+        };
+
+        function escapeHtmlSafe(str) {
+            return String(str ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+        }
+
+        function appendAgentMessages(messages) {
+            if (!chatFeed || !Array.isArray(messages) || messages.length === 0) return;
+            if (!agentState.chatInitialized) {
+                chatFeed.innerHTML = "";
+                agentState.chatInitialized = true;
+            }
+            messages.forEach(msg => {
+                let borderCol = "#8b5cf6";
+                let bgCol = "rgba(139, 92, 246, 0.1)";
+                let icon = "🟣";
+                if (msg.agent === "stock") {
+                    borderCol = "#3b82f6";
+                    bgCol = "rgba(59, 130, 246, 0.1)";
+                    icon = "🔵";
+                } else if (msg.agent === "coordinator") {
+                    borderCol = "#10b981";
+                    bgCol = "rgba(16, 185, 129, 0.1)";
+                    icon = "🟢";
+                } else if (msg.agent === "ai_advisor") {
+                    borderCol = "#f59e0b";
+                    bgCol = "rgba(245, 158, 11, 0.12)";
+                    icon = "✨";
+                }
+
+                const formattedText = escapeHtmlSafe(msg.text)
+                    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+                    .replace(/`(.*?)`/g, "<code style='background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:4px;'>$1</code>")
+                    .replace(/\n/g, "<br>");
+
+                const bubble = document.createElement("div");
+                bubble.style.cssText = `background: ${bgCol}; border-left: 3px solid ${borderCol}; padding: 8px 12px; border-radius: 6px; font-size: 12px; line-height: 1.45; color: #e2e8f0;`;
+                bubble.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span>${icon}</span>
+                            <strong style="color: #f8fafc;">${escapeHtmlSafe(msg.agent_name || "Agente")}</strong>
+                            <span style="font-size: 10px; background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px; color: #cbd5e1;">${escapeHtmlSafe(msg.badge || "")}</span>
+                        </div>
+                        <span style="font-size: 10px; color: var(--text-muted);">${escapeHtmlSafe(msg.time || "")}</span>
+                    </div>
+                    <div>${formattedText}</div>
+                `;
+                chatFeed.appendChild(bubble);
+            });
+            chatFeed.scrollTop = chatFeed.scrollHeight;
+        }
+
+        // Botones de selección de rol activo al hacer clic en la tabla
+        const roleButtons = document.querySelectorAll(".agent-role-selector");
+        roleButtons.forEach(btn => {
+            btn.addEventListener("click", () => {
+                agentState.activeClickRole = btn.getAttribute("data-role") || "price";
+                roleButtons.forEach(b => {
+                    const r = b.getAttribute("data-role");
+                    const isActive = r === agentState.activeClickRole;
+                    b.classList.toggle("active", isActive);
+                    b.style.transform = isActive ? "scale(1.03)" : "none";
+                    b.style.boxShadow = isActive ? "0 0 0 2px rgba(255,255,255,0.35)" : "none";
+                });
+            });
+        });
+
+        function syncSelectDropdowns() {
+            if (!selectPriceCol || !selectModelCol || !selectDescCol) return;
+            const optsHtml = agentState.columns.map(c =>
+                `<option value="${c.index}">[${escapeHtmlSafe(c.letter)}] ${escapeHtmlSafe(c.name)}</option>`
+            ).join("");
+
+            selectPriceCol.innerHTML = optsHtml;
+            selectModelCol.innerHTML = optsHtml;
+            selectDescCol.innerHTML = `<option value="-1">-- Sin columna de descripción --</option>` + optsHtml;
+
+            selectPriceCol.value = String(agentState.priceCol);
+            selectModelCol.value = String(agentState.modelCol);
+            selectDescCol.value = String(agentState.descCol);
+        }
+
+        function renderInteractivePreviewTable() {
+            if (!previewThead || !previewTbody) return;
+            const cols = agentState.columns;
+            const rows = agentState.previewRows;
+
+            let headHtml = "<tr>";
+            cols.forEach(c => {
+                const isPrice = c.index === agentState.priceCol;
+                const isModel = c.index === agentState.modelCol;
+                const isDesc = c.index === agentState.descCol;
+
+                let thBg = "rgba(30, 41, 59, 0.9)";
+                let borderTop = "2px solid transparent";
+                let roleBadge = `<span style="font-size: 9px; color: #94a3b8; font-weight: 500;">Clic para asignar</span>`;
+
+                if (isPrice) {
+                    thBg = "rgba(16, 185, 129, 0.28)";
+                    borderTop = "3px solid #10b981";
+                    roleBadge = `<span style="font-size: 10px; background: #10b981; color: #052e16; padding: 1px 6px; border-radius: 4px; font-weight: 800;">💶 PRECIO ELEGIDO</span>`;
+                } else if (isModel) {
+                    thBg = "rgba(99, 102, 241, 0.28)";
+                    borderTop = "3px solid #6366f1";
+                    roleBadge = `<span style="font-size: 10px; background: #6366f1; color: #ffffff; padding: 1px 6px; border-radius: 4px; font-weight: 800;">🧩 MODELO / REF</span>`;
+                } else if (isDesc) {
+                    thBg = "rgba(245, 158, 11, 0.25)";
+                    borderTop = "3px solid #f59e0b";
+                    roleBadge = `<span style="font-size: 10px; background: #f59e0b; color: #0f172a; padding: 1px 6px; border-radius: 4px; font-weight: 800;">📝 DESCRIPCIÓN</span>`;
+                }
+
+                headHtml += `
+                    <th data-col-idx="${c.index}" class="agent-clickable-col" style="cursor: pointer; background: ${thBg}; border-top: ${borderTop}; user-select: none; min-width: 120px; transition: all 0.15s;" title="Haz clic para asignar esta columna">
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 4px;">
+                                <span style="font-size: 10px; opacity: 0.75;">Col ${escapeHtmlSafe(c.letter)}</span>
+                                ${roleBadge}
+                            </div>
+                            <div style="font-size: 12px; font-weight: 700; color: #f8fafc;">${escapeHtmlSafe(c.name)}</div>
+                        </div>
+                    </th>
+                `;
+            });
+            headHtml += "</tr>";
+            previewThead.innerHTML = headHtml;
+
+            let bodyHtml = "";
+            rows.forEach(r => {
+                bodyHtml += "<tr>";
+                cols.forEach(c => {
+                    const cellVal = r[c.index] !== undefined ? r[c.index] : "";
+                    const isPrice = c.index === agentState.priceCol;
+                    const isModel = c.index === agentState.modelCol;
+                    const isDesc = c.index === agentState.descCol;
+
+                    let tdBg = "transparent";
+                    let tdWeight = "400";
+                    let tdColor = "#cbd5e1";
+                    if (isPrice) {
+                        tdBg = "rgba(16, 185, 129, 0.10)";
+                        tdWeight = "700";
+                        tdColor = "#6ee7b7";
+                    } else if (isModel) {
+                        tdBg = "rgba(99, 102, 241, 0.10)";
+                        tdWeight = "700";
+                        tdColor = "#c7d2fe";
+                    } else if (isDesc) {
+                        tdBg = "rgba(245, 158, 11, 0.07)";
+                        tdColor = "#fde68a";
+                    }
+                    bodyHtml += `<td data-col-idx="${c.index}" class="agent-clickable-col" style="cursor: pointer; background: ${tdBg}; font-weight: ${tdWeight}; color: ${tdColor}; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;">${escapeHtmlSafe(cellVal)}</td>`;
+                });
+                bodyHtml += "</tr>";
+            });
+            previewTbody.innerHTML = bodyHtml;
+
+            // Eventos de clic directo sobre cualquier cabecera o celda de la columna
+            const clickableCells = document.querySelectorAll("#agent-tariff-preview-table .agent-clickable-col");
+            clickableCells.forEach(el => {
+                el.addEventListener("click", () => {
+                    const colIdx = parseInt(el.getAttribute("data-col-idx"), 10);
+                    if (isNaN(colIdx)) return;
+
+                    if (agentState.activeClickRole === "price") {
+                        agentState.priceCol = colIdx;
+                    } else if (agentState.activeClickRole === "model") {
+                        agentState.modelCol = colIdx;
+                    } else if (agentState.activeClickRole === "desc") {
+                        agentState.descCol = (agentState.descCol === colIdx) ? -1 : colIdx;
+                    }
+                    syncSelectDropdowns();
+                    renderInteractivePreviewTable();
+                });
+            });
+        }
+
+        if (selectPriceCol) {
+            selectPriceCol.addEventListener("change", () => {
+                agentState.priceCol = parseInt(selectPriceCol.value, 10);
+                renderInteractivePreviewTable();
+            });
+        }
+        if (selectModelCol) {
+            selectModelCol.addEventListener("change", () => {
+                agentState.modelCol = parseInt(selectModelCol.value, 10);
+                renderInteractivePreviewTable();
+            });
+        }
+        if (selectDescCol) {
+            selectDescCol.addEventListener("change", () => {
+                agentState.descCol = parseInt(selectDescCol.value, 10);
+                renderInteractivePreviewTable();
+            });
+        }
+
+        async function uploadOrReloadTariffPreview(fileObj = null, customSheet = null, customHeaderRow = null) {
+            const formData = new FormData();
+            if (fileObj) {
+                formData.append("file", fileObj);
+            } else if (agentState.tariffSessionId) {
+                formData.append("session_id", agentState.tariffSessionId);
+            } else {
+                return;
+            }
+            if (customSheet !== null) formData.append("sheet_name", customSheet);
+            if (customHeaderRow !== null) formData.append("header_row", String(customHeaderRow));
+
+            tariffStatusBadge.textContent = "⏳ Analizando estructura...";
+            try {
+                const res = await fetch("/api/agents/tariff/preview", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Error al previsualizar la tarifa");
+
+                agentState.tariffSessionId = data.session_id;
+                agentState.columns = data.columns || [];
+                agentState.previewRows = data.preview_rows || [];
+                agentState.priceCol = data.suggested_mapping.price_col;
+                agentState.modelCol = data.suggested_mapping.model_col;
+                agentState.descCol = data.suggested_mapping.desc_col;
+
+                if (tariffDropzoneTitle) {
+                    tariffDropzoneTitle.textContent = `📊 ${data.filename} (${data.total_rows} filas detectadas)`;
+                }
+                if (providerNameInput && !providerNameInput.value) {
+                    providerNameInput.value = data.filename.replace(/\.[^/.]+$/, "");
+                }
+
+                // Poblar selector de hojas
+                if (sheetSelect) {
+                    sheetSelect.innerHTML = (data.sheet_names || []).map(sh =>
+                        `<option value="${escapeHtmlSafe(sh)}" ${sh === data.active_sheet ? "selected" : ""}>${escapeHtmlSafe(sh)}</option>`
+                    ).join("");
+                }
+                if (headerRowInput) {
+                    headerRowInput.value = String((data.header_row || 0) + 1);
+                }
+
+                tariffWorkspace.style.display = "block";
+                tariffStatusBadge.textContent = "✅ Vista previa lista";
+                tariffStatusBadge.style.background = "rgba(16, 185, 129, 0.2)";
+                tariffStatusBadge.style.color = "#6ee7b7";
+
+                syncSelectDropdowns();
+                renderInteractivePreviewTable();
+                appendAgentMessages(data.agent_messages || []);
+            } catch (err) {
+                tariffStatusBadge.textContent = "❌ Error en archivo";
+                alert("Error procesando tarifa: " + err.message);
+            }
+        }
+
+        // Eventos Dropzone Módulo 1 (Tarifa)
+        tariffDropzone.addEventListener("click", () => tariffFileInput.click());
+        tariffDropzone.addEventListener("dragover", e => { e.preventDefault(); tariffDropzone.style.borderColor = "#10b981"; });
+        tariffDropzone.addEventListener("dragleave", () => { tariffDropzone.style.borderColor = "rgba(139, 92, 246, 0.4)"; });
+        tariffDropzone.addEventListener("drop", e => {
+            e.preventDefault();
+            tariffDropzone.style.borderColor = "rgba(139, 92, 246, 0.4)";
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                uploadOrReloadTariffPreview(e.dataTransfer.files[0]);
+            }
+        });
+        tariffFileInput.addEventListener("change", () => {
+            if (tariffFileInput.files && tariffFileInput.files.length > 0) {
+                uploadOrReloadTariffPreview(tariffFileInput.files[0]);
+            }
+        });
+
+        if (sheetSelect) {
+            sheetSelect.addEventListener("change", () => {
+                uploadOrReloadTariffPreview(null, sheetSelect.value, null);
+            });
+        }
+        if (headerRowInput) {
+            headerRowInput.addEventListener("change", () => {
+                const hVal = Math.max(0, (parseInt(headerRowInput.value, 10) || 1) - 1);
+                uploadOrReloadTariffPreview(null, sheetSelect ? sheetSelect.value : null, hVal);
+            });
+        }
+
+        // Confirmar selección de columna de precio y extraer tarifa
+        if (btnConfirmTariff) {
+            btnConfirmTariff.addEventListener("click", async () => {
+                if (!agentState.tariffSessionId) return;
+                btnConfirmTariff.disabled = true;
+                btnConfirmTariff.textContent = "⏳ Extrayendo...";
+                try {
+                    const res = await fetch("/api/agents/tariff/extract", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            session_id: agentState.tariffSessionId,
+                            model_col: agentState.modelCol,
+                            price_col: agentState.priceCol,
+                            desc_col: agentState.descCol,
+                            sheet_name: sheetSelect ? sheetSelect.value : null,
+                            header_row: headerRowInput ? Math.max(0, (parseInt(headerRowInput.value, 10) || 1) - 1) : null,
+                            provider_name: providerNameInput ? providerNameInput.value : "",
+                            save_to_global_tariffs: saveGlobalCheckbox ? saveGlobalCheckbox.checked : false
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Error al extraer tarifa");
+
+                    if (extractSummary) {
+                        extractSummary.textContent = `✅ ${data.items_count} productos extraídos con columna Precio '${data.stats.price_col_name}'`;
+                    }
+                    tariffStatusBadge.textContent = `✅ ${data.items_count} refs listas`;
+                    appendAgentMessages(data.agent_messages || []);
+                } catch (err) {
+                    alert("Error al confirmar columnas: " + err.message);
+                } finally {
+                    btnConfirmTariff.disabled = false;
+                    btnConfirmTariff.textContent = "✅ Confirmar Selección de Columnas";
+                }
+            });
+        }
+
+        // Módulo 2: Subida y procesamiento de PDF de Stock
+        async function processStockPdf(fileObj = null, useExisting = false) {
+            const formData = new FormData();
+            if (fileObj) {
+                formData.append("file", fileObj);
+            } else if (useExisting) {
+                formData.append("use_existing_inventory", "true");
+            } else {
+                return;
+            }
+
+            stockStatusBadge.textContent = "⏳ Leyendo PDF...";
+            try {
+                const res = await fetch("/api/agents/stock/upload", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Error procesando el PDF de stock");
+
+                agentState.stockSessionId = data.stock_session_id;
+                if (stockDropzoneTitle) {
+                    stockDropzoneTitle.textContent = `📄 ${data.filename} (${data.items_count} referencias)`;
+                }
+                stockStatusBadge.textContent = `✅ ${data.items_count} refs en stock`;
+                stockStatusBadge.style.background = "rgba(16, 185, 129, 0.2)";
+                stockStatusBadge.style.color = "#6ee7b7";
+
+                if (stockKpiRefs) stockKpiRefs.textContent = String(data.items_count || 0);
+                if (stockKpiUnits) stockKpiUnits.textContent = String(data.total_units || 0);
+                if (stockKpiVal) stockKpiVal.textContent = `${Number(data.total_valuation || 0).toLocaleString("es-ES", { minimumFractionDigits: 2 })} €`;
+
+                if (stockPreviewTbody) {
+                    stockPreviewTbody.innerHTML = (data.items_preview || []).map(it => `
+                        <tr>
+                            <td style="font-weight: 700; color: #93c5fd;">${escapeHtmlSafe(it.sku)}</td>
+                            <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                            <td style="text-align: center; font-weight: 700; color: ${it.stock > 0 ? '#34d399' : '#f87171'};">${it.stock} uds</td>
+                            <td style="text-align: right;">${Number(it.cost || 0).toFixed(2)} €</td>
+                        </tr>
+                    `).join("");
+                }
+                if (stockRawText) {
+                    stockRawText.textContent = data.raw_text_excerpt || "Sin texto plano adicional.";
+                }
+
+                stockWorkspace.style.display = "block";
+                appendAgentMessages(data.agent_messages || []);
+            } catch (err) {
+                stockStatusBadge.textContent = "❌ Error en PDF";
+                alert("Error en Agente de Stock: " + err.message);
+            }
+        }
+
+        stockDropzone.addEventListener("click", () => stockFileInput.click());
+        stockDropzone.addEventListener("dragover", e => { e.preventDefault(); stockDropzone.style.borderColor = "#3b82f6"; });
+        stockDropzone.addEventListener("dragleave", () => { stockDropzone.style.borderColor = "rgba(59, 130, 246, 0.4)"; });
+        stockDropzone.addEventListener("drop", e => {
+            e.preventDefault();
+            stockDropzone.style.borderColor = "rgba(59, 130, 246, 0.4)";
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                processStockPdf(e.dataTransfer.files[0], false);
+            }
+        });
+        stockFileInput.addEventListener("change", () => {
+            if (stockFileInput.files && stockFileInput.files.length > 0) {
+                processStockPdf(stockFileInput.files[0], false);
+            }
+        });
+        if (btnUseExistingStock) {
+            btnUseExistingStock.addEventListener("click", () => processStockPdf(null, true));
+        }
+
+        // Renderizado de las 3 tablas del Dashboard Multi-Agente con filtro de búsqueda
+        function renderCrossReferenceTables(filterQuery = "") {
+            if (!agentState.crossData) return;
+            const q = (filterQuery || "").trim().toLowerCase();
+
+            const matched = (agentState.crossData.matched_items || []).filter(it =>
+                !q || `${it.tariff_model} ${it.stock_model} ${it.description} ${it.brand}`.toLowerCase().includes(q)
+            );
+            const missing = (agentState.crossData.missing_items || []).filter(it =>
+                !q || `${it.tariff_model} ${it.description} ${it.brand} ${it.category}`.toLowerCase().includes(q)
+            );
+            const stockOnly = (agentState.crossData.stock_only_items || []).filter(it =>
+                !q || `${it.stock_model} ${it.description} ${it.brand} ${it.category}`.toLowerCase().includes(q)
+            );
+
+            const tbodyMatched = document.getElementById("agent-tbody-matched");
+            const tbodyMissing = document.getElementById("agent-tbody-missing");
+            const tbodyStockOnly = document.getElementById("agent-tbody-stock-only");
+
+            if (tbodyMatched) {
+                tbodyMatched.innerHTML = matched.length ? matched.map(it => {
+                    const matchBadge = it.match_type === "EXACTO"
+                        ? `<span class="badge" style="background:rgba(16,185,129,0.2);color:#34d399;font-size:10px;">EXACTO (100%)</span>`
+                        : `<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;font-size:10px;">FUZZY (${it.match_score}%)</span>`;
+                    const diffColor = it.price_diff < -0.5 ? "#34d399" : (it.price_diff > 0.5 ? "#f87171" : "#94a3b8");
+                    const diffSign = it.price_diff > 0 ? "+" : "";
+                    const statusBadge = it.stock_qty <= 0
+                        ? `<span class="badge" style="background:rgba(239,68,68,0.2);color:#fca5a5;font-size:10px;">🔴 0 Uds</span>`
+                        : (it.status === "STOCK_BAJO"
+                            ? `<span class="badge" style="background:rgba(245,158,11,0.2);color:#fcd34d;font-size:10px;">🟡 Stock Bajo</span>`
+                            : `<span class="badge" style="background:rgba(16,185,129,0.2);color:#6ee7b7;font-size:10px;">🟢 Disponible</span>`);
+                    return `
+                        <tr>
+                            <td style="font-weight: 700; color: #c4b5fd;">${escapeHtmlSafe(it.tariff_model)}</td>
+                            <td style="font-weight: 700; color: #93c5fd;">${escapeHtmlSafe(it.stock_model)}</td>
+                            <td style="text-align: center;">${matchBadge}</td>
+                            <td style="max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                            <td style="text-align: right; font-weight: 700; color: #6ee7b7;">${Number(it.tariff_price).toFixed(2)} €</td>
+                            <td style="text-align: right;">${it.stock_cost > 0 ? Number(it.stock_cost).toFixed(2) + " €" : "—"}</td>
+                            <td style="text-align: right; font-weight: 600; color: ${diffColor};">${it.stock_cost > 0 ? diffSign + Number(it.price_diff).toFixed(2) + " €" : "—"}</td>
+                            <td style="text-align: center; font-weight: 800;">${it.stock_qty} uds</td>
+                            <td style="text-align: center;">${statusBadge}</td>
+                        </tr>
+                    `;
+                }).join("") : `<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No hay artículos coincidentes con este filtro.</td></tr>`;
+            }
+
+            if (tbodyMissing) {
+                tbodyMissing.innerHTML = missing.length ? missing.map(it => `
+                    <tr>
+                        <td style="font-weight: 700; color: #fca5a5;">${escapeHtmlSafe(it.tariff_model)}</td>
+                        <td><span style="font-size:11px;color:#cbd5e1;">${escapeHtmlSafe(it.brand)} · ${escapeHtmlSafe(it.category)}</span></td>
+                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                        <td style="text-align: right; font-weight: 700; color: #6ee7b7;">${Number(it.tariff_price).toFixed(2)} €</td>
+                        <td style="text-align: center; font-weight: 700; color: #ef4444;">0 uds</td>
+                        <td style="text-align: center;"><span class="badge" style="background:rgba(239,68,68,0.18);color:#fca5a5;font-size:10px;">${escapeHtmlSafe(it.reason)}</span></td>
+                    </tr>
+                `).join("") : `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No hay artículos faltantes con este filtro.</td></tr>`;
+            }
+
+            if (tbodyStockOnly) {
+                tbodyStockOnly.innerHTML = stockOnly.length ? stockOnly.map(it => `
+                    <tr>
+                        <td style="font-weight: 700; color: #93c5fd;">${escapeHtmlSafe(it.stock_model)}</td>
+                        <td><span style="font-size:11px;color:#cbd5e1;">${escapeHtmlSafe(it.brand)} · ${escapeHtmlSafe(it.category)}</span></td>
+                        <td style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                        <td style="text-align: center; font-weight: 700;">${it.stock_qty} uds</td>
+                        <td style="text-align: right;">${Number(it.stock_cost).toFixed(2)} €</td>
+                    </tr>
+                `).join("") : `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);">No hay artículos exclusivos del almacén con este filtro.</td></tr>`;
+            }
+        }
+
+        // Ejecutar el Cruce Multi-Agente (Módulo 3)
+        if (btnRunCross) {
+            btnRunCross.addEventListener("click", async () => {
+                if (!agentState.tariffSessionId) {
+                    alert("Primero sube un archivo de Tarifa (Excel o CSV) en el Módulo 1 y verifica la columna de Precio.");
+                    return;
+                }
+                btnRunCross.disabled = true;
+                btnRunCross.innerHTML = "<span>⏳</span> Coordinando Agentes...";
+                try {
+                    const res = await fetch("/api/agents/cross-reference", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            tariff_session_id: agentState.tariffSessionId,
+                            stock_session_id: agentState.stockSessionId,
+                            model_col: agentState.modelCol,
+                            price_col: agentState.priceCol,
+                            desc_col: agentState.descCol,
+                            fuzzy_threshold: fuzzyThresholdSelect ? parseFloat(fuzzyThresholdSelect.value) : 0.78,
+                            low_stock_threshold: lowStockInput ? parseInt(lowStockInput.value, 10) || 2 : 2,
+                            use_gemini_summary: useGeminiCheckbox ? useGeminiCheckbox.checked : true
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Error al ejecutar el cruce Multi-Agente");
+
+                    agentState.crossData = data;
+                    appendAgentMessages(data.dialogue || []);
+
+                    // Actualizar KPIs
+                    const kpis = data.kpis || {};
+                    const elTotal = document.getElementById("agent-kpi-tariff-total");
+                    const elPriceLabel = document.getElementById("agent-kpi-price-col-label");
+                    const elMatched = document.getElementById("agent-kpi-matched");
+                    const elMatchedSub = document.getElementById("agent-kpi-matched-sub");
+                    const elMissing = document.getElementById("agent-kpi-missing");
+                    const elStockOnly = document.getElementById("agent-kpi-stock-only");
+
+                    if (elTotal) elTotal.textContent = String(kpis.total_tariff_items || 0);
+                    if (elPriceLabel) elPriceLabel.textContent = `Columna Precio: ${kpis.price_col_name || "—"}`;
+                    if (elMatched) elMatched.textContent = String(kpis.matched_count || 0);
+                    if (elMatchedSub) elMatchedSub.textContent = `${kpis.exact_matches_count || 0} exactos · ${kpis.fuzzy_matches_count || 0} fuzzy`;
+                    if (elMissing) elMissing.textContent = String(kpis.missing_in_stock_count || 0);
+                    if (elStockOnly) elStockOnly.textContent = String(kpis.stock_only_count || 0);
+
+                    const bMatched = document.getElementById("agent-badge-matched");
+                    const bMissing = document.getElementById("agent-badge-missing");
+                    const bStockOnly = document.getElementById("agent-badge-stock-only");
+                    if (bMatched) bMatched.textContent = String(kpis.matched_count || 0);
+                    if (bMissing) bMissing.textContent = String(kpis.missing_in_stock_count || 0);
+                    if (bStockOnly) bStockOnly.textContent = String(kpis.stock_only_count || 0);
+
+                    if (resultsDashboard) resultsDashboard.style.display = "block";
+                    if (btnExportExcel) btnExportExcel.style.display = "inline-flex";
+
+                    renderCrossReferenceTables(searchInput ? searchInput.value : "");
+                } catch (err) {
+                    alert("Error en Cruce Multi-Agente: " + err.message);
+                } finally {
+                    btnRunCross.disabled = false;
+                    btnRunCross.innerHTML = "<span>⚡</span> Ejecutar Cruce Multi-Agente";
+                }
+            });
+        }
+
+        // Pestañas del Dashboard de Resultados Multi-Agente
+        const resultTabBtns = document.querySelectorAll(".agent-result-tab");
+        resultTabBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                const targetId = btn.getAttribute("data-target");
+                resultTabBtns.forEach(b => {
+                    const isAct = b === btn;
+                    b.classList.toggle("active", isAct);
+                    b.classList.toggle("btn-secondary", !isAct);
+                });
+                document.querySelectorAll(".agent-result-panel").forEach(p => {
+                    p.style.display = (p.id === targetId) ? "block" : "none";
+                });
+            });
+        });
+
+        if (searchInput) {
+            searchInput.addEventListener("input", () => {
+                renderCrossReferenceTables(searchInput.value);
+            });
+        }
+
+        if (btnExportExcel) {
+            btnExportExcel.addEventListener("click", () => {
+                window.location.href = "/api/agents/export-excel";
+            });
+        }
+    }
+
     initBackupSystem();
+    initPurchaseAgents();
 });
 
 

@@ -6514,6 +6514,243 @@ async def export_audit_excel_endpoint(
         headers={"Content-Disposition": f"attachment; filename={fname}"}
     )
 
+try:
+    import purchase_agents
+except ImportError:
+    purchase_agents = None
+
+class AgentTariffExtractRequest(BaseModel):
+    session_id: str
+    model_col: int
+    price_col: int
+    desc_col: Optional[int] = -1
+    brand_col: Optional[int] = -1
+    sheet_name: Optional[str] = None
+    header_row: Optional[int] = None
+    provider_name: Optional[str] = ""
+    save_to_global_tariffs: bool = False
+
+class AgentCrossReferenceRequest(BaseModel):
+    tariff_session_id: str
+    stock_session_id: Optional[str] = None
+    model_col: Optional[int] = None
+    price_col: Optional[int] = None
+    desc_col: Optional[int] = None
+    brand_col: Optional[int] = None
+    fuzzy_threshold: float = 0.78
+    low_stock_threshold: int = 2
+    use_gemini_summary: bool = True
+
+@app.post("/api/agents/tariff/preview")
+async def agent_tariff_preview_endpoint(
+    file: Optional[UploadFile] = File(None),
+    session_id: Optional[str] = Form(None),
+    sheet_name: Optional[str] = Form(None),
+    header_row: Optional[int] = Form(None)
+):
+    """Módulo 1 (Agente de Tarifas): Analiza un archivo Excel/CSV y genera la vista previa interactiva."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+    try:
+        file_bytes = b""
+        filename = ""
+        if file is not None:
+            filename = file.filename or "tarifa.xlsx"
+            ext = os.path.splitext(filename.lower())[1]
+            if ext not in (".xlsx", ".xls", ".csv"):
+                raise HTTPException(status_code=400, detail="Formato no soportado. Sube un archivo .xlsx, .xls o .csv.")
+            file_bytes = await file.read()
+        elif not session_id:
+            raise HTTPException(status_code=400, detail="Debes subir un archivo o indicar un session_id activo.")
+
+        result = purchase_agents.create_tariff_preview_session(
+            file_bytes=file_bytes,
+            filename=filename,
+            sheet_name=sheet_name,
+            header_row=header_row,
+            existing_session_id=session_id
+        )
+        add_log("info", f"🤖 Agente de Tarifas: vista previa generada para '{result['filename']}' ({result['total_rows']} filas).")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando tarifa: {str(e)}")
+
+@app.post("/api/agents/tariff/extract")
+async def agent_tariff_extract_endpoint(req: AgentTariffExtractRequest):
+    """Módulo 1 (Agente de Tarifas): Extrae el catálogo usando la columna de precio seleccionada por el usuario."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+    try:
+        res = purchase_agents.extract_tariff_with_mapping(
+            session_id=req.session_id,
+            model_col=req.model_col,
+            price_col=req.price_col,
+            desc_col=req.desc_col,
+            brand_col=req.brand_col,
+            sheet_name=req.sheet_name,
+            header_row=req.header_row,
+            provider_name=req.provider_name or ""
+        )
+        if req.save_to_global_tariffs and stock_analyzer is not None:
+            sess = purchase_agents._TARIFF_SESSIONS.get(req.session_id, {})
+            items_for_tariff = [
+                {
+                    "model": it["model"],
+                    "product": it["description"],
+                    "price": it["price"],
+                    "brand": it["brand"],
+                    "category": it["category"]
+                }
+                for it in sess.get("extracted_items", [])
+            ]
+            if items_for_tariff:
+                prov = req.provider_name or os.path.splitext(sess.get("filename", "Proveedor"))[0]
+                stock_analyzer.save_tariff_from_items(
+                    items=items_for_tariff,
+                    provider_name=prov,
+                    tariff_name=sess.get("active_sheet", "Tarifa Agente"),
+                    source_filename=sess.get("filename", "tarifa.xlsx")
+                )
+        add_log("success", f"🤖 Agente de Tarifas: extraídos {res['items_count']} modelos con columna Precio '{res['stats']['price_col_name']}'.")
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/agents/stock/upload")
+async def agent_stock_upload_endpoint(
+    file: Optional[UploadFile] = File(None),
+    use_existing_inventory: bool = Form(False)
+):
+    """Módulo 2 (Agente de Stock): Procesa el PDF de stock interno, extrae el texto y parsea modelos y cantidades."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+
+    if use_existing_inventory and file is None:
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if not os.path.exists(inv_path):
+            raise HTTPException(status_code=404, detail="No hay inventario local previo guardado. Sube un archivo PDF.")
+        with open(inv_path, "r", encoding="utf-8") as f:
+            inv_items = json.load(f)
+        res = purchase_agents.create_stock_pdf_session(
+            pdf_path=inv_path,
+            filename="Inventario Activo (Almacén ERP)",
+            parsed_products=inv_items,
+            raw_text_excerpt="Inventario cargado previamente desde el ERP en memoria local.",
+            pages_count=1
+        )
+        return res
+
+    if file is None:
+        raise HTTPException(status_code=400, detail="Debes subir un archivo PDF de stock.")
+    filename = file.filename or "stock_interno.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="El archivo de stock debe ser un documento .pdf.")
+
+    temp_pdf = os.path.join(DATA_DIR, "stock", f"temp_agent_stock_{int(time.time()*1000)}.pdf")
+    os.makedirs(os.path.dirname(temp_pdf), exist_ok=True)
+    try:
+        content = await file.read()
+        with open(temp_pdf, "wb") as f:
+            f.write(content)
+
+        # Extraer texto plano de muestra y número de páginas con pypdf
+        raw_excerpt_lines = []
+        pages_count = 0
+        if _pypdf_module is not None:
+            try:
+                reader = _pypdf_module.PdfReader(temp_pdf)
+                pages_count = len(reader.pages)
+                for p_i in range(min(3, pages_count)):
+                    txt = reader.pages[p_i].extract_text() or ""
+                    if txt.strip():
+                        raw_excerpt_lines.append(f"--- Página {p_i + 1} ---\n{txt.strip()[:600]}")
+            except Exception as ex_pdf:
+                logger.debug(f"Error extrayendo texto de muestra PDF: {ex_pdf}")
+
+        parsed_products = parse_erp_pdf(temp_pdf)
+        if not parsed_products:
+            raise HTTPException(status_code=400, detail="No se pudieron detectar líneas de stock en el PDF subido.")
+
+        # Guardar también en inventory.json para que toda la app esté sincronizada
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        with open(inv_path, "w", encoding="utf-8") as f:
+            json.dump(parsed_products, f, ensure_ascii=False, indent=2)
+
+        res = purchase_agents.create_stock_pdf_session(
+            pdf_path=temp_pdf,
+            filename=filename,
+            parsed_products=parsed_products,
+            raw_text_excerpt="\n\n".join(raw_excerpt_lines),
+            pages_count=pages_count
+        )
+        add_log("success", f"🤖 Agente de Stock: procesado PDF '{filename}' ({res['items_count']} referencias, {res['total_units']} uds).")
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando PDF de stock: {str(e)}")
+    finally:
+        safe_remove(temp_pdf)
+
+@app.post("/api/agents/cross-reference")
+async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
+    """Módulo 3 (Coordinador Multi-Agente): Cruza los contextos del Agente de Tarifas y del Agente de Stock."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+    try:
+        # Si el usuario ajustó las columnas antes de lanzar el cruce, actualizar extracción primero
+        if req.model_col is not None and req.price_col is not None:
+            purchase_agents.extract_tariff_with_mapping(
+                session_id=req.tariff_session_id,
+                model_col=req.model_col,
+                price_col=req.price_col,
+                desc_col=req.desc_col if req.desc_col is not None else -1,
+                brand_col=req.brand_col if req.brand_col is not None else -1
+            )
+
+        fallback_stock = None
+        inv_path = os.path.join(DATA_DIR, "stock", "inventory.json")
+        if os.path.exists(inv_path):
+            try:
+                with open(inv_path, "r", encoding="utf-8") as f:
+                    fallback_stock = json.load(f)
+            except Exception:
+                fallback_stock = None
+
+        config = load_config()
+        api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip() if req.use_gemini_summary else None
+
+        res = purchase_agents.run_multi_agent_cross_reference(
+            tariff_session_id=req.tariff_session_id,
+            stock_session_id=req.stock_session_id,
+            fallback_stock_items=fallback_stock,
+            fuzzy_threshold=req.fuzzy_threshold,
+            low_stock_threshold=req.low_stock_threshold,
+            gemini_api_key=api_key
+        )
+        add_log("success", f"🤝 Coordinador Multi-Agente: {res['kpis']['matched_count']} coincidentes, {res['kpis']['missing_in_stock_count']} faltantes.")
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/agents/export-excel")
+async def agent_export_excel_endpoint():
+    """Exporta a Excel (.xlsx) los resultados del último cruce Multi-Agente."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+    try:
+        out_buffer = purchase_agents.export_cross_reference_excel()
+        fname = f"Cruce_Agentes_Compras_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return StreamingResponse(
+            out_buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     import os

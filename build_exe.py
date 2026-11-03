@@ -15,6 +15,9 @@ def build():
         f"--add-data=static{os.pathsep}static",
         f"--add-data={os.path.join('data', 'providers_seed.json')}{os.pathsep}data",
         f"--add-data={os.path.join('data', 'dictionary.json')}{os.pathsep}data",
+        "--hidden-import=purchase_agents",
+        "--hidden-import=stock_analyzer",
+        "--hidden-import=supabase_client",
         "--name=GardeClipboardParser",
         "app.py"
     ]

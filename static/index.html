@@ -58,6 +58,9 @@
             <button class="nav-tab" data-tab="tab-shortages" id="tab-btn-shortages" title="Cruza las tarifas de tus proveedores con tu almacén para saber qué pedir">
                 <span class="tab-icon">🛒</span> ¿Qué Comprar? (Faltas y Pedidos)
             </button>
+            <button class="nav-tab" data-tab="tab-agents" id="tab-btn-agents" title="Arquitectura Multi-Agente: Tarifa Excel/CSV con selección interactiva de columna de precio + Stock PDF + Matching Inteligente">
+                <span class="tab-icon">🤖</span> Agentes de Compras
+            </button>
             <button class="nav-tab" data-tab="tab-users" id="tab-users-btn" style="display: none;">
                 <span class="tab-icon">👥</span> Usuarios
             </button>
@@ -1115,6 +1118,368 @@
 
             </section>
 
+            <!-- TAB: ARQUITECTURA MULTI-AGENTE DE COMPRAS (TARIFA EXCEL/CSV + STOCK PDF + MATCHING) -->
+            <section id="tab-agents" class="tab-content">
+                <!-- Banner Principal -->
+                <div class="card mb-20" style="background: linear-gradient(135deg, rgba(17, 24, 39, 0.95) 0%, rgba(49, 46, 129, 0.85) 100%); border-left: 4px solid #10b981;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                        <div>
+                            <div style="display: inline-flex; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; margin-bottom: 6px; border: 1px solid rgba(16, 185, 129, 0.3);">
+                                <span>🤖</span> ARQUITECTURA MULTI-AGENTE DE COMPRAS
+                            </div>
+                            <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 4px 0; color: #f8fafc;">
+                                Cruce Inteligente: Agente de Tarifas (Excel/CSV) ⟷ Agente de Stock (PDF)
+                            </h2>
+                            <p style="font-size: 13px; color: #cbd5e1; margin: 0;">
+                                1️⃣ Sube la tarifa y <strong>haz clic en la columna de Precio</strong> en la vista previa · 2️⃣ Sube el PDF de stock interno · 3️⃣ Ejecuta la coordinación Multi-Agente.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button type="button" id="btn-agent-run-cross" class="btn btn-primary" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; padding: 10px 18px; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);">
+                                <span>⚡</span> Ejecutar Cruce Multi-Agente
+                            </button>
+                            <button type="button" id="btn-agent-export-excel" class="btn btn-secondary" style="display: none; align-items: center; gap: 6px; padding: 10px 14px; font-weight: 600;">
+                                <span>📥</span> Descargar Excel (.xlsx)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MÓDULO 1 Y MÓDULO 2 EN PARALELO -->
+                <div class="grid-2col mb-20" style="grid-template-columns: 1.35fr 1fr; gap: 20px; align-items: start;">
+
+                    <!-- MÓDULO 1: PROCESAMIENTO DE TARIFA DE PROVEEDOR (EXCEL / CSV) -->
+                    <div class="card" style="border-top: 3px solid #8b5cf6;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px;">
+                            <div>
+                                <span style="font-size: 11px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px;">🟣 Módulo 1 · Agente de Tarifas</span>
+                                <h3 class="card-title" style="font-size: 16px; margin: 2px 0 4px 0;">Tarifa de Proveedor (Excel / CSV)</h3>
+                                <p class="card-subtitle" style="font-size: 12px; margin: 0;">
+                                    Sube tu archivo <code>.xlsx</code>, <code>.xls</code> o <code>.csv</code>, visualiza la tabla y haz clic sobre la columna que contiene el <strong>Precio</strong>.
+                                </p>
+                            </div>
+                            <span id="agent-tariff-status-badge" class="badge" style="background: rgba(139, 92, 246, 0.15); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.3); font-size: 11px; white-space: nowrap;">
+                                Pendiente de archivo
+                            </span>
+                        </div>
+
+                        <!-- Zona de carga de archivo Excel / CSV -->
+                        <div id="agent-tariff-dropzone" class="upload-zone" style="padding: 16px; border-color: rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.04); margin-bottom: 12px; cursor: pointer;">
+                            <input type="file" id="agent-tariff-file-input" accept=".xlsx,.xls,.csv" style="display: none;">
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                                <span style="font-size: 26px;">📊</span>
+                                <div style="text-align: left;">
+                                    <div id="agent-tariff-dropzone-title" style="font-size: 13px; font-weight: 700; color: #f1f5f9;">
+                                        Haz clic o arrastra aquí la Tarifa del Proveedor (.xlsx, .xls, .csv)
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        El Agente de Tarifas detectará las filas y te mostrará la vista previa tabular interactiva.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Panel de Configuración de Hoja y Selección Interactiva de Columnas (visible tras subir archivo) -->
+                        <div id="agent-tariff-workspace" style="display: none;">
+                            <!-- Controles de Hoja y Fila de Cabecera -->
+                            <div style="display: grid; grid-template-columns: 1fr 130px 1fr; gap: 10px; background: rgba(15, 23, 42, 0.55); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
+                                <div>
+                                    <label for="agent-tariff-sheet-select" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">📑 Hoja del Documento:</label>
+                                    <select id="agent-tariff-sheet-select" class="form-select" style="font-size: 12px; padding: 5px 8px;"></select>
+                                </div>
+                                <div>
+                                    <label for="agent-tariff-header-row" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">📏 Fila Cabecera:</label>
+                                    <input type="number" id="agent-tariff-header-row" min="1" max="30" value="1" class="form-input" style="font-size: 12px; padding: 5px 8px; text-align: center;" title="Número de fila donde están los títulos de las columnas">
+                                </div>
+                                <div>
+                                    <label for="agent-tariff-provider-name" style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 3px;">🏷️ Nombre Proveedor:</label>
+                                    <input type="text" id="agent-tariff-provider-name" placeholder="Ej: Bosch, Balay, Electro..." class="form-input" style="font-size: 12px; padding: 5px 8px;">
+                                </div>
+                            </div>
+
+                            <!-- Barra Interactiva para Asignar Columnas Haciendo Clic -->
+                            <div style="background: rgba(16, 185, 129, 0.07); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                                    <span style="font-size: 12px; font-weight: 700; color: #e2e8f0;">
+                                        👆 Haz clic en un botón de rol y luego <strong>haz clic sobre la columna en la tabla</strong> (o usa los desplegables):
+                                    </span>
+                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;" id="agent-col-role-buttons">
+                                        <button type="button" class="btn btn-xs agent-role-selector active" data-role="price" style="background: #10b981; color: #052e16; font-weight: 700; border: 2px solid #34d399; padding: 4px 10px; border-radius: 6px;">
+                                            💶 1. Clic para asignar PRECIO
+                                        </button>
+                                        <button type="button" class="btn btn-xs agent-role-selector" data-role="model" style="background: rgba(99, 102, 241, 0.2); color: #a5b4fc; font-weight: 700; border: 1px solid rgba(99, 102, 241, 0.5); padding: 4px 10px; border-radius: 6px;">
+                                            🧩 2. Clic para asignar MODELO / REF
+                                        </button>
+                                        <button type="button" class="btn btn-xs agent-role-selector" data-role="desc" style="background: rgba(245, 158, 11, 0.2); color: #fcd34d; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.5); padding: 4px 10px; border-radius: 6px;">
+                                            📝 3. Clic para asignar DESCRIPCIÓN
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Selectores sincronizados de columnas -->
+                                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                                    <div>
+                                        <label for="agent-select-price-col" style="font-size: 11px; font-weight: 700; color: #34d399; display: block; margin-bottom: 2px;">💶 Columna de PRECIO (*):</label>
+                                        <select id="agent-select-price-col" class="form-select" style="font-size: 12px; padding: 5px 8px; border-color: #10b981; background: rgba(16, 185, 129, 0.1); font-weight: 700;"></select>
+                                    </div>
+                                    <div>
+                                        <label for="agent-select-model-col" style="font-size: 11px; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 2px;">🧩 Columna MODELO / REF (*):</label>
+                                        <select id="agent-select-model-col" class="form-select" style="font-size: 12px; padding: 5px 8px; border-color: #6366f1;"></select>
+                                    </div>
+                                    <div>
+                                        <label for="agent-select-desc-col" style="font-size: 11px; font-weight: 700; color: #fcd34d; display: block; margin-bottom: 2px;">📝 Columna DESCRIPCIÓN:</label>
+                                        <select id="agent-select-desc-col" class="form-select" style="font-size: 12px; padding: 5px 8px; border-color: #f59e0b;"></select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Vista Previa Tabular Interactiva -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);" id="agent-tariff-preview-caption">
+                                    Vista previa de las primeras filas (haz clic en cualquier columna para seleccionarla):
+                                </span>
+                                <label style="font-size: 11px; color: #cbd5e1; display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                                    <input type="checkbox" id="agent-save-global-tariff" checked style="accent-color: #8b5cf6;">
+                                    Guardar también en mis tarifas
+                                </label>
+                            </div>
+
+                            <div class="table-container" style="max-height: 260px; overflow: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 10px;">
+                                <table id="agent-tariff-preview-table" style="font-size: 12px;">
+                                    <thead id="agent-tariff-preview-thead"></thead>
+                                    <tbody id="agent-tariff-preview-tbody"></tbody>
+                                </table>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                                <div id="agent-tariff-extract-summary" style="font-size: 12px; color: #a7f3d0; font-weight: 600;"></div>
+                                <button type="button" id="btn-agent-confirm-tariff" class="btn btn-primary btn-sm" style="background: #8b5cf6; border: none; font-weight: 700; padding: 7px 14px;">
+                                    ✅ Confirmar Selección de Columnas
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- MÓDULO 2: PROCESAMIENTO DE STOCK INTERNO (PDF) -->
+                    <div class="card" style="border-top: 3px solid #3b82f6;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px;">
+                            <div>
+                                <span style="font-size: 11px; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.5px;">🔵 Módulo 2 · Agente de Stock</span>
+                                <h3 class="card-title" style="font-size: 16px; margin: 2px 0 4px 0;">Informe de Stock Interno (PDF)</h3>
+                                <p class="card-subtitle" style="font-size: 12px; margin: 0;">
+                                    Sube el PDF de inventario de tu ERP para extraer el texto, modelos y cantidades reales disponibles.
+                                </p>
+                            </div>
+                            <span id="agent-stock-status-badge" class="badge" style="background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; white-space: nowrap;">
+                                Pendiente de PDF
+                            </span>
+                        </div>
+
+                        <!-- Zona de carga de PDF de Stock -->
+                        <div id="agent-stock-dropzone" class="upload-zone" style="padding: 16px; border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.04); margin-bottom: 10px; cursor: pointer;">
+                            <input type="file" id="agent-stock-file-input" accept=".pdf" style="display: none;">
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                                <span style="font-size: 26px;">📄</span>
+                                <div style="text-align: left;">
+                                    <div id="agent-stock-dropzone-title" style="font-size: 13px; font-weight: 700; color: #f1f5f9;">
+                                        Haz clic o arrastra aquí el PDF de Stock Interno (.pdf)
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        Extracción automática de referencias, existencias y costes unitarios.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <button type="button" id="btn-agent-use-existing-stock" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 5px 10px;">
+                                📦 Cargar último inventario ERP en memoria
+                            </button>
+                            <span id="agent-stock-Quick-stats" style="font-size: 11px; color: var(--text-muted);"></span>
+                        </div>
+
+                        <!-- Vista previa del Stock extraído del PDF -->
+                        <div id="agent-stock-workspace" style="display: none;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Referencias PDF</div>
+                                    <div id="agent-stock-kpi-refs" style="font-size: 16px; font-weight: 800; color: #60a5fa;">0</div>
+                                </div>
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Unidades Totales</div>
+                                    <div id="agent-stock-kpi-units" style="font-size: 16px; font-weight: 800; color: #34d399;">0</div>
+                                </div>
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Valoración ERP</div>
+                                    <div id="agent-stock-kpi-val" style="font-size: 15px; font-weight: 800; color: #fbbf24;">0 €</div>
+                                </div>
+                            </div>
+
+                            <div class="table-container" style="max-height: 215px; overflow: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px;">
+                                <table style="font-size: 12px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo / SKU</th>
+                                            <th>Descripción</th>
+                                            <th style="text-align: center;">Stock PDF</th>
+                                            <th style="text-align: right;">Coste ERP</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-stock-preview-tbody"></tbody>
+                                </table>
+                            </div>
+
+                            <details style="font-size: 11px; color: var(--text-muted);">
+                                <summary style="cursor: pointer; font-weight: 600;">🔍 Ver extracto de texto plano extraído del PDF</summary>
+                                <pre id="agent-stock-raw-text" style="margin-top: 6px; max-height: 120px; overflow: auto; background: rgba(0,0,0,0.35); padding: 8px; border-radius: 6px; font-size: 10px; color: #94a3b8; white-space: pre-wrap;"></pre>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MÓDULO 3: CONSOLA DE COMUNICACIÓN MULTI-AGENTE + PARÁMETROS DE MATCHING -->
+                <div class="card mb-20" style="border-top: 3px solid #10b981; background: rgba(15, 23, 42, 0.85);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
+                        <div>
+                            <span style="font-size: 11px; font-weight: 700; color: #34d399; text-transform: uppercase; letter-spacing: 0.5px;">🟢 Módulo 3 · Comunicación Multi-Agente y Motor de Matching</span>
+                            <h3 class="card-title" style="font-size: 16px; margin: 2px 0 0 0;">Consola de Coordinación en Tiempo Real (Agente Tarifas ⟷ Agente Stock)</h3>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label for="agent-fuzzy-threshold" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Similitud Fuzzy:</label>
+                                <select id="agent-fuzzy-threshold" class="form-select" style="font-size: 12px; padding: 4px 8px; width: auto;">
+                                    <option value="1.0">100% (Solo Exacto)</option>
+                                    <option value="0.85">85% (Alta precisión)</option>
+                                    <option value="0.78" selected>78% (Recomendado IA)</option>
+                                    <option value="0.72">72% (Amplio)</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label for="agent-low-stock-threshold" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Umbral Stock Bajo:</label>
+                                <input type="number" id="agent-low-stock-threshold" value="2" min="1" max="50" class="form-input" style="width: 55px; padding: 4px 6px; font-size: 12px; text-align: center;">
+                            </div>
+                            <label style="font-size: 11px; color: #cbd5e1; display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                                <input type="checkbox" id="agent-use-gemini" checked style="accent-color: #10b981;">
+                                Dictamen IA Gemini
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Chat / Consola de conversación entre los agentes -->
+                    <div id="agent-chat-feed" style="max-height: 220px; overflow-y: auto; background: rgba(2, 6, 23, 0.65); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                        <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px;">
+                            💬 Sube una tarifa en el <strong>Módulo 1</strong> y un PDF de stock en el <strong>Módulo 2</strong> para iniciar la conversación entre los agentes.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DASHBOARD DE RESULTADOS DEL CRUCE MULTI-AGENTE -->
+                <div id="agent-results-dashboard" style="display: none;">
+                    <!-- KPIs -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                        <div class="card" style="border-left: 4px solid #8b5cf6; padding: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #a78bfa; text-transform: uppercase;">📊 MODELOS EN TARIFA</div>
+                            <div id="agent-kpi-tariff-total" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0</div>
+                            <div id="agent-kpi-price-col-label" style="font-size: 11px; color: var(--text-muted);">Columna precio: —</div>
+                        </div>
+                        <div class="card" style="border-left: 4px solid #10b981; padding: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #10b981; text-transform: uppercase;">🟢 ARTÍCULOS COINCIDENTES</div>
+                            <div id="agent-kpi-matched" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0</div>
+                            <div id="agent-kpi-matched-sub" style="font-size: 11px; color: var(--text-muted);">Exactos + Fuzzy matching</div>
+                        </div>
+                        <div class="card" style="border-left: 4px solid #ef4444; padding: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase;">🔴 FALTANTES / PENDIENTES REVISAR</div>
+                            <div id="agent-kpi-missing" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0</div>
+                            <div style="font-size: 11px; color: var(--text-muted);">En tarifa pero sin stock en PDF</div>
+                        </div>
+                        <div class="card" style="border-left: 4px solid #3b82f6; padding: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #60a5fa; text-transform: uppercase;">⚪ SOLO EN PDF DE STOCK</div>
+                            <div id="agent-kpi-stock-only" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0</div>
+                            <div style="font-size: 11px; color: var(--text-muted);">En almacén pero no en esta tarifa</div>
+                        </div>
+                    </div>
+
+                    <!-- Pestañas de Resultados y Buscador -->
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-sm agent-result-tab active" data-target="agent-panel-matched" style="font-weight: 700;">
+                                    🟢 1. Artículos Coincidentes (<span id="agent-badge-matched">0</span>)
+                                </button>
+                                <button type="button" class="btn btn-sm btn-secondary agent-result-tab" data-target="agent-panel-missing" style="font-weight: 700;">
+                                    🔴 2. Artículos Faltantes / Pendientes (<span id="agent-badge-missing">0</span>)
+                                </button>
+                                <button type="button" class="btn btn-sm btn-secondary agent-result-tab" data-target="agent-panel-stock-only" style="font-weight: 700;">
+                                    ⚪ 3. Solo en PDF de Stock (<span id="agent-badge-stock-only">0</span>)
+                                </button>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="text" id="agent-results-search" placeholder="Filtrar por modelo, marca o descripción..." class="form-input" style="font-size: 12px; padding: 6px 12px; width: 260px;">
+                            </div>
+                        </div>
+
+                        <!-- Tabla 1: Artículos Coincidentes -->
+                        <div id="agent-panel-matched" class="agent-result-panel">
+                            <div class="table-container" style="max-height: 460px; overflow: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo (Tarifa)</th>
+                                            <th>Modelo (PDF Stock)</th>
+                                            <th style="text-align: center;">Matching</th>
+                                            <th>Descripción</th>
+                                            <th style="text-align: right;">Precio Tarifa Elegido</th>
+                                            <th style="text-align: right;">Coste en PDF</th>
+                                            <th style="text-align: right;">Dif. (€)</th>
+                                            <th style="text-align: center;">Stock Actual</th>
+                                            <th style="text-align: center;">Estado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-tbody-matched"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Tabla 2: Artículos Faltantes / Pendientes de Revisar -->
+                        <div id="agent-panel-missing" class="agent-result-panel" style="display: none;">
+                            <div class="table-container" style="max-height: 460px; overflow: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo (Tarifa)</th>
+                                            <th>Marca / Categoría</th>
+                                            <th>Descripción</th>
+                                            <th style="text-align: right;">Precio Tarifa Elegido</th>
+                                            <th style="text-align: center;">Stock en PDF</th>
+                                            <th style="text-align: center;">Situación Detectada</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-tbody-missing"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Tabla 3: Solo en PDF de Stock -->
+                        <div id="agent-panel-stock-only" class="agent-result-panel" style="display: none;">
+                            <div class="table-container" style="max-height: 460px; overflow: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo (PDF Stock)</th>
+                                            <th>Marca / Categoría</th>
+                                            <th>Descripción en Almacén</th>
+                                            <th style="text-align: center;">Stock Actual</th>
+                                            <th style="text-align: right;">Coste Unitario ERP</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-tbody-stock-only"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- TAB 4: USER MANAGEMENT (Root Only) -->
             <section id="tab-users" class="tab-content">
                 <div class="grid-sidebar-layout">
@@ -1336,7 +1701,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=1.0.7"></script>
+    <script src="/static/app.js?v=1.0.8"></script>
 </body>
 </html>
 
