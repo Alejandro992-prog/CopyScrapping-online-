@@ -106,13 +106,20 @@ def clean_price_value(val: Any) -> Optional[float]:
         return None
 
 
-def _read_spreadsheet_sheets(file_bytes: bytes, filename: str) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
-    """Lee todas las hojas de un archivo Excel (.xlsx, .xls) o CSV sin asumir cabecera fija."""
+def _get_sheet_names(file_bytes: bytes, filename: str) -> List[str]:
     ext = os.path.splitext(filename.lower())[1]
-    sheets_dict: Dict[str, pd.DataFrame] = {}
-
     if ext == ".csv":
-        df_csv = None
+        return ["Datos CSV"]
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes))
+        return list(xls.sheet_names)
+    except Exception:
+        return ["Hoja 1"]
+
+
+def _load_sheet_dataframe(file_bytes: bytes, filename: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    ext = os.path.splitext(filename.lower())[1]
+    if ext == ".csv":
         for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
             for sep in [";", ",", "\t", "|"]:
                 try:
@@ -125,32 +132,25 @@ def _read_spreadsheet_sheets(file_bytes: bytes, filename: str) -> Tuple[Dict[str
                         on_bad_lines="skip"
                     )
                     if candidate is not None and candidate.shape[1] >= 2 and len(candidate) >= 1:
-                        df_csv = candidate
-                        break
+                        candidate = candidate.dropna(how="all").reset_index(drop=True)
+                        candidate = candidate.dropna(axis=1, how="all")
+                        candidate.columns = list(range(candidate.shape[1]))
+                        return candidate
                 except Exception:
                     continue
-            if df_csv is not None:
-                break
-        if df_csv is None:
-            df_csv = pd.read_csv(io.BytesIO(file_bytes), header=None, dtype=str, on_bad_lines="skip")
-        sheets_dict["Datos CSV"] = df_csv
-        return sheets_dict, ["Datos CSV"]
+        candidate = pd.read_csv(io.BytesIO(file_bytes), header=None, dtype=str, on_bad_lines="skip")
+        candidate = candidate.dropna(how="all").reset_index(drop=True)
+        candidate = candidate.dropna(axis=1, how="all")
+        candidate.columns = list(range(candidate.shape[1]))
+        return candidate
 
-    # Excel (.xlsx / .xls)
-    xls = pd.ExcelFile(io.BytesIO(file_bytes))
-    sheet_names = list(xls.sheet_names)
-    for sname in sheet_names:
-        try:
-            df_sheet = pd.read_excel(xls, sheet_name=sname, header=None, dtype=str)
-            # Eliminar filas y columnas completamente vacías en los bordes
-            df_sheet = df_sheet.dropna(how="all").reset_index(drop=True)
-            df_sheet = df_sheet.dropna(axis=1, how="all")
-            # Reindexar columnas 0..N-1
-            df_sheet.columns = list(range(df_sheet.shape[1]))
-            sheets_dict[sname] = df_sheet
-        except Exception as e:
-            logger.debug(f"Error leyendo hoja '{sname}': {e}")
-    return sheets_dict, sheet_names
+    # Excel (.xlsx / .xls): leer ÚNICAMENTE la hoja requerida
+    target = sheet_name or 0
+    df_sheet = pd.read_excel(io.BytesIO(file_bytes), sheet_name=target, header=None, dtype=str)
+    df_sheet = df_sheet.dropna(how="all").reset_index(drop=True)
+    df_sheet = df_sheet.dropna(axis=1, how="all")
+    df_sheet.columns = list(range(df_sheet.shape[1]))
+    return df_sheet
 
 
 def _detect_header_and_columns(df: pd.DataFrame, forced_header_row: Optional[int] = None) -> Dict[str, Any]:
@@ -217,12 +217,11 @@ def _detect_header_and_columns(df: pd.DataFrame, forced_header_row: Optional[int
         else:
             col_name = raw_h
 
-        col_series = data_df.iloc[:, c_idx].dropna().astype(str).str.strip()
-        col_series = col_series[~col_series.str.lower().isin(["", "nan", "none", "null"])]
-        sample_values = col_series.head(6).tolist()
-
-        # Evaluar contenido real de la columna (primeras 40 filas no vacías)
-        sample_40 = col_series.head(40).tolist()
+        # Muestreo ultrarrápido sobre las primeras 60 filas (evita procesar decenas de miles de filas innecesariamente)
+        sample_slice = data_df.iloc[:60, c_idx].dropna().astype(str).str.strip()
+        col_series = sample_slice[~sample_slice.str.lower().isin(["", "nan", "none", "null"])]
+        sample_values = col_series.head(4).tolist()
+        sample_40 = col_series.head(25).tolist()
         n_samples = len(sample_40)
 
         price_hits = 0
@@ -330,28 +329,21 @@ def create_tariff_preview_session(
     """
     if existing_session_id and existing_session_id in _TARIFF_SESSIONS:
         sess = _TARIFF_SESSIONS[existing_session_id]
-        sheets_dict = sess["sheets_dict"]
-        sheet_names = sess["sheet_names"]
-        filename = sess["filename"]
+        if not file_bytes and "file_bytes" in sess:
+            file_bytes = sess["file_bytes"]
+            filename = sess["filename"]
+        sheet_names = sess.get("sheet_names") or _get_sheet_names(file_bytes, filename)
         session_id = existing_session_id
     else:
-        sheets_dict, sheet_names = _read_spreadsheet_sheets(file_bytes, filename)
-        if not sheets_dict:
-            raise ValueError("No se pudieron leer hojas de datos del archivo subido.")
+        sheet_names = _get_sheet_names(file_bytes, filename)
+        if not sheet_names:
+            raise ValueError("No se pudieron detectar hojas de datos en el archivo subido.")
         session_id = str(uuid.uuid4())[:12]
 
-    # Elegir hoja activa (si no se especifica, elegir la que tenga más filas útiles)
-    active_sheet = sheet_name if (sheet_name and sheet_name in sheets_dict) else sheet_names[0]
-    if not sheet_name and len(sheet_names) > 1:
-        best_sh = active_sheet
-        best_len = 0
-        for sh_name, sh_df in sheets_dict.items():
-            if len(sh_df) > best_len:
-                best_len = len(sh_df)
-                best_sh = sh_name
-        active_sheet = best_sh
+    # Elegir hoja activa (si no se especifica, elegir la primera o la indicada)
+    active_sheet = sheet_name if (sheet_name and sheet_name in sheet_names) else sheet_names[0]
+    df = _load_sheet_dataframe(file_bytes, filename, active_sheet)
 
-    df = sheets_dict[active_sheet]
     detection = _detect_header_and_columns(df, forced_header_row=header_row)
     h_row = detection["header_row"]
     columns = detection["columns"]
@@ -374,9 +366,10 @@ def create_tariff_preview_session(
     _TARIFF_SESSIONS[session_id] = {
         "session_id": session_id,
         "filename": filename,
-        "sheets_dict": sheets_dict,
+        "file_bytes": file_bytes,
         "sheet_names": sheet_names,
         "active_sheet": active_sheet,
+        "current_df": df,
         "header_row": h_row,
         "columns": columns,
         "mapping": mapping,
@@ -444,8 +437,13 @@ def extract_tariff_with_mapping(
         raise ValueError("La sesión de tarifa ha expirado o no existe. Por favor vuelve a subir el archivo.")
 
     sess = _TARIFF_SESSIONS[session_id]
-    active_sheet = sheet_name if (sheet_name and sheet_name in sess["sheets_dict"]) else sess["active_sheet"]
-    df = sess["sheets_dict"][active_sheet]
+    active_sheet = sheet_name if (sheet_name and sheet_name in sess.get("sheet_names", [])) else sess.get("active_sheet")
+    if "current_df" in sess and sess.get("active_sheet") == active_sheet:
+        df = sess["current_df"]
+    else:
+        df = _load_sheet_dataframe(sess["file_bytes"], sess["filename"], active_sheet)
+        sess["current_df"] = df
+        sess["active_sheet"] = active_sheet
     h_row = header_row if header_row is not None else sess["header_row"]
 
     data_df = df.iloc[h_row + 1:].reset_index(drop=True) if h_row + 1 < len(df) else df.copy()

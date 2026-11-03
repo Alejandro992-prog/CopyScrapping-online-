@@ -4515,7 +4515,7 @@ Devuelve ÚNICAMENTE un JSON con un objeto clave-valor (clave: modelo original e
     return resolved_map
 
 
-def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
+def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: bool = False) -> List[Dict[str, Any]]:
     if _pypdf_module is None:
         add_log("error", "pypdf no está instalado. No se puede parsear el PDF.")
         return []
@@ -5255,7 +5255,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
         add_log("error", f"Error parseando PDF: {str(e)}")
 
     # Árbitro híbrido: si hay líneas ambiguas y Gemini está configurado, resolverlas con IA
-    if ambiguous_candidates:
+    if ambiguous_candidates and use_gemini:
         current_config = load_config()
         api_key = (current_config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
         if api_key:
@@ -5289,7 +5289,7 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
         
     # Enriquecer productos usando los EANs online de forma asíncrona/concurrente
     valid_products = [p for p in products if p.get("ean") and p["ean"] != "N/D" and len(p["ean"]) >= 8]
-    if valid_products:
+    if valid_products and lookup_online_eans:
         from concurrent.futures import ThreadPoolExecutor
         cache = load_ean_cache()
         to_lookup = [p["ean"] for p in valid_products if p["ean"] not in cache]
@@ -6669,7 +6669,7 @@ async def agent_stock_upload_endpoint(
             except Exception as ex_pdf:
                 logger.debug(f"Error extrayendo texto de muestra PDF: {ex_pdf}")
 
-        parsed_products = parse_erp_pdf(temp_pdf)
+        parsed_products = parse_erp_pdf(temp_pdf, lookup_online_eans=False, use_gemini=False)
         if not parsed_products:
             raise HTTPException(status_code=400, detail="No se pudieron detectar líneas de stock en el PDF subido.")
 
