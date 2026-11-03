@@ -2747,14 +2747,15 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (res.ok) {
                         const data = await res.json();
                         const matchedRecords = data.records.filter(r => {
-                            const modelVal = r.model || r.modelo || "";
+                            const modelVal = r.Modelo || r.model || r.modelo || r.SKU || r.sku || "";
                             return normalizeModelKey(modelVal) === normalizeModelKey(sku);
                         });
                         
                         matchedRecords.forEach(r => {
                             let priceVal = "N/D";
                             for (const [k, v] of Object.entries(r)) {
-                                if (k.toLowerCase().includes("price") || k.toLowerCase().includes("precio") || k.toLowerCase() === "pvp") {
+                                const kl = k.toLowerCase();
+                                if (kl.includes("sin iva") || kl.includes("con iva") || kl.includes("price") || kl.includes("precio") || kl.includes("pvp")) {
                                     if (v && v !== "No disponible") {
                                         priceVal = v;
                                         break;
@@ -2763,11 +2764,11 @@ document.addEventListener("DOMContentLoaded", () => {
                             }
                             
                             allOffers.push({
-                                product: r.product || r.producto || "Electrodoméstico",
-                                model: r.model || r.modelo || sku,
+                                product: r["Descripción"] || r.Descripcion || r.product || r.producto || r["Tipo de Aparato"] || "Electrodoméstico",
+                                model: r.Modelo || r.model || r.modelo || sku,
                                 provider: prov.name,
                                 price: priceVal,
-                                attributes: r.attributes || r.atributos || ""
+                                attributes: r.Atributos || r.attributes || r.atributos || ""
                             });
                         });
                     }

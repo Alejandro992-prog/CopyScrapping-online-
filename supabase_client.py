@@ -146,9 +146,9 @@ class SupabaseClient:
             product = str(it.get("Descripción") or it.get("product") or it.get("producto") or "").strip() or None
             attributes = str(it.get("Atributos") or it.get("attributes") or "").strip() or None
 
-            p_no_vat = clean_price_number(it.get("Precio Sin IVA") or it.get("price_no_vat"))
-            p_vat = clean_price_number(it.get("Precio Con IVA") or it.get("price_vat"))
-            pvp = clean_price_number(it.get("PVP") or it.get("pvp"))
+            p_no_vat = clean_price_number(it.get("Sin IVA (€)") or it.get("Precio Sin IVA") or it.get("price_no_vat"))
+            p_vat = clean_price_number(it.get("Con IVA (€)") or it.get("Precio Con IVA") or it.get("price_vat"))
+            pvp = clean_price_number(it.get("PVP (€)") or it.get("PVP") or it.get("pvp"))
 
             payload.append({
                 "provider_id": p_id,
@@ -212,12 +212,12 @@ class SupabaseClient:
 
         payload = []
         for it in items:
-            model = str(it.get("model") or it.get("Modelo") or "").strip()
+            model = str(it.get("model") or it.get("Modelo") or it.get("sku") or it.get("SKU") or "").strip()
             if not model:
                 continue
 
-            cost_price = clean_price_number(it.get("cost_price") or it.get("coste") or it.get("Precio")) or 0.0
-            stock_units = int(it.get("stock_units") or it.get("stock") or it.get("unidades") or 0)
+            cost_price = clean_price_number(it.get("cost_price") or it.get("cost") or it.get("coste") or it.get("Coste") or it.get("Precio")) or 0.0
+            stock_units = int(it.get("stock_units") or it.get("stock") or it.get("Stock") or it.get("unidades") or 0)
 
             payload.append({
                 "model": model,

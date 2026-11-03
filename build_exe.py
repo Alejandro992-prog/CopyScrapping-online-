@@ -13,12 +13,14 @@ def build():
         # En Windows se usa ";" para separar el origen del destino en --add-data.
         # En macOS/Linux se usa ":". Usamos el separador de ruta de búsqueda del OS.
         f"--add-data=static{os.pathsep}static",
+        f"--add-data={os.path.join('data', 'providers_seed.json')}{os.pathsep}data",
+        f"--add-data={os.path.join('data', 'dictionary.json')}{os.pathsep}data",
         "--name=GardeClipboardParser",
         "app.py"
     ]
     
     print(f"Ejecutando comando: {' '.join(cmd)}")
-    result = subprocess.run(cmd, shell=True)
+    result = subprocess.run(cmd)
     
     if result.returncode == 0:
         print("\n¡Éxito! El archivo ejecutable se ha creado en la carpeta 'dist'.")

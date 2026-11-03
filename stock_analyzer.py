@@ -750,7 +750,7 @@ Devuelve ÚNICAMENTE un JSON válido con la lista:
 Texto del PDF:
 {raw_text[:12000]}
 """
-            candidate_models = ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+            candidate_models = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
             resp = None
             for m in candidate_models:
                 try:
@@ -1484,7 +1484,8 @@ Usa un tono riguroso, directo, con viñetas elegantes y cifras destacadas en neg
     
     seen = set()
     models_to_try = []
-    deprecated = {"gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"}
+    deprecated = {"gemini-1.5-flash", "gemini-1.5-pro"}
+    candidate_models = [custom_model, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
     for m in candidate_models:
         if m and m not in seen and m not in deprecated:
             seen.add(m)

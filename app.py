@@ -5,6 +5,9 @@ import re
 import json
 import zipfile
 import time
+import logging
+
+logger = logging.getLogger("garde_app")
 
 import asyncio
 import threading
@@ -1819,7 +1822,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
     client = genai.Client(api_key=api_key)
     
     # Modelos prioritarios activos y compatibles según la API de Gemini
-    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -1920,7 +1923,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             model_val = str(raw.get("model") or raw.get("modelo") or raw.get("sku") or "").strip()
 
             if not cat_val:
-                cat_val = classify_product_category_and_gama(desc_val + " " + model_val, 0)[0] if (desc_val or model_val) else "Otros"
+                cat_val = classify_product_category(desc_val + " " + model_val) if (desc_val or model_val) else "Otros"
 
             brand_val = str(raw.get("brand") or raw.get("marca") or "").strip()
             if not brand_val:
@@ -2045,7 +2048,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 """
 
     client = genai.Client(api_key=api_key)
-    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -2144,7 +2147,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
             model_val = str(raw.get("model") or raw.get("modelo") or raw.get("sku") or "").strip()
 
             if not cat_val:
-                cat_val = classify_product_category_and_gama(desc_val + " " + model_val, 0)[0] if (desc_val or model_val) else "Otros"
+                cat_val = classify_product_category(desc_val + " " + model_val) if (desc_val or model_val) else "Otros"
 
             brand_val = str(raw.get("brand") or raw.get("marca") or "").strip()
             if not brand_val:
@@ -2575,6 +2578,23 @@ async def sync_supabase_stock(req: SupabaseSyncRequest, username: str = Depends(
         if not os.path.exists(stock_dir):
             return {"success": True, "synced_count": 0, "message": "No hay stock local para subir."}
 
+        inv_path = os.path.join(stock_dir, "inventory.json")
+        if os.path.exists(inv_path):
+            try:
+                with open(inv_path, "r", encoding="utf-8") as f:
+                    records = json.load(f)
+                if isinstance(records, dict):
+                    records = records.get("items", [])
+                count, err = client.upsert_stock(records)
+                if err:
+                    raise HTTPException(status_code=500, detail=f"Error al subir stock: {err}")
+                add_log("success", f"Subidos {count} artículos de stock a Supabase ({username}).")
+                return {"success": True, "synced_count": count, "message": f"Se han subido {count} artículos de stock a Supabase."}
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error procesando stock: {str(e)}")
+
         files = [os.path.join(stock_dir, f) for f in os.listdir(stock_dir) if f.endswith(".xlsx") or f.endswith(".csv")]
         if not files:
             return {"success": True, "synced_count": 0, "message": "No se encontraron archivos de stock locales."}
@@ -2598,6 +2618,28 @@ async def sync_supabase_stock(req: SupabaseSyncRequest, username: str = Depends(
         items, err = client.fetch_stock(limit=10000)
         if err:
             raise HTTPException(status_code=500, detail=f"Error descargando stock: {err}")
+        if items:
+            try:
+                stock_dir = get_writeable_path(os.path.join("data", "stock"))
+                os.makedirs(stock_dir, exist_ok=True)
+                inv_records = [
+                    {
+                        "sku": it.get("model", ""),
+                        "ean": "N/D",
+                        "brand": it.get("brand", "Genérico"),
+                        "category": it.get("category", "Otros"),
+                        "description": it.get("description", ""),
+                        "capacity": "N/D",
+                        "color": "N/D",
+                        "stock": int(it.get("stock_qty") or 0),
+                        "cost": float(it.get("cost_price") or 0.0),
+                    }
+                    for it in items
+                ]
+                with open(os.path.join(stock_dir, "inventory.json"), "w", encoding="utf-8") as f:
+                    json.dump(inv_records, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.debug(f"Error guardando stock descargado en local: {e}")
         return {"success": True, "synced_count": len(items), "data": items, "message": f"Descargados {len(items)} artículos de stock desde Supabase."}
 
     else:
@@ -3466,7 +3508,7 @@ Devuelve ÚNICAMENTE un JSON con este formato exacto (deja el valor vacío "" si
   "price": "subcadena exacta",
   "attributes": "subcadena exacta"
 }}"""
-            for m in ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash"]:
+            for m in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]:
                 try:
                     resp = client.models.generate_content(
                         model=m,
@@ -3557,7 +3599,7 @@ async def get_extraction_files():
             files.append({
                 "filename": f,
                 "size": stat.st_size,
-                "last_modified": get_now().strftime("%Y-%m-%d %H:%M:%S")
+                "last_modified": (datetime.fromtimestamp(stat.st_mtime, tz=APP_TZ) if APP_TZ else datetime.fromtimestamp(stat.st_mtime)).strftime("%Y-%m-%d %H:%M:%S")
             })
     return files
 
@@ -4446,7 +4488,7 @@ Categorías estándar canónicas sugeridas: "Frigo Combi", "Frigo 2 puertas", "F
 Devuelve ÚNICAMENTE un JSON con un objeto clave-valor (clave: modelo original exacto, valor: tipo de aparato canónico):
 {{"MODELO": "CATEGORIA"}}
 """
-            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]
+            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
             for m in candidate_models:
                 try:
                     resp = client.models.generate_content(model=m, contents=prompt)
@@ -5187,6 +5229,17 @@ def parse_erp_pdf(pdf_path: str) -> List[Dict[str, Any]]:
                         capacidad = medida
 
                 color = extract_product_color(line_str)
+                if len(clean_candidates) == 1 or (
+                    len(clean_candidates) == 2
+                    and not (("," in clean_candidates[0][0]) or ("." in clean_candidates[0][0]))
+                    and not (("," in clean_candidates[1][0]) or ("." in clean_candidates[1][0]))
+                    and max(clean_candidates[0][1], clean_candidates[1][1]) <= 100
+                ):
+                    if len(ambiguous_candidates) < 25:
+                        ambiguous_candidates.append({
+                            "product_idx": len(products),
+                            "raw_line": line_str
+                        })
                 products.append({
                     "sku": model,
                     "ean": ean_val,
@@ -6173,6 +6226,7 @@ async def resolve_tariff_unknown_appliances_endpoint(tariff_id: str):
     resolved: Dict[str, str] = {}
     
     if unique_unknown:
+        config = load_config()
         api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="Se requiere una clave API de Gemini configurada para identificar modelos con IA.")
