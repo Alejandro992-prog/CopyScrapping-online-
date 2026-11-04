@@ -1,5 +1,14 @@
 import os
 import sys
+
+if sys.platform.startswith("win"):
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import re
 import json
@@ -377,7 +386,14 @@ def add_log(msg_type: str, message: str, data: Any = None):
         "message": message,
         "data": data
     }
-    print(f"[{log_entry['timestamp']}] [{msg_type.upper()}] {message}", flush=True)
+    try:
+        print(f"[{log_entry['timestamp']}] [{msg_type.upper()}] {message}", flush=True)
+    except Exception:
+        try:
+            safe_msg = str(message).encode("ascii", errors="replace").decode("ascii")
+            print(f"[{log_entry['timestamp']}] [{msg_type.upper()}] {safe_msg}", flush=True)
+        except Exception:
+            pass
     with logs_lock:
         logs_buffer.append(log_entry)  # deque(maxlen=100) auto-descarta el más antiguo
         latest_log_index += 1
@@ -1822,7 +1838,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
     client = genai.Client(api_key=api_key)
     
     # Modelos prioritarios activos y compatibles según la API de Gemini
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+    candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -2048,7 +2064,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 """
 
     client = genai.Client(api_key=api_key)
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+    candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     last_error = None
     response_text = ""
 
@@ -4435,7 +4451,7 @@ Devuelve ÚNICAMENTE un array JSON válido sin explicaciones adicionales:
 [
   {{"item_index": 1, "model": "MWF230", "stock": 32, "cost": 74.17}}
 ]"""
-        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+        candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
         for m in candidate_models:
             try:
                 resp = client.models.generate_content(model=m, contents=prompt)
@@ -4488,7 +4504,7 @@ Categorías estándar canónicas sugeridas: "Frigo Combi", "Frigo 2 puertas", "F
 Devuelve ÚNICAMENTE un JSON con un objeto clave-valor (clave: modelo original exacto, valor: tipo de aparato canónico):
 {{"MODELO": "CATEGORIA"}}
 """
-            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
             for m in candidate_models:
                 try:
                     resp = client.models.generate_content(model=m, contents=prompt)
@@ -6764,6 +6780,7 @@ if __name__ == "__main__":
     import uvicorn
     import os
     import sys
+
     port = int(os.environ.get("PORT", 8000))
     # En la versión online, enlazamos a 0.0.0.0 para ser accesibles externamente.
     # Desactivamos reload si se ejecuta compilado (PyInstaller) o en producción para evitar bucles.

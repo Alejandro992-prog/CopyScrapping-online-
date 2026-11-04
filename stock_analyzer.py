@@ -276,6 +276,24 @@ def fuzzy_match_sku(
 
 # Caché persistente de clasificación de modelos (evita re-consultar a Gemini o recalcular)
 _appliance_cache = None
+_dictionary_cache = None
+
+def load_dictionary_categories() -> Dict[str, Any]:
+    global _dictionary_cache
+    if _dictionary_cache is not None:
+        return _dictionary_cache
+    dict_path = os.path.join(get_base_data_dir(), "dictionary.json")
+    if os.path.exists(dict_path):
+        try:
+            with open(dict_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                _dictionary_cache = d.get("categorias", {})
+                return _dictionary_cache
+        except Exception:
+            _dictionary_cache = {}
+            return _dictionary_cache
+    _dictionary_cache = {}
+    return _dictionary_cache
 
 def get_appliance_cache_file() -> str:
     return os.path.join(get_base_data_dir(), "appliance_models_cache.json")
@@ -478,17 +496,13 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         if decoded:
             return decoded
             
-    # 8. Fallback a data/dictionary.json si existe
+    # 8. Fallback a diccionario de categorías en memoria (0 lecturas a disco)
     try:
-        dict_path = os.path.join(get_base_data_dir(), "dictionary.json")
-        if os.path.exists(dict_path):
-            with open(dict_path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-                cats = d.get("categorias", {})
-                for cat_k, cat_v in cats.items():
-                    syns = cat_v.get("sinonimos", [])
-                    if any(syn in combined for syn in syns):
-                        return cat_k
+        cats = load_dictionary_categories()
+        for cat_k, cat_v in cats.items():
+            syns = cat_v.get("sinonimos", [])
+            if any(syn in combined for syn in syns):
+                return cat_k
     except Exception:
         pass
         
@@ -685,8 +699,8 @@ def parse_excel_tariff(filepath: str, default_provider: str = "") -> List[Dict[s
     items = []
     brand_default_norm = (default_provider or "").strip().upper()
 
-    for _, row in df.iterrows():
-        r = row.to_dict()
+    records = df.to_dict(orient="records")
+    for r in records:
         model_val = str(r.get(col_map.get("model", ""), "")).strip() if col_map.get("model") else ""
         product_val = str(r.get(col_map.get("product", ""), "")).strip() if col_map.get("product") else ""
         brand_val = str(r.get(col_map.get("brand", ""), "")).strip() if col_map.get("brand") else default_provider
@@ -802,7 +816,7 @@ Devuelve ÚNICAMENTE un JSON válido con la lista:
 Texto del PDF:
 {raw_text[:12000]}
 """
-            candidate_models = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+            candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
             resp = None
             for m in candidate_models:
                 try:
@@ -1464,7 +1478,7 @@ def generate_gemini_sales_report(
     delta_result: Dict[str, Any],
     shortages_result: Dict[str, Any],
     api_key: str,
-    custom_model: str = "gemini-2.5-flash"
+    custom_model: str = "gemini-3.8-flash"
 ) -> str:
     """Invoca la API de Gemini para redactar un informe ejecutivo comercial y propuesta de compra."""
     if not api_key:
@@ -1524,22 +1538,11 @@ ESTRUCTURA OBLIGATORIA DEL INFORME:
 Usa un tono riguroso, directo, con viñetas elegantes y cifras destacadas en negrita.
 """
 
-    candidate_models = [
-        custom_model,
-        "gemini-3.6-flash",
-        "gemini-3.8-flash",
-        "gemini-flash-latest",
-        "gemini-3.5-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite"
-    ]
-    
     seen = set()
     models_to_try = []
-    deprecated = {"gemini-1.5-flash", "gemini-1.5-pro", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"}
-    candidate_models = [custom_model, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+    candidate_models = [custom_model, "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     for m in candidate_models:
-        if m and m not in seen and m not in deprecated:
+        if m and m not in seen and m not in ("gemini-1.5-flash", "gemini-1.5-pro"):
             seen.add(m)
             models_to_try.append(m)
 

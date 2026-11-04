@@ -144,12 +144,15 @@ def _load_sheet_dataframe(file_bytes: bytes, filename: str, sheet_name: Optional
         candidate.columns = list(range(candidate.shape[1]))
         return candidate
 
-    # Excel (.xlsx / .xls): leer ÚNICAMENTE la hoja requerida
+    # Excel (.xlsx / .xls): leer ÚNICAMENTE la hoja requerida de forma optimizada
     target = sheet_name or 0
     df_sheet = pd.read_excel(io.BytesIO(file_bytes), sheet_name=target, header=None, dtype=str)
-    df_sheet = df_sheet.dropna(how="all").reset_index(drop=True)
-    df_sheet = df_sheet.dropna(axis=1, how="all")
-    df_sheet.columns = list(range(df_sheet.shape[1]))
+    cleaned = df_sheet.replace(r'^\s*$', pd.NA, regex=True).dropna(how="all").dropna(axis=1, how="all")
+    if not cleaned.empty:
+        df_sheet = cleaned.reset_index(drop=True)
+        if df_sheet.shape[1] > 80:
+            df_sheet = df_sheet.iloc[:, :80]
+        df_sheet.columns = list(range(df_sheet.shape[1]))
     return df_sheet
 
 
@@ -349,14 +352,15 @@ def create_tariff_preview_session(
     columns = detection["columns"]
     mapping = detection["suggested_mapping"]
 
-    # Construir filas de vista previa (hasta 25 filas después de la cabecera)
+    # Construir filas de vista previa ultrarrápida (hasta 25 filas en memoria directa)
     data_df = df.iloc[h_row + 1:].reset_index(drop=True) if h_row + 1 < len(df) else df.copy()
     preview_rows = []
-    for _, row in data_df.head(25).iterrows():
+    num_cols = df.shape[1]
+    for row_vals in data_df.head(25).values:
         row_cells = []
-        for c_idx in range(df.shape[1]):
-            val = row.iloc[c_idx] if c_idx < len(row) else ""
-            if pd.isna(val) or str(val).strip().lower() in ("nan", "none"):
+        for c_idx in range(num_cols):
+            val = row_vals[c_idx] if c_idx < len(row_vals) else ""
+            if pd.isna(val) or str(val).strip().lower() in ("nan", "none", "<na>"):
                 row_cells.append("")
             else:
                 row_cells.append(str(val).strip())
@@ -457,8 +461,18 @@ def extract_tariff_with_mapping(
     extracted_items: Dict[str, Dict[str, Any]] = {}
     skipped_rows = 0
 
-    for r_idx, row in data_df.iterrows():
-        raw_model = str(row.iloc[model_col]).strip() if model_col < len(row) and pd.notna(row.iloc[model_col]) else ""
+    model_col_vals = data_df.iloc[:, model_col].values
+    price_col_vals = data_df.iloc[:, price_col].values
+    desc_col_vals = data_df.iloc[:, desc_col].values if (desc_col is not None and 0 <= desc_col < num_cols) else None
+    brand_col_vals = data_df.iloc[:, brand_col].values if (brand_col is not None and 0 <= brand_col < num_cols) else None
+    n_rows = len(data_df)
+
+    for i in range(n_rows):
+        raw_m = model_col_vals[i]
+        if pd.isna(raw_m):
+            skipped_rows += 1
+            continue
+        raw_model = str(raw_m).strip()
         if not raw_model or raw_model.lower() in ("nan", "none", "null", "modelo", "referencia", "codigo", "código", "sku"):
             skipped_rows += 1
             continue
@@ -471,21 +485,21 @@ def extract_tariff_with_mapping(
                 skipped_rows += 1
                 continue
 
-        raw_price_cell = row.iloc[price_col] if price_col < len(row) else None
+        raw_price_cell = price_col_vals[i]
         price_val = clean_price_value(raw_price_cell)
         if price_val is None or price_val <= 0:
             skipped_rows += 1
             continue
 
         raw_desc = ""
-        if desc_col is not None and 0 <= desc_col < num_cols and desc_col < len(row) and pd.notna(row.iloc[desc_col]):
-            raw_desc = str(row.iloc[desc_col]).strip()
+        if desc_col_vals is not None and pd.notna(desc_col_vals[i]):
+            raw_desc = str(desc_col_vals[i]).strip()
             if raw_desc.lower() in ("nan", "none", "null"):
                 raw_desc = ""
 
         raw_brand = ""
-        if brand_col is not None and 0 <= brand_col < num_cols and brand_col < len(row) and pd.notna(row.iloc[brand_col]):
-            raw_brand = str(row.iloc[brand_col]).strip()
+        if brand_col_vals is not None and pd.notna(brand_col_vals[i]):
+            raw_brand = str(brand_col_vals[i]).strip()
             if raw_brand.lower() in ("nan", "none", "null"):
                 raw_brand = ""
 
