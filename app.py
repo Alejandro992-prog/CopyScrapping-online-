@@ -6778,11 +6778,7 @@ async def agent_export_excel_endpoint():
 
 if __name__ == "__main__":
     import uvicorn
-    import os
-    import sys
-
     port = int(os.environ.get("PORT", 8000))
-    # En la versión online, enlazamos a 0.0.0.0 para ser accesibles externamente.
-    # Desactivamos reload si se ejecuta compilado (PyInstaller) o en producción para evitar bucles.
     should_reload = not getattr(sys, 'frozen', False) and os.environ.get("ENV") != "production"
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=should_reload)
+

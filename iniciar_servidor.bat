@@ -5,6 +5,8 @@ echo   Iniciando Servidor Local Garde (http://localhost:8000)
 echo ========================================================
 echo.
 
+cd /d "%~dp0"
+
 if exist "C:\Users\aleja\miniconda3\python.exe" (
     "C:\Users\aleja\miniconda3\python.exe" app.py
 ) else (
@@ -13,6 +15,6 @@ if exist "C:\Users\aleja\miniconda3\python.exe" (
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [ERROR] Hubo un problema al iniciar el servidor.
+    echo [ERROR] El servidor se ha detenido con codigo de error %ERRORLEVEL%.
     pause
 )
