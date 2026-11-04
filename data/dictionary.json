@@ -142,7 +142,7 @@
       }
     },
     "Climatizadores": {
-      "sinonimos": ["climatizador", "aire acondicionado", "aire", "split", "split wall", "inverter", "frigorias", "frigorías"],
+      "sinonimos": ["climatizador", "climatizadores", "aire acondicionado", "split", "split wall", "frigorias", "frigorías"],
       "atributos_clave": {
         "potencia": ["frig", "frigorias", "frigorías", "kw", "kcal"]
       }

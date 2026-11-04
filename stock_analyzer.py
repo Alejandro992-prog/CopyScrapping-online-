@@ -363,7 +363,7 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
         return 'Lavadoras-Secadoras'
         
     # 2. Lavadoras
-    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WTE', 'BM3WFU', 'B3WFU', 'TKD', 'WMT', 'CSS', 'RO4', 'RO14')):
+    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WGG', 'WGA', 'WUU', 'WG', 'WTE', 'BM3WFU', 'B3WFU', 'WTV', 'TKD', 'WMT', 'CSS', 'CSO', 'RO4', 'RO14', 'RP4', 'HE4', 'CO4', 'F4W', 'F2W', 'F4J', 'FFL', 'FFB', 'BWE')):
         return 'Lavadoras'
         
     # 3. Secadoras
@@ -377,9 +377,9 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
         return 'Lavavajillas 60cm'
         
     # 5. Frigoríficos y Congeladores
-    if m.startswith(('SBS', 'FRD', 'AMCB', 'GNE', 'KAD', 'FD', 'HCR')):
+    if m.startswith(('SBS', 'FRD', 'AMCB', 'GNE', 'KAD', 'FD', 'HCR', 'GSX', 'RS6')):
         return 'Frigos americanos'
-    if m.startswith(('FGC', '3KFE', '3KFC', 'KGN', 'KGF', 'RCNE', 'RCNT', 'B5RCNE', 'B3RCNE', 'NFL', 'NFE', 'RBF', 'CCE', 'HBE')):
+    if m.startswith(('FGC', '3KFE', '3KFC', 'KGN', 'KGF', 'RCNE', 'RCNT', 'B5RCNE', 'B3RCNE', 'NFL', 'NFE', 'RBF', 'CCE', 'HBE', 'WBE', 'W5')):
         return 'Frigo Combi'
     if m.startswith(('CLR', 'CL', 'KSW', '3FCE', 'SVE')):
         return 'Frigo 1 puerta'
@@ -390,10 +390,10 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
     if m.startswith(('FG2', 'FGD', 'FG', 'RDNT', 'KD', 'CTE')):
         return 'Frigo 2 puertas'
         
-    # 6. Cocción, Hornos y Microondas
-    if m.startswith(('HOR', 'HSM', '3HB', 'HBA', 'HBJ', 'BBIE', 'BBIM', 'BIE', 'HLC', 'HLB', 'HBE', 'FCP', 'FIDC')):
+    # 6. Cocción, Hornos y Microondas (Prefijos extendidos: Balay, Bosch, Siemens, Teka, Beko, Candy, Whirlpool)
+    if m.startswith(('HOR', 'HSM', '3HB', '3HT', 'HBA', 'HBG', 'HBL', 'HBJ', 'HBN', 'HRG', 'CBG', 'HB6', 'HB5', 'BBIE', 'BBIM', 'BIE', 'BVM', 'OIM', 'HLB', 'HSB', 'HBB', 'HLC', 'HBE', 'HE', 'HR', 'FCP', 'FIDC', 'FCS', 'FCNE', 'HOC', 'EOB', 'BPE', 'KSE', 'BPS', 'AKZ', 'OAS', 'IFW')):
         return 'Hornos'
-    if m.startswith(('IMW', 'MW', '3CG', '3CP', 'MGB', 'BMO', 'MIC', 'CMI')):
+    if m.startswith(('BEL', 'BFL', 'BER', 'BFR', 'BFG', 'BE6', 'BF6', '3CP', '3CG', '3WM', 'ML8', 'ML82', 'MWE', 'MWL', 'MS2', 'MG2', 'MC2', 'MWP', 'MCP', 'MWF', 'MAX', 'BMG', 'BMO', 'MIC', 'CMG', 'CMI', 'CMXG', 'CPG', 'IMW', 'MW', 'MGB')):
         return 'Microondas'
     if m.startswith(('INPT', 'IND', 'BIN', '3EB', 'PIE', 'PUJ', 'HII', 'IBC', 'IZC', 'CI', 'CTP')):
         return 'Inducción'
@@ -488,10 +488,10 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         return "Placa de Gas"
     if any(s in combined for s in ["vitro", "placa", "encimera"]):
         return "Vitrocerámicas"
-    if any(s in combined for s in ["horno", "oven", "pirolitico", "pirolítico", "multifuncion", "multifunción"]):
-        return "Hornos"
-    if any(s in combined for s in ["microondas", "microwave"]):
+    if any(s in combined for s in ["microondas", "microwave", "micro-ondas", "micro ondas", "micro integrable", "micro encastrable"]) or re.search(r'\bmicro\b', combined):
         return "Microondas"
+    if any(s in combined for s in ["horno", "oven", "pirolitico", "pirolítico", "multifuncion", "multifunción", "horno vapor", "horno compacto"]):
+        return "Hornos"
     if any(s in combined for s in ["campana", "extractor", "decorativa", "grupo filtrante"]):
         return "Campana"
     if any(s in combined for s in ["televisor", "television", "televisión", "smart tv", "tv", "qled", "oled"]):

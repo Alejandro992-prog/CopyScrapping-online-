@@ -4213,46 +4213,37 @@ def query_ean_online(ean: str) -> Optional[Dict[str, Any]]:
 def check_category_prefix_rules(category_key: str, desc_lower: str) -> bool:
     clean_desc = re.sub(r'^[0-9\s\.,\-/()]+', '', desc_lower).strip()
     
-    # Obtener la primera palabra (delimitada por espacios o puntuación/guiones)
-    first_word_match = re.match(r'^([a-záéíóúñü]+)', clean_desc)
-    if not first_word_match:
-        return True
-    first_word = first_word_match.group(1)
-    
-    # Mapeo de categorías con prefijos restrictivos obligatorios
-    # Prefijos válidos para la primera palabra de la descripción de cada categoría
-    _placa_prefixes = {"placa", "vitro", "vitroceramica", "vitrocerámica", "induccion", "inducción", "encimera", "fuego", "fuegos", "encastrable"}
-    _frigo_prefixes = {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"}
-    category_to_prefixes = {
-        "Lavadoras-Secadoras": {"lavasecadora", "lavasecadoras", "lavadora"},
-        "Lavadoras": {"lavadora", "lavadoras"},
-        "Microondas": {"microondas", "micro"},
-        "Hornos": {"horno", "hornos"},
-        "Secadoras": {"secadora", "secadoras"},
-        "Lavavajillas 45cm": {"lavavajillas", "lavaplatos"},
-        "Lavavajillas 60cm": {"lavavajillas", "lavaplatos"},
-        "Campanas": {"campana", "extractor", "extractora"},
-        # Categoría genérica usada en el diccionario (entrada raíz antes de subclasificar)
-        "Vitrocerámicas": _placa_prefixes,
-        # Subcategorías de placa (ya subclasificadas)
-        "Inducción": _placa_prefixes,
-        "Vitrocerámica": _placa_prefixes,
-        "Placa de Gas": _placa_prefixes,
-        "Cristal Gas": _placa_prefixes,
+    _placa_words = {"placa", "vitro", "vitroceramica", "vitrocerámica", "induccion", "inducción", "encimera", "fuego", "fuegos", "encastrable"}
+    _frigo_words = {"frigorifico", "frigorífico", "frigo", "frigos", "frigorificos", "frigoríficos", "congelador", "congeladores", "freezer", "freezers", "combi", "combis"}
+    category_to_keywords = {
+        "Lavadoras-Secadoras": {"lavasecadora", "lavasecadoras", "lavadora secadora"},
+        "Lavadoras": {"lavadora", "lavadoras", "carga frontal", "carga superior"},
+        "Microondas": {"microondas", "microwave", "micro"},
+        "Hornos": {"horno", "hornos", "oven", "multifuncion", "multifunción", "pirolitico", "pirolítico"},
+        "Secadoras": {"secadora", "secadoras", "dryer", "bomba de calor"},
+        "Lavavajillas 45cm": {"lavavajillas", "lavaplatos", "dishwasher"},
+        "Lavavajillas 60cm": {"lavavajillas", "lavaplatos", "dishwasher"},
+        "Campanas": {"campana", "extractor", "extractora", "grupo filtrante"},
+        "Vitrocerámicas": _placa_words,
+        "Inducción": _placa_words,
+        "Vitrocerámica": _placa_words,
+        "Placa de Gas": _placa_words,
+        "Cristal Gas": _placa_words,
         "Calentadores": {"termo", "calentador", "calentadores"},
         "Ventiladores": {"ventilador", "ventiladores"},
         "Fregaderos": {"fregadero", "fregaderos"},
-        "Climatizadores": {"climatizador", "aire"},
-        "Frigoríficos": _frigo_prefixes,
-        "Frigo Combi": _frigo_prefixes,
-        "Frigo 2 puertas": _frigo_prefixes,
-        "Frigo 1 puerta": _frigo_prefixes,
-        "Frigos integrables": _frigo_prefixes,
-        "Frigos americanos": _frigo_prefixes
+        "Climatizadores": {"climatizador", "climatizadores", "aire acondicionado"},
+        "Frigoríficos": _frigo_words,
+        "Frigo Combi": _frigo_words,
+        "Frigo 2 puertas": _frigo_words,
+        "Frigo 1 puerta": _frigo_words,
+        "Frigos integrables": _frigo_words,
+        "Frigos americanos": _frigo_words
     }
     
-    if category_key in category_to_prefixes:
-        return first_word in category_to_prefixes[category_key]
+    if category_key in category_to_keywords:
+        valid_words = category_to_keywords[category_key]
+        return any(re.search(rf'\b{re.escape(w)}\b', clean_desc) for w in valid_words)
         
     return True
 
@@ -4793,6 +4784,14 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                                 # También aplica si ya viene con categoría genérica o variantes ortográficas
                                 if categoria in ("Vitrocerámicas", "Vitrocerámica", "Inducción", "Placa de Gas", "Cristal Gas"):
                                     categoria = classify_placa(raw_description)
+                                if categoria == "Otros" and stock_analyzer is not None:
+                                    try:
+                                        sku_cand = desc_tokens[1] if len(desc_tokens) > 1 and any(c.isdigit() for c in desc_tokens[1]) else (desc_tokens[0] if desc_tokens and any(c.isdigit() for c in desc_tokens[0]) else "")
+                                        cat_auto = stock_analyzer.classify_appliance_type(raw_description, sku_cand)
+                                        if cat_auto and cat_auto != "Otros":
+                                            categoria = cat_auto
+                                    except Exception:
+                                        pass
                                     
                             # Unidades para capacidad
                             cat_info = categorias_dict.get(categoria, {})

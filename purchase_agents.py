@@ -514,7 +514,11 @@ def extract_tariff_with_mapping(
                     extracted_brand = ""
             raw_brand = provider_name.strip() or extracted_brand
 
-        category = stock_analyzer.classify_appliance_type(f"{raw_desc} {raw_model}", raw_model)
+        # Escaneo completo de toda la fila de la tarifa (incluye columnas de Familia, Subfamilia, Grupo o Notas)
+        row_cells = [str(df.iat[i, c_idx]).strip() for c_idx in range(df.shape[1]) if pd.notna(df.iat[i, c_idx])]
+        row_full_text = " ".join([c for c in row_cells if c.lower() not in ("nan", "none", "null")])
+        combined_text = f"{raw_desc} {raw_model} {row_full_text}".strip()
+        category = stock_analyzer.classify_appliance_type(combined_text, raw_model)
         norm_key = stock_analyzer.normalize_sku(raw_model)
         if not norm_key:
             skipped_rows += 1
@@ -871,7 +875,7 @@ def run_multi_agent_cross_reference(
                 "match_type": match_type,
                 "match_score": round(match_score * 100, 1),
                 "brand": t_brand if t_brand != "General" else matched_s.get("brand", "General"),
-                "category": t_cat if t_cat != "Otros" else matched_s.get("category", "Otros"),
+                "category": (matched_s.get("category") if matched_s.get("category") and matched_s.get("category") not in ("Otros", "N/D", "") else (t_cat if t_cat and t_cat != "Otros" else "Otros")),
                 "description": t_desc if len(t_desc) >= len(matched_s.get("description", "")) else matched_s.get("description", t_desc),
                 "tariff_price": t_price,
                 "stock_cost": s_cost,
@@ -933,6 +937,36 @@ def run_multi_agent_cross_reference(
     mapping = t_sess["mapping"]
     price_col_name = columns[mapping["price_col"]]["name"] if 0 <= mapping["price_col"] < len(columns) else "Precio"
     model_col_name = columns[mapping["model_col"]]["name"] if 0 <= mapping["model_col"] < len(columns) else "Modelo"
+
+    # Si hay clave de Gemini y quedan modelos con categoría 'Otros', resolverlos en un único lote ultrarrápido
+    if gemini_api_key:
+        unknown_skus = []
+        for it in matched_items:
+            if it.get("category") in ("Otros", "N/D", "", None):
+                unknown_skus.append(it["tariff_model"])
+        for it in missing_items:
+            if it.get("category") in ("Otros", "N/D", "", None):
+                unknown_skus.append(it["tariff_model"])
+        unique_unknown = list(dict.fromkeys([m for m in unknown_skus if m and len(m) >= 2]))
+        if unique_unknown:
+            try:
+                import app
+                resolved_map = app.resolve_unknown_models_with_gemini(
+                    unique_unknown[:50],
+                    brand=t_sess.get("provider_name", "General"),
+                    api_key=gemini_api_key
+                )
+                if resolved_map:
+                    for it in matched_items:
+                        m_key = it["tariff_model"]
+                        if m_key in resolved_map:
+                            it["category"] = resolved_map[m_key]
+                    for it in missing_items:
+                        m_key = it["tariff_model"]
+                        if m_key in resolved_map:
+                            it["category"] = resolved_map[m_key]
+            except Exception as e_ai:
+                logger.debug(f"Error resolviendo modelos desconocidos con IA en lote: {e_ai}")
 
     # Construir transcripción de comunicación Multi-Agente
     dialogue = [
