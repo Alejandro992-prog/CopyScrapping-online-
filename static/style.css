@@ -593,6 +593,11 @@ tr:hover td {
     gap: 20px;
 }
 
+.grid-2col > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
 @media (max-width: 900px) {
     .grid-sidebar-layout {
         grid-template-columns: 1fr;

@@ -8,7 +8,7 @@
       }
     },
     "Lavadoras": {
-      "sinonimos": ["lavadora", "washer", "lavar", "lavarropa", "lavadoras", "frontal", "superior", "carga superior", "lavadora integrable"],
+      "sinonimos": ["lavadora", "washer", "lavadoras", "lavarropa", "lavarropas", "lavadora carga frontal", "lavadora carga superior", "lavadora integrable", "lavadora libre instalacion"],
       "atributos_clave": {
         "capacidad": ["kg", "kilogramos", "kilos"],
         "centrifugado": ["rpm", "revoluciones"]
@@ -27,7 +27,7 @@
       }
     },
     "Lavavajillas 60cm": {
-      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "integrable", "60 cm", "60cm"],
+      "sinonimos": ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos", "lavavajillas 60", "lavavajillas 60cm", "lavavajillas libre instalacion", "lavavajillas integrable"],
       "atributos_clave": {
         "servicios": ["cubiertos", "servicios", "cub"]
       }
@@ -54,7 +54,7 @@
       }
     },
     "Frigos integrables": {
-      "sinonimos": ["integrable", "integrables", "encastrable", "encastrables", "panelable", "panelables", "integrado", "integrados", "frigo integrable", "combi integrable"],
+      "sinonimos": ["frigo integrable", "frigorifico integrable", "frigorífico integrable", "combi integrable", "frigorificos integrables", "frigoríficos integrables", "refrigerador integrable"],
       "atributos_clave": {
         "capacidad": ["l", "litros", "lts"],
         "tecnologia": ["no frost", "frost free"]

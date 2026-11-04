@@ -1204,11 +1204,13 @@ def classify_product_category(product_text: str) -> str:
     except Exception:
         pass
         
-    if any(k in text_lower for k in ["lavadora", "washer", "carga frontal", "carga superior"]):
-        return "Lavadora"
-    elif any(k in text_lower for k in ["secadora", "dryer"]):
+    if any(k in text_lower for k in ["secadora", "dryer", "bomba de calor"]):
         return "Secadora"
-    elif any(k in text_lower for k in ["lavavajillas", "dishwasher", "lavaplatos"]):
+    elif any(k in text_lower for k in ["lavadora", "washer", "lavarropa"]):
+        return "Lavadora"
+    elif any(k in text_lower for k in ["carga frontal", "carga superior"]) and not any(k in text_lower for k in ["secadora", "frigo", "horno", "placa", "campana"]):
+        return "Lavadora"
+    elif any(k in text_lower for k in ["lavavajillas",  "dishwasher", "lavaplatos"]):
         return "Lavavajillas"
     elif any(k in text_lower for k in ["combi", "frigorifico", "frigorífico", "frigo", "refrigerador"]):
         return "Frigorífico Combi" if "combi" in text_lower else "Frigorífico"

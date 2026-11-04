@@ -36,12 +36,14 @@ def _trim_sessions(store: Dict[str, Any]):
 
 def is_valid_sku(val: Any) -> bool:
     """Verifica si un string tiene características de código de modelo o SKU principal."""
+    if hasattr(stock_analyzer, "is_valid_Main_SKU"):
+        return stock_analyzer.is_valid_Main_SKU(val)
     if val is None:
         return False
     s = str(val).strip()
-    if len(s) < 2 or len(s) > 40:
+    if len(s) < 2 or len(s) > 60:
         return False
-    if " " in s and len(s.split()) > 2:
+    if " " in s and len(s.split()) > 6:
         return False
     if not re.search(r'\d', s):
         return False
@@ -690,6 +692,20 @@ def _compute_sku_similarity(tariff_norm: str, stock_norm: str) -> Tuple[float, s
     if tariff_norm == stock_norm:
         return 1.0, "EXACTO"
 
+    # Coincidencia si una de las dos referencias contiene el nombre de la marca como prefijo
+    # (ej. Tarifa: 'BALAY 3TS988B' -> 'BALAY3TS988B' vs Stock: '3TS988B')
+    if hasattr(stock_analyzer, "strip_brand_from_sku"):
+        t_nobrand = stock_analyzer.strip_brand_from_sku(tariff_norm)
+        s_nobrand = stock_analyzer.strip_brand_from_sku(stock_norm)
+        if (t_nobrand and t_nobrand == stock_norm) or (s_nobrand and tariff_norm == s_nobrand) or (t_nobrand and s_nobrand and t_nobrand == s_nobrand):
+            return 1.0, "EXACTO"
+
+    # Coincidencia de modelo base eliminando revisiones (/01, /02) o sufijo país/acabado
+    t_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', tariff_norm)
+    s_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', stock_norm)
+    if t_base and s_base and t_base == s_base and len(t_base) >= 5:
+        return 0.98, "EXACTO"
+
     # 1. Coincidencia por prefijo (ej. 'WGB256A0ES' vs 'WGB256A0' o variantes de color al final)
     min_len = min(len(tariff_norm), len(stock_norm))
     max_len = max(len(tariff_norm), len(stock_norm))
@@ -765,8 +781,16 @@ def run_multi_agent_cross_reference(
     else:
         raise ValueError("No se ha cargado ningún PDF de Stock en el Agente de Almacén.")
 
-    # Índices de búsqueda para Stock
-    stock_by_norm: Dict[str, Dict[str, Any]] = {it["normalized_sku"]: it for it in stock_items}
+    # Índices de búsqueda para Stock (exacto y sin prefijos de marca)
+    stock_by_norm: Dict[str, Dict[str, Any]] = {}
+    stock_by_nobrand: Dict[str, Dict[str, Any]] = {}
+    for it in stock_items:
+        s_norm = it["normalized_sku"]
+        stock_by_norm[s_norm] = it
+        if hasattr(stock_analyzer, "strip_brand_from_sku"):
+            s_nb = stock_analyzer.strip_brand_from_sku(s_norm)
+            if s_nb and s_nb not in stock_by_nobrand:
+                stock_by_nobrand[s_nb] = it
     matched_stock_norms = set()
 
     matched_items: List[Dict[str, Any]] = []
@@ -786,9 +810,23 @@ def run_multi_agent_cross_reference(
         match_type = "NONE"
         match_score = 0.0
 
-        # 1. Intento de coincidencia exacta normalizada O(1)
+        t_nobrand = stock_analyzer.strip_brand_from_sku(t_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else t_norm
+
+        # 1. Intento de coincidencia exacta normalizada O(1) (con y sin prefijo de marca)
         if t_norm in stock_by_norm:
             matched_s = stock_by_norm[t_norm]
+            match_type = "EXACTO"
+            match_score = 1.0
+        elif t_nobrand and t_nobrand in stock_by_norm:
+            matched_s = stock_by_norm[t_nobrand]
+            match_type = "EXACTO"
+            match_score = 1.0
+        elif t_norm in stock_by_nobrand:
+            matched_s = stock_by_nobrand[t_norm]
+            match_type = "EXACTO"
+            match_score = 1.0
+        elif t_nobrand and t_nobrand in stock_by_nobrand:
+            matched_s = stock_by_nobrand[t_nobrand]
             match_type = "EXACTO"
             match_score = 1.0
         else:

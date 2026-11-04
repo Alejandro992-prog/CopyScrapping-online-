@@ -142,7 +142,7 @@ def normalize_sku(sku: str) -> str:
     if not sku:
         return ""
     s = str(sku).upper().strip()
-    s = re.sub(r'[\s\-/\._]', '', s)
+    s = re.sub(r'[\s\-_/\\.:,;\'"|~•·\u2010-\u2015\u2212\u00A0\u200B\uFEFF]', '', s)
     return s
 
 def is_valid_Main_SKU(val: Any) -> bool:
@@ -152,7 +152,8 @@ def is_valid_Main_SKU(val: Any) -> bool:
     s = str(val).strip()
     if len(s) < 2 or len(s) > 40:
         return False
-    if " " in s and len(s.split()) > 2:
+    # Permitir referencias con espacios y guiones intermedios (ej. 3 TS 988 B)
+    if " " in s and len(s.split()) > 6:
         return False
     if not re.search(r'\d', s):
         return False
@@ -161,6 +162,18 @@ def is_valid_Main_SKU(val: Any) -> bool:
     return True
 
 is_valid_sku = is_valid_Main_SKU
+
+def strip_brand_from_sku(sku_norm: str) -> str:
+    """Elimina prefijo de marca conocida si el SKU normalizado lo contiene (ej. 'BALAY3TS988B' -> '3TS988B')."""
+    if not sku_norm:
+        return ""
+    for b in KNOWN_BRANDS:
+        b_clean = re.sub(r'[\s\-_/\\.:]', '', b.upper())
+        if sku_norm.startswith(b_clean) and len(sku_norm) > len(b_clean) + 2:
+            cand = sku_norm[len(b_clean):]
+            if any(ch.isdigit() for ch in cand):
+                return cand
+    return sku_norm
 
 KNOWN_BRANDS = [
     "BALAY", "BOSCH", "SIEMENS", "BEKO", "TEKA", "INFINITON", "CECOTEC", "SAMSUNG", "LG",
@@ -197,7 +210,7 @@ def extract_base_model(sku: str) -> str:
     m = re.search(r'^([A-Z0-9]{3,}[0-9])(?:ES|XPN|SP|IB|WH|WHITE|BL|BK|BLACK|IX|INX|INOX|W|B|X)$', s)
     if m:
         s = m.group(1)
-    s = re.sub(r'[\s\-/\._]', '', s)
+    s = re.sub(r'[\s\-_/\\.:,;\'"|~•·\u2010-\u2015\u2212\u00A0\u200B\uFEFF]', '', s)
     return s
 
 def extract_model_color(model: str, text: str = "") -> str:
@@ -350,7 +363,7 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
         return 'Lavadoras-Secadoras'
         
     # 2. Lavadoras
-    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WTE', 'BM3WFU', 'B3WFU', 'TKD', 'WMT', 'EVO', 'CSS', 'RO', 'RP')):
+    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WTE', 'BM3WFU', 'B3WFU', 'TKD', 'WMT', 'CSS', 'RO4', 'RO14')):
         return 'Lavadoras'
         
     # 3. Secadoras
@@ -459,10 +472,12 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         return "Frigoríficos"
         
     # 5. Lavado y secado
-    if any(s in combined for s in ["lavadora", "washer", "lavarropa", "carga frontal", "carga superior"]):
+    if any(s in combined for s in ["lavadora", "washer", "lavarropa", "lavarropas"]):
         return "Lavadoras"
     if any(s in combined for s in ["secadora", "dryer", "bomba de calor", "heat pump"]):
         return "Secadoras"
+    if any(s in combined for s in ["carga frontal", "carga superior"]) and not any(k in combined for k in ["secadora", "frigo", "congelador", "horno", "placa", "campana", "microondas"]):
+        return "Lavadoras"
         
     # 6. Cocción y extracción
     if any(s in combined for s in ["induccion", "inducción", "flex induction", "flexinduccion"]):
@@ -501,7 +516,7 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         cats = load_dictionary_categories()
         for cat_k, cat_v in cats.items():
             syns = cat_v.get("sinonimos", [])
-            if any(syn in combined for syn in syns):
+            if any(len(syn) >= 4 and f" {syn} " in f" {combined} " for syn in syns):
                 return cat_k
     except Exception:
         pass
