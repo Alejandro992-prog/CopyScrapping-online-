@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=1.0.4">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.5">
 </head>
 <body>
     <div class="app-container">
@@ -1146,10 +1146,10 @@
                 </div>
 
                 <!-- MÓDULO 1 Y MÓDULO 2 EN PARALELO -->
-                <div class="grid-2col mb-20" style="grid-template-columns: 1.35fr 1fr; gap: 20px; align-items: start;">
+                <div class="grid-2col mb-20" style="grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; max-width: 100%;">
 
                     <!-- MÓDULO 1: PROCESAMIENTO DE TARIFA DE PROVEEDOR (EXCEL / CSV) -->
-                    <div class="card" style="border-top: 3px solid #8b5cf6;">
+                    <div class="card" style="border-top: 3px solid #8b5cf6; min-width: 0; max-width: 100%; overflow: hidden;">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px;">
                             <div>
                                 <span style="font-size: 11px; font-weight: 700; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px;">🟣 Módulo 1 · Agente de Tarifas</span>
@@ -1180,7 +1180,7 @@
                         </div>
 
                         <!-- Panel de Configuración de Hoja y Selección Interactiva de Columnas (visible tras subir archivo) -->
-                        <div id="agent-tariff-workspace" style="display: none;">
+                        <div id="agent-tariff-workspace" style="display: none; min-width: 0; max-width: 100%; overflow: hidden;">
                             <!-- Controles de Hoja y Fila de Cabecera -->
                             <div style="display: grid; grid-template-columns: 1fr 130px 1fr; gap: 10px; background: rgba(15, 23, 42, 0.55); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px;">
                                 <div>
@@ -1244,8 +1244,8 @@
                                 </label>
                             </div>
 
-                            <div class="table-container" style="max-height: 260px; overflow: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 10px;">
-                                <table id="agent-tariff-preview-table" style="font-size: 12px;">
+                            <div class="table-container" style="max-height: 280px; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 10px;">
+                                <table id="agent-tariff-preview-table" style="font-size: 12px; width: max-content; min-width: 100%;">
                                     <thead id="agent-tariff-preview-thead"></thead>
                                     <tbody id="agent-tariff-preview-tbody"></tbody>
                                 </table>
@@ -1261,7 +1261,7 @@
                     </div>
 
                     <!-- MÓDULO 2: PROCESAMIENTO DE STOCK INTERNO (PDF) -->
-                    <div class="card" style="border-top: 3px solid #3b82f6;">
+                    <div class="card" style="border-top: 3px solid #3b82f6; min-width: 0; max-width: 100%; overflow: hidden;">
                         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px;">
                             <div>
                                 <span style="font-size: 11px; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.5px;">🔵 Módulo 2 · Agente de Stock</span>
@@ -1702,7 +1702,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=1.1.0"></script>
+    <script src="/static/app.js?v=1.1.1"></script>
 </body>
 </html>
 

@@ -211,6 +211,11 @@ h1, h2, h3, h4, h5, h6 {
     gap: 20px;
 }
 
+.grid-2col > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
 @media (max-width: 900px) {
     .grid-2col {
         grid-template-columns: 1fr;
@@ -1569,3 +1574,21 @@ tr:hover td {
     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
 }
 
+
+/* Agente de Tarifas: Contencion de ancho y scroll horizontal */
+#agent-tariff-workspace {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+#agent-tariff-preview-table {
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
+}
+
+#agent-tariff-preview-table th,
+#agent-tariff-preview-table td {
+    white-space: nowrap;
+}
