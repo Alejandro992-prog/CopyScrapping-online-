@@ -5337,7 +5337,8 @@ document.addEventListener("DOMContentLoaded", () => {
                             <td style="font-weight: 700; color: #93c5fd;">${escapeHtmlSafe(it.sku)}</td>
                             <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
                             <td style="text-align: center; font-weight: 700; color: ${it.stock > 0 ? '#34d399' : '#f87171'};">${it.stock} uds</td>
-                            <td style="text-align: right;">${Number(it.cost || 0).toFixed(2)} €</td>
+                            <td style="text-align: right; font-weight: 700; color: #38bdf8;">${Number(it.unit_cost || it.cost || 0).toFixed(2)} €</td>
+                            <td style="text-align: right; color: #94a3b8;">${Number(it.total_cost || ((it.cost || 0) * (it.stock || 0))).toFixed(2)} €</td>
                         </tr>
                     `).join("");
                 }

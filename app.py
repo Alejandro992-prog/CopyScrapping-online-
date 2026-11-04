@@ -5075,100 +5075,72 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                 if len(clean_candidates) == 1:
                     token, val = clean_candidates[0]
                     if val > 100:
-                        cost = val
+                        cost = float(val)
                         stock = 1
                     else:
-                        stock = int(val)
+                        stock = max(0, int(val))
+                        cost = 0.0
                 elif len(clean_candidates) == 2:
                     c1_token, val1 = clean_candidates[0]
                     c2_token, val2 = clean_candidates[1]
-                    
                     has_decimal1 = ("," in c1_token) or ("." in c1_token)
                     has_decimal2 = ("," in c2_token) or ("." in c2_token)
                     
                     if has_decimal1 and not has_decimal2:
-                        cost = val1
-                        stock = int(val2)
+                        cost = float(val1)
+                        stock = max(0, int(val2))
                     elif not has_decimal1 and has_decimal2:
-                        stock = int(val1)
-                        cost = val2
-                    elif has_decimal1 and has_decimal2:
-                        # Ambos tienen decimales (ej: Coste y Total). Calcular stock = Total / Coste
-                        if val1 > 0 and val2 > val1:
-                            cost = val1
-                            stock = int(round(val2 / val1))
-                        elif val2 > 0 and val1 > val2:
-                            cost = val2
-                            stock = int(round(val1 / val2))
-                        else:
-                            cost = val1
-                            stock = 1
+                        stock = max(0, int(val1))
+                        cost = float(val2)
                     else:
-                        # Ninguno tiene decimales
-                        if val1 > val2:
-                            if val1 > 100:
-                                cost = val1
-                                stock = int(val2)
-                            else:
-                                stock = int(val1)
-                                cost = val2
+                        # Dos importes de precio (Unitario y Total):
+                        # En informes de stock el menor es SIEMPRE el precio unitario y el mayor el total
+                        unit_cand = min(val1, val2)
+                        total_cand = max(val1, val2)
+                        if unit_cand > 0:
+                            cost = float(unit_cand)  # SIEMPRE PRECIO UNITARIO
+                            stock = max(1, int(round(total_cand / unit_cand)))
                         else:
-                            if val2 > 100:
-                                cost = val2
-                                stock = int(val1)
-                            else:
-                                stock = int(val2)
-                                cost = val1
+                            cost = float(total_cand)
+                            stock = 0
                 elif len(clean_candidates) >= 3:
-                    # Intentar buscar trío Stock, Coste, Total
+                    # Candidatos numéricos al final de la línea:
                     c1_token, c1_val = clean_candidates[-3]
                     c2_token, c2_val = clean_candidates[-2]
                     c3_token, c3_val = clean_candidates[-1]
                     
-                    if c1_val > 0 and c2_val > 0 and abs(c1_val * c2_val - c3_val) < max(5.0, c3_val * 0.02):
-                        stock = int(c1_val)
-                        cost = c2_val
-                    elif c1_val > 0 and c2_val > 0 and abs(c2_val * c1_val - c3_val) < max(5.0, c3_val * 0.02):
-                        stock = int(c2_val)
-                        cost = c1_val
+                    # Caso A: c1 = Stock, c2 = Precio Unitario, c3 = Total Valorado (c1 * c2 ≈ c3)
+                    if c1_val > 0 and c2_val > 0 and abs(c1_val * c2_val - c3_val) < max(5.0, c3_val * 0.05):
+                        stock = max(0, int(round(c1_val)))
+                        cost = float(c2_val)  # PRECIO UNITARIO
+                    # Caso B: c1 = Stock, c3 = Precio Unitario, c2 = Total Valorado (c1 * c3 ≈ c2)
+                    elif c1_val > 0 and c3_val > 0 and abs(c1_val * c3_val - c2_val) < max(5.0, c2_val * 0.05):
+                        stock = max(0, int(round(c1_val)))
+                        cost = float(c3_val)  # PRECIO UNITARIO
+                    # Caso C: c2 = Stock, c1 = Precio Unitario, c3 = Total Valorado (c2 * c1 ≈ c3)
+                    elif c2_val > 0 and c1_val > 0 and abs(c2_val * c1_val - c3_val) < max(5.0, c3_val * 0.05):
+                        stock = max(0, int(round(c2_val)))
+                        cost = float(c1_val)  # PRECIO UNITARIO
+                    # Caso D: Precio Unitario == Total Valorado (stock = 1)
                     elif c2_val > 0 and c3_val > 0 and abs(c2_val - c3_val) < 1.0:
-                        # Si Coste Unitario == Total Valorado, stock es exactamente 1
-                        cost = c2_val
                         stock = 1
+                        cost = float(min(c2_val, c3_val))  # PRECIO UNITARIO
                     else:
-                        # Fallback a los últimos 2 usando la lógica de 2 candidatos
-                        val1 = c2_val
-                        val2 = c3_val
-                        c1_token = c2_token
-                        c2_token = c3_token
-                        has_decimal1 = ("," in c1_token) or ("." in c1_token)
-                        has_decimal2 = ("," in c2_token) or ("." in c2_token)
-                        if abs(val1 - val2) < 1.0:
-                            cost = val1
-                            stock = 1
-                        elif has_decimal1 and not has_decimal2:
-                            cost = val1
-                            stock = int(val2)
-                        elif not has_decimal1 and has_decimal2:
-                            stock = int(val1)
-                            cost = val2
-                        elif has_decimal1 and has_decimal2:
-                            if val1 > 0 and val2 > val1:
-                                cost = val1
-                                stock = int(round(val2 / val1))
-                            elif val2 > 0 and val1 > val2:
-                                cost = val2
-                                stock = int(round(val1 / val2))
+                        # Entre c2 y c3 (los dos últimos importes), el menor es el PRECIO UNITARIO
+                        unit_cand = min(c2_val, c3_val)
+                        total_cand = max(c2_val, c3_val)
+                        if unit_cand > 0:
+                            cost = float(unit_cand)  # SIEMPRE PRECIO UNITARIO
+                            calc_stk = round(total_cand / unit_cand)
+                            if 0 < calc_stk < 1000:
+                                stock = int(calc_stk)
+                            elif c1_val > 0 and c1_val < 1000:
+                                stock = int(round(c1_val))
                             else:
-                                cost = val1
                                 stock = 1
                         else:
-                            if val1 > val2:
-                                cost = val1
-                                stock = int(val2)
-                            else:
-                                cost = val2
-                                stock = int(val1)
+                            cost = float(total_cand)
+                            stock = int(round(c1_val)) if (c1_val > 0 and c1_val < 1000) else 1
                                 
                 # Protección de cordura: si stock coincide con medidas típicas de electrodomésticos y coste > 50€
                 if cost > 50.0 and stock in [144, 160, 170, 175, 177, 178, 180, 185, 186, 190, 200, 201, 203]:
@@ -5265,7 +5237,9 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                     "capacity": capacidad,
                     "color": color,
                     "stock": stock,
-                    "cost": cost
+                    "cost": round(cost, 2),
+                    "unit_cost": round(cost, 2),
+                    "total_cost": round(cost * stock, 2)
                 })
     except Exception as e:
         add_log("error", f"Error parseando PDF: {str(e)}")

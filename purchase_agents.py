@@ -625,7 +625,9 @@ def create_stock_pdf_session(
                 "category": cat,
                 "description": desc,
                 "stock": qty,
-                "cost": round(cost, 2)
+                "cost": round(cost, 2),
+                "unit_cost": round(cost, 2),
+                "total_cost": round(cost * qty, 2)
             }
 
     items_list = list(consolidated.values())
@@ -835,6 +837,8 @@ def run_multi_agent_cross_reference(
                 "description": t_desc if len(t_desc) >= len(matched_s.get("description", "")) else matched_s.get("description", t_desc),
                 "tariff_price": t_price,
                 "stock_cost": s_cost,
+                "stock_unit_cost": s_cost,
+                "stock_total_cost": round(s_cost * s_qty, 2),
                 "price_diff": price_diff,
                 "price_diff_pct": price_diff_pct,
                 "stock_qty": s_qty,
