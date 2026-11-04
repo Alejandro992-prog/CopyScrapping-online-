@@ -69,6 +69,22 @@ def save_tariff(
         json.dump(tariff_data, f, indent=2, ensure_ascii=False)
     return tariff_data
 
+def save_tariff_from_items(
+    items: List[Dict[str, Any]],
+    provider_name: str,
+    tariff_name: str,
+    source_filename: str = ""
+) -> Dict[str, Any]:
+    """Guarda una tarifa en data/tariffs/ a partir de una lista de ítems extraídos."""
+    file_type = "xlsx" if (source_filename or "").lower().endswith((".xlsx", ".xls")) else "csv"
+    return save_tariff(
+        provider_name=provider_name,
+        tariff_name=tariff_name,
+        file_type=file_type,
+        original_filename=source_filename or f"{provider_name}.xlsx",
+        items=items
+    )
+
 def get_tariffs_list() -> List[Dict[str, Any]]:
     """Devuelve la lista de todas las tarifas de proveedores registradas."""
     tariffs_dir = get_tariffs_dir()
@@ -143,6 +159,27 @@ def is_valid_Main_SKU(val: Any) -> bool:
     if re.match(r'^\d{1,4}[-/\.]\d{1,2}[-/\.]\d{2,4}$', s):
         return False
     return True
+
+is_valid_sku = is_valid_Main_SKU
+
+KNOWN_BRANDS = [
+    "BALAY", "BOSCH", "SIEMENS", "BEKO", "TEKA", "INFINITON", "CECOTEC", "SAMSUNG", "LG",
+    "WHIRLPOOL", "INDESIT", "CANDY", "HAIER", "HISENSE", "AEG", "ELECTROLUX", "ZANUSSI",
+    "FAGOR", "EDESA", "MEIRELES", "SMEG", "CORBERO", "SVAN", "EAS ELECTRIC", "LIEBHERR",
+    "MIELE", "ASPES", "ROMMER", "DAEWOO", "PANASONIC", "TCL", "XIAOMI", "ROWENTA", "TAURUS",
+    "BRAUN", "PHILIPS", "ORBEGOZO", "MOULINEX", "UFESA", "POLTI", "JATA", "DELONGHI"
+]
+
+def extract_brand_from_text(text: str) -> str:
+    """Extrae la primera marca conocida encontrada en un texto o descripción."""
+    if not text:
+        return ""
+    up = str(text).upper()
+    for b in KNOWN_BRANDS:
+        pattern = r'\b' + re.escape(b) + r'\b'
+        if re.search(pattern, up):
+            return b.title()
+    return ""
 
 def extract_base_model(sku: str) -> str:
     """
@@ -1427,7 +1464,7 @@ def generate_gemini_sales_report(
     delta_result: Dict[str, Any],
     shortages_result: Dict[str, Any],
     api_key: str,
-    custom_model: str = "gemini-3.6-flash"
+    custom_model: str = "gemini-2.5-flash"
 ) -> str:
     """Invoca la API de Gemini para redactar un informe ejecutivo comercial y propuesta de compra."""
     if not api_key:
@@ -1499,8 +1536,8 @@ Usa un tono riguroso, directo, con viñetas elegantes y cifras destacadas en neg
     
     seen = set()
     models_to_try = []
-    deprecated = {"gemini-1.5-flash", "gemini-1.5-pro"}
-    candidate_models = [custom_model, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+    deprecated = {"gemini-1.5-flash", "gemini-1.5-pro", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"}
+    candidate_models = [custom_model, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
     for m in candidate_models:
         if m and m not in seen and m not in deprecated:
             seen.add(m)

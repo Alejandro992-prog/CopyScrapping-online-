@@ -5048,12 +5048,12 @@ document.addEventListener("DOMContentLoaded", () => {
         function syncSelectDropdowns() {
             if (!selectPriceCol || !selectModelCol || !selectDescCol) return;
             const optsHtml = agentState.columns.map(c =>
-                `<option value="${c.index}">[${escapeHtmlSafe(c.letter)}] ${escapeHtmlSafe(c.name)}</option>`
+                `<option value="${c.index}" style="background-color: #0f172a; color: #f8fafc; font-weight: 500;">[${escapeHtmlSafe(c.letter)}] ${escapeHtmlSafe(c.name)}</option>`
             ).join("");
 
             selectPriceCol.innerHTML = optsHtml;
             selectModelCol.innerHTML = optsHtml;
-            selectDescCol.innerHTML = `<option value="-1">-- Sin columna de descripción --</option>` + optsHtml;
+            selectDescCol.innerHTML = `<option value="-1" style="background-color: #0f172a; color: #94a3b8;">-- Sin columna de descripción --</option>` + optsHtml;
 
             selectPriceCol.value = String(agentState.priceCol);
             selectModelCol.value = String(agentState.modelCol);

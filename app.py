@@ -4435,7 +4435,7 @@ Devuelve ÚNICAMENTE un array JSON válido sin explicaciones adicionales:
 [
   {{"item_index": 1, "model": "MWF230", "stock": 32, "cost": 74.17}}
 ]"""
-        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
         for m in candidate_models:
             try:
                 resp = client.models.generate_content(model=m, contents=prompt)
@@ -6607,12 +6607,21 @@ async def agent_tariff_extract_endpoint(req: AgentTariffExtractRequest):
             ]
             if items_for_tariff:
                 prov = req.provider_name or os.path.splitext(sess.get("filename", "Proveedor"))[0]
-                stock_analyzer.save_tariff_from_items(
-                    items=items_for_tariff,
-                    provider_name=prov,
-                    tariff_name=sess.get("active_sheet", "Tarifa Agente"),
-                    source_filename=sess.get("filename", "tarifa.xlsx")
-                )
+                if hasattr(stock_analyzer, "save_tariff_from_items"):
+                    stock_analyzer.save_tariff_from_items(
+                        items=items_for_tariff,
+                        provider_name=prov,
+                        tariff_name=sess.get("active_sheet", "Tarifa Agente"),
+                        source_filename=sess.get("filename", "tarifa.xlsx")
+                    )
+                elif hasattr(stock_analyzer, "save_tariff"):
+                    stock_analyzer.save_tariff(
+                        provider_name=prov,
+                        tariff_name=sess.get("active_sheet", "Tarifa Agente"),
+                        file_type="xlsx" if str(sess.get("filename", "")).lower().endswith((".xlsx", ".xls")) else "csv",
+                        original_filename=sess.get("filename", "tarifa.xlsx"),
+                        items=items_for_tariff
+                    )
         add_log("success", f"🤖 Agente de Tarifas: extraídos {res['items_count']} modelos con columna Precio '{res['stats']['price_col_name']}'.")
         return res
     except Exception as e:

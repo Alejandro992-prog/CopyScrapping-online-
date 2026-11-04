@@ -490,7 +490,13 @@ def extract_tariff_with_mapping(
                 raw_brand = ""
 
         if not raw_brand:
-            raw_brand = provider_name.strip() or stock_analyzer.extract_brand_from_text(f"{raw_model} {raw_desc}")
+            extracted_brand = ""
+            if hasattr(stock_analyzer, "extract_brand_from_text"):
+                try:
+                    extracted_brand = stock_analyzer.extract_brand_from_text(f"{raw_model} {raw_desc}")
+                except Exception:
+                    extracted_brand = ""
+            raw_brand = provider_name.strip() or extracted_brand
 
         category = stock_analyzer.classify_appliance_type(f"{raw_desc} {raw_model}", raw_model)
         norm_key = stock_analyzer.normalize_sku(raw_model)

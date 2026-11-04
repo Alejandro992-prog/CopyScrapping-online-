@@ -288,6 +288,20 @@ h1, h2, h3, h4, h5, h6 {
     transition: border-color 0.2s;
 }
 
+select option,
+select optgroup,
+.form-select option,
+.form-select optgroup {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+}
+
+select option:checked,
+.form-select option:checked {
+    background-color: #1e293b !important;
+    color: #38bdf8 !important;
+}
+
 .form-select:focus, .form-input:focus, .form-textarea:focus {
     border-color: var(--primary);
 }
