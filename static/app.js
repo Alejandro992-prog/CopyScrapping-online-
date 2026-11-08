@@ -2029,10 +2029,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert(`Error en extracción con IA: ${data.detail || 'Fallo desconocido'}`);
             }
         } catch (err) {
+            const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+            const friendlyMsg = isConnErr
+                ? "No se pudo conectar con el servidor local (localhost:8000). Asegúrate de que 'iniciar_servidor.bat' está en ejecución y la terminal no se ha cerrado."
+                : err.message;
             appendLog({
                 timestamp: new Date().toLocaleTimeString(),
                 type: "error",
-                message: `Error de conexión con Gemini: ${err.message}`
+                message: `Error de conexión: ${friendlyMsg}`
             });
         } finally {
             if (btnExtractTextAi) {
@@ -5228,7 +5232,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 appendAgentMessages(data.agent_messages || []);
             } catch (err) {
                 tariffStatusBadge.textContent = "❌ Error en archivo";
-                alert("Error procesando tarifa: " + err.message);
+                const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                const friendlyMsg = isConnErr
+                    ? "No se pudo conectar con el servidor local (localhost:8000). Asegúrate de que 'iniciar_servidor.bat' está en ejecución y la consola negra sigue abierta."
+                    : err.message;
+                alert("Error procesando tarifa: " + friendlyMsg);
             }
         }
 
@@ -5291,7 +5299,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     tariffStatusBadge.textContent = `✅ ${data.items_count} refs listas`;
                     appendAgentMessages(data.agent_messages || []);
                 } catch (err) {
-                    alert("Error al confirmar columnas: " + err.message);
+                    const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                    alert("Error al confirmar columnas: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
                 } finally {
                     btnConfirmTariff.disabled = false;
                     btnConfirmTariff.textContent = "✅ Confirmar Selección de Columnas";
@@ -5350,7 +5359,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 appendAgentMessages(data.agent_messages || []);
             } catch (err) {
                 stockStatusBadge.textContent = "❌ Error en PDF";
-                alert("Error en Agente de Stock: " + err.message);
+                const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                alert("Error en Agente de Stock: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
             }
         }
 
@@ -5504,7 +5514,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
                     renderCrossReferenceTables(searchInput ? searchInput.value : "");
                 } catch (err) {
-                    alert("Error en Cruce Multi-Agente: " + err.message);
+                    const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                    alert("Error en Cruce Multi-Agente: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
                 } finally {
                     btnRunCross.disabled = false;
                     btnRunCross.innerHTML = "<span>⚡</span> Ejecutar Cruce Multi-Agente";
