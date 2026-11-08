@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional, Tuple
+import collections
 
 import pandas as pd
 from openpyxl import Workbook
@@ -790,9 +791,16 @@ def run_multi_agent_cross_reference(
     else:
         raise ValueError("No se ha cargado ningún PDF de Stock en el Agente de Almacén.")
 
-    # Índices de búsqueda para Stock (exacto y sin prefijos de marca)
+    # Índices optimizados de búsqueda para Stock:
+    # 1. Exacto por SKU normalizado O(1)
     stock_by_norm: Dict[str, Dict[str, Any]] = {}
+    # 2. Exacto sin nombre de marca O(1)
     stock_by_nobrand: Dict[str, Dict[str, Any]] = {}
+    # 3. Base eliminando sufijos de versión/país (ej. /01, ES, SP, EU) O(1)
+    stock_by_base: Dict[str, Dict[str, Any]] = {}
+    # 4. Índice numérico para Fuzzy Matching ultrarrápido O(1): num_sig -> lista de (s_norm, s_item)
+    stock_by_numeric: Dict[str, List[Tuple[str, Dict[str, Any]]]] = collections.defaultdict(list)
+
     for it in stock_items:
         s_norm = it["normalized_sku"]
         stock_by_norm[s_norm] = it
@@ -800,6 +808,13 @@ def run_multi_agent_cross_reference(
             s_nb = stock_analyzer.strip_brand_from_sku(s_norm)
             if s_nb and s_nb not in stock_by_nobrand:
                 stock_by_nobrand[s_nb] = it
+        s_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', s_norm)
+        if s_base and len(s_base) >= 5 and s_base not in stock_by_base:
+            stock_by_base[s_base] = it
+        num_s = _extract_numeric_signature(s_norm)
+        if num_s:
+            stock_by_numeric[num_s].append((s_norm, it))
+
     matched_stock_norms = set()
 
     matched_items: List[Dict[str, Any]] = []
@@ -839,18 +854,33 @@ def run_multi_agent_cross_reference(
             match_type = "EXACTO"
             match_score = 1.0
         else:
-            # 2. Intento de Fuzzy Matching inteligente
-            best_score = 0.0
-            best_cand = None
-            for s_norm, s_item in stock_by_norm.items():
-                score, mtype = _compute_sku_similarity(t_norm, s_norm)
-                if score >= fuzzy_threshold and score > best_score:
-                    best_score = score
-                    best_cand = s_item
-                    match_type = mtype
-            if best_cand is not None:
-                matched_s = best_cand
-                match_score = best_score
+            # 2. Coincidencia por modelo base (sufijo ES, SP, /01) O(1)
+            t_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', t_norm)
+            t_nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', t_nobrand) if t_nobrand else ""
+            if t_base and len(t_base) >= 5 and t_base in stock_by_base:
+                matched_s = stock_by_base[t_base]
+                match_type = "EXACTO"
+                match_score = 0.98
+            elif t_nb_base and len(t_nb_base) >= 5 and t_nb_base in stock_by_base:
+                matched_s = stock_by_base[t_nb_base]
+                match_type = "EXACTO"
+                match_score = 0.98
+            else:
+                # 3. Fuzzy Matching dirigido SOLO a candidatos con la misma firma numérica (0 lags, O(1))
+                num_t = _extract_numeric_signature(t_norm)
+                cands = stock_by_numeric.get(num_t, []) if num_t else []
+                if cands:
+                    best_score = 0.0
+                    best_cand = None
+                    for s_norm, s_item in cands:
+                        score, mtype = _compute_sku_similarity(t_norm, s_norm)
+                        if score >= fuzzy_threshold and score > best_score:
+                            best_score = score
+                            best_cand = s_item
+                            match_type = mtype
+                    if best_cand is not None:
+                        matched_s = best_cand
+                        match_score = best_score
 
         if matched_s is not None:
             matched_stock_norms.add(matched_s["normalized_sku"])
@@ -1015,7 +1045,7 @@ def run_multi_agent_cross_reference(
     if gemini_api_key and len(tariff_items) > 0:
         try:
             from google import genai
-            client = genai.Client(api_key=gemini_api_key)
+            client = genai.Client(api_key=gemini_api_key, http_options={"timeout": 6.0})
             top_missing = [f"{m['tariff_model']} ({m['tariff_price']}€)" for m in missing_items[:6]]
             cheaper_in_tariff = [
                 f"{m['tariff_model']} (Tarifa: {m['tariff_price']}€ vs Coste ERP: {m['stock_cost']}€)"
@@ -1029,7 +1059,7 @@ def run_multi_agent_cross_reference(
                 f"- Faltantes/Sin stock en tarifa: {len(missing_items)} (ejemplos: {', '.join(top_missing) or 'ninguno'})\n"
                 f"- Oportunidades con precio tarifa menor al coste actual: {', '.join(cheaper_in_tariff) or 'sin bajadas destacadas'}."
             )
-            for m_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]:
+            for m_name in ["gemini-3.5-flash", "gemini-3.5-flash-lite"]:
                 try:
                     resp = client.models.generate_content(model=m_name, contents=prompt)
                     if resp and resp.text:

@@ -4485,7 +4485,7 @@ def resolve_unknown_models_with_gemini(
         batch = unique_models[i:i+batch_size]
         try:
             from google import genai
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=api_key, http_options={"timeout": 6.0})
             
             prompt = f"""Actúa como un experto en electrodomésticos para el mercado español y europeo.
 Marca / Proveedor: '{brand or "General"}'
@@ -6700,9 +6700,10 @@ async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
     if purchase_agents is None:
         raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
     try:
-        # Si el usuario ajustó las columnas antes de lanzar el cruce, actualizar extracción primero
+        # Si el usuario ajustó las columnas antes de lanzar el cruce, actualizar extracción primero en un thread
         if req.model_col is not None and req.price_col is not None:
-            purchase_agents.extract_tariff_with_mapping(
+            await asyncio.to_thread(
+                purchase_agents.extract_tariff_with_mapping,
                 session_id=req.tariff_session_id,
                 model_col=req.model_col,
                 price_col=req.price_col,
@@ -6722,7 +6723,8 @@ async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
         config = load_config()
         api_key = (config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip() if req.use_gemini_summary else None
 
-        res = purchase_agents.run_multi_agent_cross_reference(
+        res = await asyncio.to_thread(
+            purchase_agents.run_multi_agent_cross_reference,
             tariff_session_id=req.tariff_session_id,
             stock_session_id=req.stock_session_id,
             fallback_stock_items=fallback_stock,
