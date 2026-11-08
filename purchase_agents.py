@@ -514,11 +514,16 @@ def extract_tariff_with_mapping(
                     extracted_brand = ""
             raw_brand = provider_name.strip() or extracted_brand
 
-        # Escaneo completo de toda la fila de la tarifa (incluye columnas de Familia, Subfamilia, Grupo o Notas)
-        row_cells = [str(df.iat[i, c_idx]).strip() for c_idx in range(df.shape[1]) if pd.notna(df.iat[i, c_idx])]
-        row_full_text = " ".join([c for c in row_cells if c.lower() not in ("nan", "none", "null")])
-        combined_text = f"{raw_desc} {raw_model} {row_full_text}".strip()
-        category = stock_analyzer.classify_appliance_type(combined_text, raw_model)
+        # 1. Clasificación precisa usando descripción directa y modelo (evita contaminación por otras columnas)
+        primary_text = f"{raw_desc} {raw_model}".strip()
+        category = stock_analyzer.classify_appliance_type(primary_text, raw_model)
+        # 2. Si dio 'Otros', comprobar escaneo de toda la fila por si hay columnas de Familia/Subfamilia en el Excel
+        if category == "Otros":
+            row_cells = [str(df.iat[i, c_idx]).strip() for c_idx in range(df.shape[1]) if pd.notna(df.iat[i, c_idx])]
+            row_full_text = " ".join([c for c in row_cells if c.lower() not in ("nan", "none", "null")])
+            cat_row = stock_analyzer.classify_appliance_type(f"{primary_text} {row_full_text}".strip(), raw_model)
+            if cat_row != "Otros":
+                category = cat_row
         norm_key = stock_analyzer.normalize_sku(raw_model)
         if not norm_key:
             skipped_rows += 1

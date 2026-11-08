@@ -352,31 +352,73 @@ def update_appliance_cache(new_entries: Dict[str, str]):
 def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
     """
     Decodifica el tipo de aparato basándose en la nomenclatura estándar y prefijos de fabricantes
-    (Infiniton, Beko, Balay/BSH, Teka, Cecotec, Candy, etc.). Gasto: 0 tokens, instantáneo.
+    (Infiniton, Beko, Balay/BSH/Bosch/Siemens, Teka, Cecotec, Candy, Whirlpool, LG, Samsung, etc.). Gasto: 0 tokens, instantáneo.
     """
     if not model:
         return None
+    # 1. Normalizar y eliminar cualquier prefijo de marca conocida
     m = normalize_sku(model)
-    
-    # 1. Lavado y Secado combinado
-    if m.startswith(('WSD', 'LAVASECADORA', 'WASHERDRYER', 'HTV', 'WDU', 'WD')):
+    m = strip_brand_from_sku(m)
+    if not m:
+        return None
+
+    # 1. Lavado y Secado combinado (debe ir antes que lavadoras individuales)
+    if m.startswith(('WSD', 'LAVASECADORA', 'WASHERDRYER', 'HTV', 'WDU', 'WD', 'BIWD', 'HWD')):
         return 'Lavadoras-Secadoras'
-        
-    # 2. Lavadoras
-    if m.startswith(('TLW', 'WM', '3TS', '3TI', 'WAN', 'WAU', 'WGG', 'WGA', 'WUU', 'WG', 'WTE', 'BM3WFU', 'B3WFU', 'WTV', 'TKD', 'WMT', 'CSS', 'CSO', 'RO4', 'RO14', 'RP4', 'HE4', 'CO4', 'F4W', 'F2W', 'F4J', 'FFL', 'FFB', 'BWE')):
+
+    # 2. Microondas (¡ANTES de Lavadoras! Evita colisiones con WMG, WMS, WME, WMT de Whirlpool o ML8 de Teka)
+    if m.startswith((
+        'BEL', 'BFL', 'BER', 'BFR', 'BFG', 'BE6', 'BF6',   # Bosch / Siemens
+        '3CP', '3CG', '3WM',                                 # Balay
+        'ML8', 'ML82', 'MWE', 'MWL', 'M20', 'M23', 'M25',    # Teka
+        'WMG', 'WMS', 'WME', 'WMT', 'MWP', 'MCP', 'MWF', 'MAX', 'MW', # Whirlpool
+        'BMG', 'BMO', 'MGB', 'MOC',                         # Beko
+        'CMG', 'CMI', 'CMXG', 'CPG',                         # Candy
+        'MS2', 'MG2', 'MC2', 'MH6', 'MJ3',                   # LG / Samsung
+        'MIC', 'IMW'
+    )):
+        return 'Microondas'
+
+    # 3. Hornos (¡ANTES de Lavadoras! Evita colisiones con modelos que empiezan por H o B)
+    if m.startswith((
+        '3HB', '3HT', '3HA',                                 # Balay
+        'HBA', 'HBG', 'HBL', 'HBJ', 'HBN', 'HRG', 'CBG', 'HB6', 'HB5', 'HS6', # Bosch / Siemens
+        'HLB', 'HSB', 'HBB', 'HLC', 'HBE', 'HE', 'HR',       # Teka
+        'BBIE', 'BBIM', 'BIE', 'BVM', 'OIM', 'BIM',          # Beko
+        'AKZ', 'OAS', 'IFW', 'W6OM', 'W7OM', 'W9OM',         # Whirlpool / Indesit
+        'FCP', 'FIDC', 'FCS', 'FCNE', 'HOC',                 # Candy / Hoover
+        'EOB', 'BPE', 'KSE', 'BPS',                          # Electrolux / AEG
+        'HOR', 'HSM'
+    )):
+        return 'Hornos'
+
+    # 4. Lavadoras (¡Prefijos precisos! No usar 'WM' a secas para no capturar microondas ni 'WG')
+    if m.startswith((
+        'TLW', '3TS', '3TI',                                 # Infiniton / Balay
+        'WAN', 'WAU', 'WGG', 'WGA', 'WUU', 'WTE',            # Bosch
+        'BM3WFU', 'B3WFU', 'WTV', 'B1XW', 'BM3WFSU',         # Beko
+        'TKD', 'TKS',                                        # Teka
+        'CSS', 'CSO', 'RO4', 'RO14', 'RP4', 'HE4', 'CO4',    # Candy
+        'F4W', 'F2W', 'F4J', 'F4V', 'F2J',                   # LG
+        'FFL', 'FFB', 'BWE', 'BIWM', 'WAD', 'WPD', 'FFS',    # Indesit / Whirlpool / Beko
+        'WW8', 'WW9', 'WW7', 'WW1'                           # Samsung
+    )) or bool(re.match(r'^WM[0-9]', m)):                     # Bosch/Siemens WM14, WM12, WM16...
         return 'Lavadoras'
-        
-    # 3. Secadoras
-    if m.startswith(('SD', '3SB', 'WTN', 'WQG', 'B3T', 'DH7', 'DH8', 'DH9', 'DF7', 'DF8', 'CSOE', 'NDPE')):
+
+    # 5. Secadoras
+    if m.startswith(('SD', '3SB', 'WTN', 'WQG', 'B3T', 'DH7', 'DH8', 'DH9', 'DF7', 'DF8', 'CSOE', 'NDPE', 'RC8', 'RC9')):
         return 'Secadoras'
-        
-    # 4. Lavavajillas (distinguiendo 45cm y 60cm si es posible)
-    if m.startswith(('DIW45', 'DW45', 'DFS', 'DIS', 'SPS', '3VN', 'CDPH', 'CDP45')):
+
+    # 6. Lavavajillas
+    if m.startswith(('DIW45', 'DW45', 'DFS', 'DIS', 'SPS', '3VN', 'CDPH', 'CDP45', 'WSIC', 'WSFO', 'WSFC', 'BDFS', 'BDIS')):
         return 'Lavavajillas 45cm'
-    if m.startswith(('DIW', 'DW', '3VS', '3VT', 'SMS', 'SMV', 'BDEN', 'DFN', 'DIN', 'DFI', 'CDPN', 'CDIN', 'HIA')):
+    if m.startswith((
+        'DIW', 'DW', '3VS', '3VT', 'SMS', 'SMV', 'SN2', 'SN6', 'BDEN', 'DFN', 'DIN', 'DFI', 
+        'CDPN', 'CDIN', 'HIA', 'WFC', 'WIC', 'W2F', 'W2I', 'WI70', 'WRIC', 'WH6IC', 'WH6FC', 'W8I', 'WH8I', 'WH7I', 'BDIN', 'DVN'
+    )):
         return 'Lavavajillas 60cm'
-        
-    # 5. Frigoríficos y Congeladores
+
+    # 7. Frigoríficos y Congeladores
     if m.startswith(('SBS', 'FRD', 'AMCB', 'GNE', 'KAD', 'FD', 'HCR', 'GSX', 'RS6')):
         return 'Frigos americanos'
     if m.startswith(('FGC', '3KFE', '3KFC', 'KGN', 'KGF', 'RCNE', 'RCNT', 'B5RCNE', 'B3RCNE', 'NFL', 'NFE', 'RBF', 'CCE', 'HBE', 'WBE', 'W5')):
@@ -389,27 +431,23 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
         return 'Congelador Horizontal'
     if m.startswith(('FG2', 'FGD', 'FG', 'RDNT', 'KD', 'CTE')):
         return 'Frigo 2 puertas'
-        
-    # 6. Cocción, Hornos y Microondas (Prefijos extendidos: Balay, Bosch, Siemens, Teka, Beko, Candy, Whirlpool)
-    if m.startswith(('HOR', 'HSM', '3HB', '3HT', 'HBA', 'HBG', 'HBL', 'HBJ', 'HBN', 'HRG', 'CBG', 'HB6', 'HB5', 'BBIE', 'BBIM', 'BIE', 'BVM', 'OIM', 'HLB', 'HSB', 'HBB', 'HLC', 'HBE', 'HE', 'HR', 'FCP', 'FIDC', 'FCS', 'FCNE', 'HOC', 'EOB', 'BPE', 'KSE', 'BPS', 'AKZ', 'OAS', 'IFW')):
-        return 'Hornos'
-    if m.startswith(('BEL', 'BFL', 'BER', 'BFR', 'BFG', 'BE6', 'BF6', '3CP', '3CG', '3WM', 'ML8', 'ML82', 'MWE', 'MWL', 'MS2', 'MG2', 'MC2', 'MWP', 'MCP', 'MWF', 'MAX', 'BMG', 'BMO', 'MIC', 'CMG', 'CMI', 'CMXG', 'CPG', 'IMW', 'MW', 'MGB')):
-        return 'Microondas'
+
+    # 8. Placas e Inducción / Gas / Vitro
     if m.startswith(('INPT', 'IND', 'BIN', '3EB', 'PIE', 'PUJ', 'HII', 'IBC', 'IZC', 'CI', 'CTP')):
         return 'Inducción'
-    if m.startswith(('VIT', '3ET', 'HIC', 'TZ', 'TB', 'CH', 'EVT')):
+    if m.startswith(('VIT', '3ET', 'HIC', 'TZ', 'TB', 'EVT')):
         return 'Vitrocerámica'
-    if m.startswith(('GGP', 'GAS', 'GG', '3ETG', 'HIZG', 'HIA', 'CG', 'GPC')):
+    if m.startswith(('GGP', 'GAS', 'GG', '3ETG', 'HIZG', 'CG', 'GPC')):
         return 'Placa de Gas'
     if m.startswith(('CC9', 'CC', 'CG9', 'CGE')):
         return 'Cocinas'
-        
-    # 7. Extracción
+
+    # 9. Extracción
     if m.startswith(('CMPTRAL', 'CMPT', 'CMPP', 'CMPG', 'CMPB', 'CMP', '3BC', '3BD', 'DWK', 'HCA', 'BHCA', 'CTB', 'GFH', 'CNL', 'TL', 'DBB', '76AGX', '78GLN', 'HHW')):
         return 'Campana'
-        
-    # 8. Climatización, Agua y Vinotecas
-    if m.startswith(('CAS', 'SPLIT', 'AC', 'INV')):
+
+    # 10. Climatización y Termos (¡SIN 'INV' genérico que confunde motores inverter de lavadoras!)
+    if m.startswith(('SPLIT', 'CASSETTE', 'CLIMA', 'AIRCOND', '1X1')):
         return 'Aire Acondicionado'
     if m.startswith(('WCL', 'WFL', 'CWC', 'DIV')):
         return 'Vinotecas'
@@ -419,9 +457,7 @@ def decode_model_prefix(model: str, brand: str = "") -> Optional[str]:
         return 'Deshumidificadores'
     if m.startswith(('AP2', 'AP3', 'AIRPUR')):
         return 'Purificadores de Aire'
-    if m.startswith(('GRILL',)):
-        return 'Microondas'
-        
+
     return None
 
 def classify_appliance_type(text: str, model: str = "") -> str:
@@ -429,13 +465,18 @@ def classify_appliance_type(text: str, model: str = "") -> str:
     Identifica el tipo de aparato (categoría canónica).
     Flujo de alta eficiencia:
     1. Caché local persistente (0 tokens).
-    2. Reglas por texto descriptivo.
-    3. Decodificador de prefijos de fabricante (0 tokens).
-    4. Diccionario de sinónimos.
+    2. Decodificador técnico de modelo del fabricante (0 tokens, 100% certero).
+    3. Detección de Cocción (Microondas / Hornos) antes de lavado para evitar falsos positivos.
+    4. Lavavajillas (45cm y 60cm).
+    5. Lavado y Secado combinado.
+    6. Frigoríficos y Congeladores.
+    7. Lavadoras y Secadoras (con comprobación de límites de palabra).
+    8. Climatización, Placas, Campanas y Otros.
+    9. Diccionario de sinónimos.
     """
     if not text and not model:
         return "Otros"
-        
+
     # 1. Comprobar primero en la caché persistente de modelos
     if model:
         norm_m = normalize_sku(model)
@@ -443,19 +484,39 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         if norm_m in cache:
             return cache[norm_m]
 
+    # 2. Decodificación precisa por prefijo/código técnico del fabricante (¡ANTES de texto genérico!)
+    if model:
+        decoded = decode_model_prefix(model)
+        if decoded:
+            return decoded
+
     combined = f"{text} {model}".lower()
-    
-    # 2. Caso especial combinado
-    if ("lavadora" in combined and "secadora" in combined) or any(s in combined for s in ["lavasecadora", "lavasecadoras", "washer dryer", "washer-dryer", "lava-secadora"]):
-        return "Lavadoras-Secadoras"
-    
-    # 3. Lavavajillas
+
+    # 3. Microondas (¡ALTA PRIORIDAD! Antes de lavado para evitar que descripciones con grill/plato/potencia caigan en lavadoras)
+    if re.search(r'\b(microondas|microwave|micro-ondas|micro\s+ondas|microonda)\b', combined):
+        return "Microondas"
+    if "micro" in combined and any(k in combined for k in ["integrable", "encastrable", "sobremesa", "grill", "conveccion", "convección", "plato giratorio", "litros"]):
+        if not any(k in combined for k in ["frigorifico", "nevera", "lavadora", "lavavajillas"]):
+            return "Microondas"
+    if re.search(r'\b(700w|800w|900w|1000w|1100w|1200w)\b', combined) and any(k in combined for k in ["grill", "plato", "descongel", "cavidad", "20l", "23l", "25l", "28l", "30l"]):
+        return "Microondas"
+
+    # 4. Hornos (¡ALTA PRIORIDAD! Antes de lavado)
+    if re.search(r'\b(horno|hornos|oven|multifuncion|multifunción|pirolitico|pirolítico|hidrolitico|hidrolítico|hydroclean|aquasmart|vapor)\b', combined):
+        if "microondas" not in combined:
+            return "Hornos"
+
+    # 5. Lavavajillas (antes de lavadoras para que 'dishwasher' no active 'washer')
     if any(s in combined for s in ["lavavajillas 45", "lavaplatos 45", "45 cm", "45cm", "estrecho"]) and any(s in combined for s in ["lavavajillas", "lavaplatos", "dishwasher"]):
         return "Lavavajillas 45cm"
     if any(s in combined for s in ["lavavajillas", "lavaplatos", "dishwasher", "lavavasos"]):
         return "Lavavajillas 60cm"
-        
-    # 4. Frigoríficos
+
+    # 6. Lavado y Secado combinado
+    if ("lavadora" in combined and "secadora" in combined) or any(s in combined for s in ["lavasecadora", "lavasecadoras", "washer dryer", "washer-dryer", "lava-secadora"]):
+        return "Lavadoras-Secadoras"
+
+    # 7. Frigoríficos y Congeladores
     if any(s in combined for s in ["americano", "americanos", "side by side", "side-by-side", "multipuerta", "french door", "4 puertas"]):
         return "Frigos americanos"
     if any(s in combined for s in ["combi", "combis", "combinado"]):
@@ -470,16 +531,18 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         return "Congelador Horizontal"
     if any(s in combined for s in ["frigorifico", "frigorífico", "frigo", "refrigerador", "congelador", "freezer", "nevera"]):
         return "Frigoríficos"
-        
-    # 5. Lavado y secado
-    if any(s in combined for s in ["lavadora", "washer", "lavarropa", "lavarropas"]):
+
+    # 8. Lavadoras y Secadoras (¡Límites de palabra estrictos!)
+    if re.search(r'\b(lavadora|lavadoras|lavarropa|lavarropas)\b', combined):
+        return "Lavadoras"
+    if re.search(r'\bwasher\b', combined) and "dishwasher" not in combined:
         return "Lavadoras"
     if any(s in combined for s in ["secadora", "dryer", "bomba de calor", "heat pump"]):
         return "Secadoras"
-    if any(s in combined for s in ["carga frontal", "carga superior"]) and not any(k in combined for k in ["secadora", "frigo", "congelador", "horno", "placa", "campana", "microondas"]):
+    if any(s in combined for s in ["carga frontal", "carga superior"]) and not any(k in combined for k in ["secadora", "frigo", "congelador", "horno", "placa", "campana", "microondas", "lavavajillas"]):
         return "Lavadoras"
-        
-    # 6. Cocción y extracción
+
+    # 9. Cocción restante (Placas, Campanas)
     if any(s in combined for s in ["induccion", "inducción", "flex induction", "flexinduccion"]):
         return "Inducción"
     if any(s in combined for s in ["vitroceramica", "vitrocerámica", "radiante", "hilight"]):
@@ -488,30 +551,22 @@ def classify_appliance_type(text: str, model: str = "") -> str:
         return "Placa de Gas"
     if any(s in combined for s in ["vitro", "placa", "encimera"]):
         return "Vitrocerámicas"
-    if any(s in combined for s in ["microondas", "microwave", "micro-ondas", "micro ondas", "micro integrable", "micro encastrable"]) or re.search(r'\bmicro\b', combined):
-        return "Microondas"
-    if any(s in combined for s in ["horno", "oven", "pirolitico", "pirolítico", "multifuncion", "multifunción", "horno vapor", "horno compacto"]):
-        return "Hornos"
     if any(s in combined for s in ["campana", "extractor", "decorativa", "grupo filtrante"]):
         return "Campana"
+
+    # 10. Climatización (¡Cuidado con 'inverter' de motores de lavadora!)
+    if re.search(r'\b(aire acondicionado|climatizador|split wall|conductos)\b', combined) and not re.search(r'\b(lavadora|secadora|motor inverter)\b', combined):
+        return "Aire Acondicionado"
     if any(s in combined for s in ["televisor", "television", "televisión", "smart tv", "tv", "qled", "oled"]):
         return "Televisor"
     if any(s in combined for s in ["termo", "calentador", "acumulador agua"]):
         return "Termos y Calentadores"
-    if any(s in combined for s in ["aire acondicionado", "climatizador", "split"]):
-        return "Aire Acondicionado"
     if any(s in combined for s in ["vinoteca", "cava de vino", "vinera"]):
         return "Vinotecas"
     if any(s in combined for s in ["deshumidificador"]):
         return "Deshumidificadores"
-        
-    # 7. Decodificación precisa por prefijo/código de modelo del fabricante
-    if model:
-        decoded = decode_model_prefix(model)
-        if decoded:
-            return decoded
-            
-    # 8. Fallback a diccionario de categorías en memoria (0 lecturas a disco)
+
+    # 11. Fallback a diccionario de categorías en memoria
     try:
         cats = load_dictionary_categories()
         for cat_k, cat_v in cats.items():
@@ -520,7 +575,7 @@ def classify_appliance_type(text: str, model: str = "") -> str:
                 return cat_k
     except Exception:
         pass
-        
+
     return "Otros"
 
 def extract_appliance_features(text: str, model: str = "") -> str:
