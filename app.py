@@ -1840,7 +1840,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
     client = genai.Client(api_key=api_key)
     
     # Modelos prioritarios activos y compatibles según la API de Gemini
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    candidate_models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
     last_error = None
     response_text = ""
 
@@ -2066,7 +2066,7 @@ Devuelve ÚNICAMENTE un JSON válido con la siguiente estructura, sin texto prev
 """
 
     client = genai.Client(api_key=api_key)
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    candidate_models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
     last_error = None
     response_text = ""
 
@@ -4444,7 +4444,7 @@ Devuelve ÚNICAMENTE un array JSON válido sin explicaciones adicionales:
 [
   {{"item_index": 1, "model": "MWF230", "stock": 32, "cost": 74.17}}
 ]"""
-        candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        candidate_models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
         for m in candidate_models:
             try:
                 resp = client.models.generate_content(model=m, contents=prompt)
@@ -4497,7 +4497,7 @@ Categorías estándar canónicas sugeridas: "Frigo Combi", "Frigo 2 puertas", "F
 Devuelve ÚNICAMENTE un JSON con un objeto clave-valor (clave: modelo original exacto, valor: tipo de aparato canónico):
 {{"MODELO": "CATEGORIA"}}
 """
-            candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+            candidate_models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
             for m in candidate_models:
                 try:
                     resp = client.models.generate_content(model=m, contents=prompt)
