@@ -4965,8 +4965,23 @@ document.addEventListener("DOMContentLoaded", () => {
         const orderKpiVal = document.getElementById("agent-order-kpi-val");
         const orderPreviewTbody = document.getElementById("agent-order-preview-tbody");
 
+        // Elementos Módulo 4: Agente de Ventas y Rotación
+        const salesDropzone = document.getElementById("agent-sales-dropzone");
+        const salesFileInput = document.getElementById("agent-sales-file-input");
+        const salesPeriodSelect = document.getElementById("agent-sales-period-select");
+        const salesPeriodCustom = document.getElementById("agent-sales-period-custom");
+        const salesStatusBadge = document.getElementById("agent-sales-status-badge");
+        const salesWorkspace = document.getElementById("agent-sales-workspace");
+        const salesKpiRefs = document.getElementById("agent-sales-kpi-refs");
+        const salesKpiUnits = document.getElementById("agent-sales-kpi-units");
+        const salesKpiRate = document.getElementById("agent-sales-kpi-rate");
+        const salesPreviewTbody = document.getElementById("agent-sales-preview-tbody");
+        const targetCoverageSelect = document.getElementById("agent-target-coverage-select");
+
         const chatFeed = document.getElementById("agent-chat-feed");
         const btnRunCross = document.getElementById("btn-agent-run-cross");
+        const btnRunCrossText = document.getElementById("btn-agent-run-cross-text");
+        const activeSourcesPill = document.getElementById("agent-active-sources-pill");
         const btnExportExcel = document.getElementById("btn-agent-export-excel");
         const fuzzyThresholdSelect = document.getElementById("agent-fuzzy-threshold");
         const lowStockInput = document.getElementById("agent-low-stock-threshold");
@@ -4981,7 +4996,11 @@ document.addEventListener("DOMContentLoaded", () => {
             tariffSessionId: null,
             stockSessionId: null,
             orderSessionId: null,
+            salesSessionId: null,
+            salesPeriodDays: 30,
+            targetCoverageDays: 30,
             orderFilter: "ALL",
+            salesFilter: "ALL",
             activeClickRole: "price", // Por defecto, hacer clic en una columna asigna el PRECIO
             columns: [],
             previewRows: [],
@@ -4991,6 +5010,35 @@ document.addEventListener("DOMContentLoaded", () => {
             crossData: null,
             chatInitialized: false
         };
+
+        function updateActiveSourcesCounter() {
+            const sources = [
+                agentState.tariffSessionId,
+                agentState.stockSessionId,
+                agentState.orderSessionId,
+                agentState.salesSessionId
+            ];
+            const activeCount = sources.filter(Boolean).length;
+            if (activeSourcesPill) {
+                activeSourcesPill.textContent = `${activeCount}/4 fuentes`;
+                activeSourcesPill.style.background = activeCount >= 2 ? "rgba(16, 185, 129, 0.45)" : "rgba(0, 0, 0, 0.35)";
+            }
+            if (btnRunCross) {
+                if (activeCount >= 2) {
+                    btnRunCross.disabled = false;
+                    btnRunCross.style.opacity = "1";
+                    btnRunCross.style.cursor = "pointer";
+                    if (btnRunCrossText) btnRunCrossText.textContent = `Ejecutar Cruce Multi-Agente (${activeCount}/4)`;
+                    btnRunCross.title = "Cruce inteligente listo entre las fuentes cargadas";
+                } else {
+                    btnRunCross.disabled = true;
+                    btnRunCross.style.opacity = "0.55";
+                    btnRunCross.style.cursor = "not-allowed";
+                    if (btnRunCrossText) btnRunCrossText.textContent = "Carga mín. 2 fuentes";
+                    btnRunCross.title = "Debes cargar al menos 2 documentos (Tarifa, Stock, Pedido o Ventas) para activar el cruce.";
+                }
+            }
+        }
 
         function escapeHtmlSafe(str) {
             return String(str ?? "")
@@ -5018,10 +5066,14 @@ document.addEventListener("DOMContentLoaded", () => {
                     borderCol = "#f59e0b";
                     bgCol = "rgba(245, 158, 11, 0.12)";
                     icon = "🟠";
-                } else if (msg.agent === "coordinator") {
+                } else if (msg.agent === "sales") {
                     borderCol = "#10b981";
-                    bgCol = "rgba(16, 185, 129, 0.1)";
-                    icon = "🟢";
+                    bgCol = "rgba(16, 185, 129, 0.12)";
+                    icon = "📈";
+                } else if (msg.agent === "coordinator") {
+                    borderCol = "#6366f1";
+                    bgCol = "rgba(99, 102, 241, 0.12)";
+                    icon = "🤝";
                 } else if (msg.agent === "ai_advisor") {
                     borderCol = "#f59e0b";
                     bgCol = "rgba(245, 158, 11, 0.12)";
@@ -5247,6 +5299,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 syncSelectDropdowns();
                 renderInteractivePreviewTable();
                 appendAgentMessages(data.agent_messages || []);
+                updateActiveSourcesCounter();
             } catch (err) {
                 tariffStatusBadge.textContent = "❌ Error en archivo";
                 const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
@@ -5374,6 +5427,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 stockWorkspace.style.display = "block";
                 appendAgentMessages(data.agent_messages || []);
+                updateActiveSourcesCounter();
             } catch (err) {
                 stockStatusBadge.textContent = "❌ Error en PDF";
                 const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
@@ -5443,6 +5497,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 if (orderWorkspace) orderWorkspace.style.display = "block";
                 appendAgentMessages(data.agent_messages || []);
+                updateActiveSourcesCounter();
             } catch (err) {
                 if (orderStatusBadge) orderStatusBadge.textContent = "❌ Error en Pedido PDF";
                 const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
@@ -5465,6 +5520,103 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (orderFileInput.files && orderFileInput.files.length > 0) {
                     processOrderPdf(orderFileInput.files[0]);
                 }
+            });
+        }
+
+        // Módulo 4: Subida y procesamiento de PDF de Ventas y Rotación ERP
+        async function processSalesPdf(fileObj = null) {
+            if (!fileObj) return;
+            const formData = new FormData();
+            formData.append("file", fileObj);
+            const periodVal = agentState.salesPeriodDays || 30;
+            formData.append("period_days", String(periodVal));
+
+            if (salesStatusBadge) salesStatusBadge.textContent = "⏳ Analizando Ventas...";
+            try {
+                const res = await fetch("/api/agents/sales/upload", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Error procesando el PDF de ventas");
+
+                agentState.salesSessionId = data.sales_session_id;
+                const dropTitle = document.getElementById("agent-sales-dropzone-title");
+                if (dropTitle) {
+                    dropTitle.textContent = `📈 ${data.filename} (${data.items_count} refs vendidas en ${data.period_days}d)`;
+                }
+                if (salesStatusBadge) {
+                    salesStatusBadge.textContent = `✅ ${data.total_units_sold} uds vendidas (${data.period_days}d)`;
+                    salesStatusBadge.style.background = "rgba(16, 185, 129, 0.22)";
+                    salesStatusBadge.style.color = "#6ee7b7";
+                }
+
+                if (salesKpiRefs) salesKpiRefs.textContent = String(data.items_count || 0);
+                if (salesKpiUnits) salesKpiUnits.textContent = String(data.total_units_sold || 0);
+                if (salesKpiRate) salesKpiRate.textContent = `${Number(data.total_daily_rate || 0).toFixed(1)} uds/d`;
+
+                if (salesPreviewTbody) {
+                    salesPreviewTbody.innerHTML = (data.items_preview || []).map(it => `
+                        <tr>
+                            <td style="font-weight: 700; color: #6ee7b7;">${escapeHtmlSafe(it.sku)}</td>
+                            <td style="max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                            <td style="text-align: center; font-weight: 700; color: #34d399;">${it.units_sold} uds</td>
+                            <td style="text-align: right; font-weight: 700; color: #38bdf8;">${Number(it.daily_sales_rate || 0).toFixed(2)} uds/d</td>
+                            <td style="text-align: right; color: #fbbf24; font-weight: 600;">${Number(it.monthly_run_rate || 0).toFixed(1)} uds/m</td>
+                        </tr>
+                    `).join("");
+                }
+
+                if (salesWorkspace) salesWorkspace.style.display = "block";
+                appendAgentMessages(data.agent_messages || []);
+                updateActiveSourcesCounter();
+            } catch (err) {
+                if (salesStatusBadge) salesStatusBadge.textContent = "❌ Error en Ventas PDF";
+                const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                alert("Error en Agente de Ventas y Rotación: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
+            }
+        }
+
+        if (salesDropzone && salesFileInput) {
+            salesDropzone.addEventListener("click", () => salesFileInput.click());
+            salesDropzone.addEventListener("dragover", e => { e.preventDefault(); salesDropzone.style.borderColor = "#10b981"; });
+            salesDropzone.addEventListener("dragleave", () => { salesDropzone.style.borderColor = "rgba(16, 185, 129, 0.45)"; });
+            salesDropzone.addEventListener("drop", e => {
+                e.preventDefault();
+                salesDropzone.style.borderColor = "rgba(16, 185, 129, 0.45)";
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processSalesPdf(e.dataTransfer.files[0]);
+                }
+            });
+            salesFileInput.addEventListener("change", () => {
+                if (salesFileInput.files && salesFileInput.files.length > 0) {
+                    processSalesPdf(salesFileInput.files[0]);
+                }
+            });
+        }
+
+        if (salesPeriodSelect) {
+            salesPeriodSelect.addEventListener("change", () => {
+                const val = salesPeriodSelect.value;
+                if (val === "custom") {
+                    if (salesPeriodCustom) salesPeriodCustom.style.display = "inline-block";
+                    agentState.salesPeriodDays = salesPeriodCustom ? (parseInt(salesPeriodCustom.value, 10) || 30) : 30;
+                } else {
+                    if (salesPeriodCustom) salesPeriodCustom.style.display = "none";
+                    agentState.salesPeriodDays = parseInt(val, 10) || 30;
+                }
+            });
+        }
+
+        if (salesPeriodCustom) {
+            salesPeriodCustom.addEventListener("input", () => {
+                agentState.salesPeriodDays = Math.max(1, parseInt(salesPeriodCustom.value, 10) || 30);
+            });
+        }
+
+        if (targetCoverageSelect) {
+            targetCoverageSelect.addEventListener("change", () => {
+                agentState.targetCoverageDays = parseInt(targetCoverageSelect.value, 10) || 30;
             });
         }
 
@@ -5534,6 +5686,19 @@ document.addEventListener("DOMContentLoaded", () => {
             btn.addEventListener("click", () => {
                 agentState.orderFilter = btn.getAttribute("data-filter") || "ALL";
                 document.querySelectorAll(".agent-order-filter-btn").forEach(b => {
+                    const isAct = b === btn;
+                    b.classList.toggle("active", isAct);
+                    b.style.boxShadow = isAct ? "0 0 0 2px rgba(255,255,255,0.35)" : "none";
+                });
+                renderCrossReferenceTables(searchInput ? searchInput.value : "");
+            });
+        });
+
+        // Botones de filtro rápido en la pestaña de Rotación de Ventas
+        document.querySelectorAll(".agent-sales-filter-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                agentState.salesFilter = btn.getAttribute("data-filter") || "ALL";
+                document.querySelectorAll(".agent-sales-filter-btn").forEach(b => {
                     const isAct = b === btn;
                     b.classList.toggle("active", isAct);
                     b.style.boxShadow = isAct ? "0 0 0 2px rgba(255,255,255,0.35)" : "none";
@@ -5745,15 +5910,132 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
             updateOrderAuditFinancialSummary();
+
+            // Tabla 5: Rotación de Ventas, Velocidad y Cobertura
+            const tbodySales = document.getElementById("agent-tbody-sales-rotation");
+            const salesRotationAll = (agentState.crossData.sales_rotation_items || []);
+            const salesRotation = salesRotationAll.filter(it => {
+                if (q && !`${it.sku} ${it.description} ${it.brand} ${it.diagnostic}`.toLowerCase().includes(q)) {
+                    return false;
+                }
+                if (agentState.salesFilter === "SHORTAGE") {
+                    return it.diagnostic === "PEDIDO_INSUFICIENTE" || it.diagnostic === "ROTURA_INMINENTE";
+                }
+                if (agentState.salesFilter === "OPTIMAL") {
+                    return it.diagnostic === "COBERTURA_OPTIMA";
+                }
+                if (agentState.salesFilter === "OVERORDER") {
+                    return it.diagnostic === "SOBREPEDIDO";
+                }
+                return true;
+            });
+
+            if (tbodySales) {
+                if (!salesRotationAll.length) {
+                    tbodySales.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:28px;color:var(--text-muted);">Sube un <strong>Informe de Ventas ERP (.pdf)</strong> en el Módulo 4 y ejecuta el cruce multi-agente para calcular ritmo de venta diaria y cobertura.</td></tr>`;
+                } else if (!salesRotation.length) {
+                    tbodySales.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--text-muted);">No hay artículos de ventas con el filtro seleccionado.</td></tr>`;
+                } else {
+                    tbodySales.innerHTML = salesRotation.map(it => {
+                        let diagBadge = "";
+                        let rowBg = "transparent";
+                        if (it.diagnostic === "PEDIDO_INSUFICIENTE") {
+                            diagBadge = `<span class="badge" style="background:rgba(239,68,68,0.22);color:#fca5a5;font-size:10px;font-weight:700;">🔴 Pedido Insuficiente (-${it.shortage_units_for_target} uds)</span>`;
+                            rowBg = "rgba(239, 68, 68, 0.06)";
+                        } else if (it.diagnostic === "ROTURA_INMINENTE") {
+                            diagBadge = `<span class="badge" style="background:rgba(245,158,11,0.22);color:#fde68a;font-size:10px;font-weight:700;">⚠️ Rotura Inminente (${it.stock_coverage_days !== null ? it.stock_coverage_days + 'd' : '0d'})</span>`;
+                            rowBg = "rgba(245, 158, 11, 0.06)";
+                        } else if (it.diagnostic === "COBERTURA_OPTIMA") {
+                            diagBadge = `<span class="badge" style="background:rgba(16,185,129,0.22);color:#6ee7b7;font-size:10px;font-weight:700;">🟢 Cobertura Óptima (${it.projected_coverage_days !== null ? it.projected_coverage_days + 'd' : ''})</span>`;
+                        } else if (it.diagnostic === "SOBREPEDIDO") {
+                            diagBadge = `<span class="badge" style="background:rgba(245,158,11,0.22);color:#fbbf24;font-size:10px;font-weight:700;">🟡 Sobrepedido (+${it.excess_surplus_units} uds)</span>`;
+                            rowBg = "rgba(245, 158, 11, 0.04)";
+                        } else if (it.diagnostic === "PEDIDO_SIN_VENTAS") {
+                            diagBadge = `<span class="badge" style="background:rgba(59,130,246,0.22);color:#93c5fd;font-size:10px;">🔵 Pedido sin ventas previas</span>`;
+                        } else {
+                            diagBadge = `<span class="badge" style="background:rgba(148,163,184,0.18);color:#cbd5e1;font-size:10px;">⚪ Sin ventas</span>`;
+                        }
+
+                        let targetFmt = "—";
+                        if (it.shortage_units_for_target > 0) {
+                            targetFmt = `<span style="font-weight:800;color:#f87171;">-${it.shortage_units_for_target} uds</span>`;
+                        } else if (it.excess_surplus_units > 0) {
+                            targetFmt = `<span style="font-weight:700;color:#fbbf24;">+${it.excess_surplus_units} uds</span>`;
+                        } else if (it.ordered_units > 0 || it.current_stock > 0) {
+                            targetFmt = `<span style="color:#34d399;font-weight:600;">Cubierto</span>`;
+                        }
+
+                        return `
+                            <tr style="background: ${rowBg};">
+                                <td style="font-weight: 700; color: #6ee7b7;">${escapeHtmlSafe(it.sku)}</td>
+                                <td style="max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtmlSafe(it.description)}">
+                                    ${escapeHtmlSafe(it.description)}
+                                    <span style="font-size: 10px; color: var(--text-muted); display: block;">${escapeHtmlSafe(it.brand || '')}</span>
+                                </td>
+                                <td style="text-align: center; font-weight: 700; color: #f8fafc;">${it.units_sold_in_period} uds</td>
+                                <td style="text-align: right; font-weight: 600; color: #38bdf8;">
+                                    ${Number(it.daily_sales_rate || 0).toFixed(2)} <span style="font-size:10px;color:var(--text-muted);">u/d</span> · 
+                                    <span style="color:#fbbf24;">${Number(it.monthly_run_rate || 0).toFixed(1)}</span> <span style="font-size:10px;color:var(--text-muted);">u/m</span>
+                                </td>
+                                <td style="text-align: center; font-weight: 800; color: ${it.current_stock > 0 ? '#93c5fd' : '#f87171'};">${it.current_stock} uds</td>
+                                <td style="text-align: center; font-weight: 700; color: ${it.stock_coverage_days !== null && it.stock_coverage_days < 15 ? '#f87171' : '#cbd5e1'};">
+                                    ${it.stock_coverage_days !== null ? it.stock_coverage_days + " d" : "—"}
+                                </td>
+                                <td style="text-align: center; font-weight: 800; color: #fbbf24;">${it.ordered_units} uds</td>
+                                <td style="text-align: center; font-weight: 800; color: ${it.projected_coverage_days !== null && it.projected_coverage_days < 20 ? '#f87171' : '#34d399'};">
+                                    ${it.projected_coverage_days !== null ? it.projected_coverage_days + " d" : "—"}
+                                </td>
+                                <td style="text-align: center;">${targetFmt}</td>
+                                <td style="text-align: center;">${diagBadge}</td>
+                            </tr>
+                        `;
+                    }).join("");
+                }
+            }
+
+            // Actualizar banner de métricas de rotación
+            const elSoldTotal = document.getElementById("agent-sales-audit-total-sold");
+            const elDailyRate = document.getElementById("agent-sales-audit-daily-rate");
+            const elInsuff = document.getElementById("agent-sales-audit-insufficient-count");
+            const elImminent = document.getElementById("agent-sales-audit-imminent-stockouts");
+            const elOver = document.getElementById("agent-sales-audit-overorders");
+
+            if (salesRotationAll.length > 0) {
+                let totalSold = 0;
+                let sumDaily = 0;
+                let countInsuff = 0;
+                let countImminent = 0;
+                let countOver = 0;
+                salesRotationAll.forEach(it => {
+                    totalSold += Number(it.units_sold_in_period || 0);
+                    sumDaily += Number(it.daily_sales_rate || 0);
+                    if (it.diagnostic === "PEDIDO_INSUFICIENTE") countInsuff++;
+                    if (it.diagnostic === "ROTURA_INMINENTE") countImminent++;
+                    if (it.diagnostic === "SOBREPEDIDO") countOver++;
+                });
+                if (elSoldTotal) elSoldTotal.textContent = `${totalSold} uds`;
+                if (elDailyRate) elDailyRate.textContent = `${sumDaily.toFixed(1)} uds/día`;
+                if (elInsuff) elInsuff.textContent = String(countInsuff);
+                if (elImminent) elImminent.textContent = String(countImminent);
+                if (elOver) elOver.textContent = String(countOver);
+            }
         }
 
-        // Ejecutar el Cruce Multi-Agente (Módulo 4)
+        // Ejecutar el Cruce Multi-Agente (Desacoplado - Mínimo 2 fuentes)
         if (btnRunCross) {
             btnRunCross.addEventListener("click", async () => {
-                if (!agentState.tariffSessionId) {
-                    alert("Primero sube un archivo de Tarifa (Excel o CSV) en el Módulo 1 y verifica la columna de Precio.");
+                const activeSources = [
+                    agentState.tariffSessionId,
+                    agentState.stockSessionId,
+                    agentState.orderSessionId,
+                    agentState.salesSessionId
+                ].filter(Boolean);
+
+                if (activeSources.length < 2) {
+                    alert("Debes cargar al menos 2 documentos (Tarifa, Stock, Pedido ERP o Ventas) para activar el cruce multi-agente.");
                     return;
                 }
+
                 btnRunCross.disabled = true;
                 btnRunCross.innerHTML = "<span>⏳</span> Coordinando Agentes...";
                 try {
@@ -5764,6 +6046,9 @@ document.addEventListener("DOMContentLoaded", () => {
                             tariff_session_id: agentState.tariffSessionId,
                             stock_session_id: agentState.stockSessionId,
                             order_session_id: agentState.orderSessionId,
+                            sales_session_id: agentState.salesSessionId,
+                            sales_period_days: agentState.salesPeriodDays || 30,
+                            target_coverage_days: targetCoverageSelect ? parseInt(targetCoverageSelect.value, 10) || 30 : 30,
                             model_col: agentState.modelCol,
                             price_col: agentState.priceCol,
                             desc_col: agentState.descCol,
@@ -5794,31 +6079,49 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (elMissing) elMissing.textContent = String(kpis.missing_in_stock_count || 0);
                     if (elStockOnly) elStockOnly.textContent = String(kpis.stock_only_count || 0);
 
+                    // KPIs y Badges de Pedido y Ventas
                     const bMatched = document.getElementById("agent-badge-matched");
                     const bMissing = document.getElementById("agent-badge-missing");
                     const bStockOnly = document.getElementById("agent-badge-stock-only");
                     const bOrderAudit = document.getElementById("agent-badge-order-audit");
+                    const bSalesRotation = document.getElementById("agent-badge-sales-rotation");
                     if (bMatched) bMatched.textContent = String(kpis.matched_count || 0);
                     if (bMissing) bMissing.textContent = String(kpis.missing_in_stock_count || 0);
                     if (bStockOnly) bStockOnly.textContent = String(kpis.stock_only_count || 0);
                     if (bOrderAudit) bOrderAudit.textContent = String(kpis.order_lines_count || 0);
+                    if (bSalesRotation) bSalesRotation.textContent = String(kpis.sales_references_count || 0);
+
+                    const elSalesKpi = document.getElementById("agent-kpi-sales-summary");
+                    const elSalesSub = document.getElementById("agent-kpi-sales-sub");
+                    if (elSalesKpi && kpis.sales_references_count > 0) {
+                        elSalesKpi.textContent = `${kpis.total_sales_units_sold || 0} uds`;
+                    }
+                    if (elSalesSub && kpis.sales_references_count > 0) {
+                        elSalesSub.textContent = `${kpis.insufficient_orders_count || 0} insuficientes · ${kpis.imminent_stockouts_count || 0} roturas`;
+                    }
 
                     if (resultsDashboard) resultsDashboard.style.display = "block";
                     if (btnExportExcel) btnExportExcel.style.display = "inline-flex";
 
                     renderCrossReferenceTables(searchInput ? searchInput.value : "");
 
-                    // Si el usuario subió una Hoja de Pedido ERP, abrir directamente la pestaña de Auditoría de Pedido
-                    if (kpis.order_lines_count > 0) {
+                    // Navegación inteligente de pestañas al terminar el cruce
+                    if (kpis.sales_references_count > 0 && (kpis.insufficient_orders_count > 0 || kpis.order_lines_count > 0)) {
+                        const btnTabSales = document.getElementById("btn-tab-sales-rotation");
+                        if (btnTabSales) btnTabSales.click();
+                    } else if (kpis.order_lines_count > 0) {
                         const btnTabOrder = document.getElementById("btn-tab-order-audit");
                         if (btnTabOrder) btnTabOrder.click();
+                    } else if (kpis.matched_count > 0) {
+                        const btnTabMatched = document.querySelector(".agent-result-tab[data-target='agent-panel-matched']");
+                        if (btnTabMatched) btnTabMatched.click();
                     }
                 } catch (err) {
                     const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
                     alert("Error en Cruce Multi-Agente: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
                 } finally {
                     btnRunCross.disabled = false;
-                    btnRunCross.innerHTML = "<span>⚡</span> Ejecutar Cruce Multi-Agente";
+                    updateActiveSourcesCounter();
                 }
             });
         }
@@ -5873,6 +6176,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             });
         }
+
+        updateActiveSourcesCounter();
     }
 
     initBackupSystem();

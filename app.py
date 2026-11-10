@@ -6522,9 +6522,12 @@ class AgentTariffExtractRequest(BaseModel):
     save_to_global_tariffs: bool = False
 
 class AgentCrossReferenceRequest(BaseModel):
-    tariff_session_id: str
+    tariff_session_id: Optional[str] = None
     stock_session_id: Optional[str] = None
     order_session_id: Optional[str] = None
+    sales_session_id: Optional[str] = None
+    sales_period_days: Optional[int] = 30
+    target_coverage_days: Optional[int] = 30
     model_col: Optional[int] = None
     price_col: Optional[int] = None
     desc_col: Optional[int] = None
@@ -6758,14 +6761,77 @@ async def agent_order_upload_endpoint(
     finally:
         safe_remove(temp_pdf)
 
+@app.post("/api/agents/sales/upload")
+async def agent_sales_upload_endpoint(
+    file: Optional[UploadFile] = File(None),
+    period_days: int = Form(30)
+):
+    """Módulo 4 (Agente de Ventas y Rotación ERP): Procesa el informe PDF de ventas para calcular rotación y coberturas."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+
+    if file is None:
+        raise HTTPException(status_code=400, detail="Debes subir un archivo PDF con el informe de ventas del ERP.")
+    filename = file.filename or "ventas_erp.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="El archivo de ventas debe ser un documento .pdf.")
+
+    temp_pdf = os.path.join(DATA_DIR, "stock", f"temp_agent_sales_{int(time.time()*1000)}.pdf")
+    os.makedirs(os.path.dirname(temp_pdf), exist_ok=True)
+    try:
+        content = await file.read()
+        with open(temp_pdf, "wb") as f:
+            f.write(content)
+
+        raw_excerpt_lines = []
+        full_raw_pages = []
+        pages_count = 0
+        if _pypdf_module is not None:
+            try:
+                reader = _pypdf_module.PdfReader(temp_pdf)
+                pages_count = len(reader.pages)
+                for p_i in range(pages_count):
+                    txt = reader.pages[p_i].extract_text() or ""
+                    if txt.strip():
+                        full_raw_pages.append(txt)
+                        if p_i < 3:
+                            raw_excerpt_lines.append(f"--- Página {p_i + 1} ---\n{txt.strip()[:600]}")
+            except Exception as ex_pdf:
+                logger.debug(f"Error extrayendo texto de muestra PDF de ventas: {ex_pdf}")
+
+        full_raw_text = "\n".join(full_raw_pages)
+        parsed_sales = purchase_agents.parse_sales_pdf_fallback(full_raw_text)
+        if not parsed_sales:
+            parsed_sales = parse_erp_pdf(temp_pdf, lookup_online_eans=False, use_gemini=False)
+
+        if not parsed_sales:
+            raise HTTPException(status_code=400, detail="No se pudieron detectar modelos ni unidades vendidas en el PDF de ventas subido.")
+
+        res = purchase_agents.create_sales_pdf_session(
+            pdf_path=temp_pdf,
+            filename=filename,
+            parsed_products=parsed_sales,
+            period_days=int(period_days or 30),
+            raw_text_excerpt="\n\n".join(raw_excerpt_lines),
+            pages_count=pages_count
+        )
+        add_log("success", f"📈 Agente de Ventas y Rotación: procesado PDF '{filename}' ({res['items_count']} referencias, {res['total_units_sold']} uds vendidas en {res['period_days']} días).")
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando PDF de ventas: {str(e)}")
+    finally:
+        safe_remove(temp_pdf)
+
 @app.post("/api/agents/cross-reference")
 async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
-    """Coordinador Multi-Agente: Cruza los contextos de Tarifa, Stock y Hoja de Pedido ERP (sin guardar memoria)."""
+    """Coordinador Multi-Agente: Cruza los contextos de Tarifa, Stock, Hoja de Pedido ERP y Ventas (mínimo 2 fuentes, sin guardar memoria)."""
     if purchase_agents is None:
         raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
     try:
-        # Si el usuario ajustó las columnas antes de lanzar el cruce, actualizar extracción primero en un thread
-        if req.model_col is not None and req.price_col is not None:
+        # Si el usuario aportó tarifa y ajustó las columnas antes de lanzar el cruce, actualizar extracción
+        if req.tariff_session_id and req.model_col is not None and req.price_col is not None:
             await asyncio.to_thread(
                 purchase_agents.extract_tariff_with_mapping,
                 session_id=req.tariff_session_id,
@@ -6792,12 +6858,16 @@ async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
             tariff_session_id=req.tariff_session_id,
             stock_session_id=req.stock_session_id,
             order_session_id=req.order_session_id,
+            sales_session_id=req.sales_session_id,
+            sales_period_days=req.sales_period_days or 30,
+            target_coverage_days=req.target_coverage_days or 30,
             fallback_stock_items=fallback_stock,
             fuzzy_threshold=req.fuzzy_threshold,
             low_stock_threshold=req.low_stock_threshold,
             gemini_api_key=api_key
         )
-        add_log("success", f"🤝 Coordinador Multi-Agente: {res['kpis']['matched_count']} coincidentes stock, {res['kpis'].get('order_lines_count', 0)} líneas de pedido auditadas.")
+        active_count = res.get('active_modules_count', 0)
+        add_log("success", f"🤝 Coordinador Multi-Agente: cruce completado con éxito ({active_count}/4 fuentes activas).")
         return res
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

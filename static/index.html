@@ -1128,15 +1128,16 @@
                                 <span>🤖</span> ARQUITECTURA MULTI-AGENTE DE COMPRAS
                             </div>
                             <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 4px 0; color: #f8fafc;">
-                                Cruce Inteligente: Agente de Tarifas (Excel/CSV) ⟷ Agente de Stock (PDF)
+                                Cruce Inteligente Multi-Agente: Tarifas · Stock · Pedidos ERP · Ventas y Rotación
                             </h2>
                             <p style="font-size: 13px; color: #cbd5e1; margin: 0;">
-                                1️⃣ Sube la tarifa y <strong>haz clic en la columna de Precio</strong> en la vista previa · 2️⃣ Sube el PDF de stock interno · 3️⃣ Ejecuta la coordinación Multi-Agente.
+                                Carga al menos <strong>2 de las 4 fuentes</strong> disponibles para auditar precios, coberturas de stock, pedidos insuficientes y fuera de factura.
                             </p>
                         </div>
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                             <button type="button" id="btn-agent-run-cross" class="btn btn-primary" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; padding: 10px 18px; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);">
-                                <span>⚡</span> Ejecutar Cruce Multi-Agente
+                                <span>⚡</span> <span id="btn-agent-run-cross-text">Ejecutar Cruce Multi-Agente</span>
+                                <span id="agent-active-sources-pill" style="font-size: 11px; background: rgba(0,0,0,0.35); padding: 2px 7px; border-radius: 999px;">0/4 fuentes</span>
                             </button>
                             <button type="button" id="btn-agent-export-excel" class="btn btn-secondary" style="display: none; align-items: center; gap: 6px; padding: 10px 14px; font-weight: 600;">
                                 <span>📥</span> Descargar Excel (.xlsx)
@@ -1338,35 +1339,34 @@
                     </div>
                 </div>
 
-                <!-- MÓDULO 3: AGENTE AUDITOR DE PEDIDO ERP (PDF) VS TARIFA + FUERA DE FACTURA -->
-                <div class="card mb-20" style="border-top: 3px solid #f59e0b; min-width: 0; max-width: 100%; overflow: hidden;">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
-                        <div>
-                            <span style="font-size: 11px; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">🟠 Módulo 3 · Agente Auditor de Pedido ERP (PDF)</span>
-                            <h3 class="card-title" style="font-size: 16px; margin: 2px 0 4px 0;">Hoja de Pedido del ERP (PDF) — Control de Precios y Fuera de Factura</h3>
-                            <p class="card-subtitle" style="font-size: 12px; margin: 0;">
-                                Sube tu <strong>Hoja de Pedido del ERP (.pdf)</strong> para compararla al instante contra la tarifa activa, detectar variaciones de precio y marcar qué diferencias corresponden a un <strong>Fuera de Factura</strong> (sin guardar memoria).
-                            </p>
+                <!-- FILA 2: MÓDULO 3 (PEDIDO ERP) Y MÓDULO 4 (VENTAS Y ROTACIÓN ERP) EN PARALELO -->
+                <div class="grid-2col mb-20" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; max-width: 100%;">
+                    <!-- MÓDULO 3: AGENTE AUDITOR DE PEDIDO ERP (PDF) VS TARIFA + FUERA DE FACTURA -->
+                    <div class="card" style="border-top: 3px solid #f59e0b; min-width: 0; max-width: 100%; overflow: hidden;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <div>
+                                <span style="font-size: 11px; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">🟠 Módulo 3 · Agente de Pedido ERP</span>
+                                <h3 class="card-title" style="font-size: 16px; margin: 2px 0 4px 0;">Hoja de Pedido ERP (PDF) — Precios y Fuera de Factura</h3>
+                                <p class="card-subtitle" style="font-size: 12px; margin: 0;">
+                                    Sube la <strong>Hoja de Pedido del ERP (.pdf)</strong> para auditar precios contra tarifa y marcar Fuera de Factura.
+                                </p>
+                            </div>
+                            <span id="agent-order-status-badge" class="badge" style="background: rgba(245, 158, 11, 0.15); color: #fde68a; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px; white-space: nowrap;">
+                                Opcional / Pendiente de PDF
+                            </span>
                         </div>
-                        <span id="agent-order-status-badge" class="badge" style="background: rgba(245, 158, 11, 0.15); color: #fde68a; border: 1px solid rgba(245, 158, 11, 0.3); font-size: 11px; white-space: nowrap;">
-                            Opcional / Pendiente de PDF
-                        </span>
-                    </div>
 
-                    <div style="display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.5fr); gap: 16px; align-items: start;">
                         <!-- Zona de carga de PDF de Pedido -->
-                        <div>
-                            <div id="agent-order-dropzone" class="upload-zone" style="padding: 18px; border-color: rgba(245, 158, 11, 0.45); background: rgba(245, 158, 11, 0.04); cursor: pointer;">
-                                <input type="file" id="agent-order-file-input" accept=".pdf" style="display: none;">
-                                <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
-                                    <span style="font-size: 28px;">🧾</span>
-                                    <div style="text-align: left;">
-                                        <div id="agent-order-dropzone-title" style="font-size: 13px; font-weight: 700; color: #f1f5f9;">
-                                            Haz clic o arrastra aquí la Hoja de Pedido ERP (.pdf)
-                                        </div>
-                                        <div style="font-size: 11px; color: var(--text-muted);">
-                                            Detecta referencias pedidas, unidades y precio unitario del pedido para auditarlos frente a la tarifa.
-                                        </div>
+                        <div id="agent-order-dropzone" class="upload-zone" style="padding: 16px; border-color: rgba(245, 158, 11, 0.45); background: rgba(245, 158, 11, 0.04); margin-bottom: 10px; cursor: pointer;">
+                            <input type="file" id="agent-order-file-input" accept=".pdf" style="display: none;">
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                                <span style="font-size: 26px;">🧾</span>
+                                <div style="text-align: left;">
+                                    <div id="agent-order-dropzone-title" style="font-size: 13px; font-weight: 700; color: #f1f5f9;">
+                                        Haz clic o arrastra aquí la Hoja de Pedido ERP (.pdf)
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        Extrae líneas, cantidades pedidas e importes para cotejar con tarifa y existencias.
                                     </div>
                                 </div>
                             </div>
@@ -1376,7 +1376,7 @@
                         <div id="agent-order-workspace" style="display: none;">
                             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
                                 <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
-                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Líneas de Pedido</div>
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Líneas Pedido</div>
                                     <div id="agent-order-kpi-refs" style="font-size: 16px; font-weight: 800; color: #fbbf24;">0</div>
                                 </div>
                                 <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
@@ -1384,7 +1384,7 @@
                                     <div id="agent-order-kpi-units" style="font-size: 16px; font-weight: 800; color: #34d399;">0</div>
                                 </div>
                                 <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
-                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Importe Pedido ERP</div>
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Importe ERP</div>
                                     <div id="agent-order-kpi-val" style="font-size: 15px; font-weight: 800; color: #f59e0b;">0 €</div>
                                 </div>
                             </div>
@@ -1393,10 +1393,10 @@
                                 <table style="font-size: 12px;">
                                     <thead>
                                         <tr>
-                                            <th>Modelo / SKU Pedido</th>
+                                            <th>Modelo / SKU</th>
                                             <th>Descripción</th>
-                                            <th style="text-align: center;">Uds. Pedidas</th>
-                                            <th style="text-align: right;">Precio Pedido (€/ud)</th>
+                                            <th style="text-align: center;">Uds.</th>
+                                            <th style="text-align: right;">Precio (€/ud)</th>
                                             <th style="text-align: right;">Total Línea (€)</th>
                                         </tr>
                                     </thead>
@@ -1405,16 +1405,107 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- MÓDULO 4: AGENTE DE VENTAS Y ROTACIÓN ERP (PDF) -->
+                    <div class="card" style="border-top: 3px solid #10b981; min-width: 0; max-width: 100%; overflow: hidden;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <div>
+                                <span style="font-size: 11px; font-weight: 700; color: #34d399; text-transform: uppercase; letter-spacing: 0.5px;">🟢 Módulo 4 · Agente de Ventas y Rotación</span>
+                                <h3 class="card-title" style="font-size: 16px; margin: 2px 0 4px 0;">Informe de Ventas ERP (PDF) — Ritmo y Cobertura</h3>
+                                <p class="card-subtitle" style="font-size: 12px; margin: 0;">
+                                    Sube el <strong>Informe de Ventas (.pdf)</strong> para calcular velocidad de venta y comprobar si el pedido es suficiente.
+                                </p>
+                            </div>
+                            <span id="agent-sales-status-badge" class="badge" style="background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11px; white-space: nowrap;">
+                                Opcional / Pendiente de PDF
+                            </span>
+                        </div>
+
+                        <!-- Selector de periodo de ventas coordinado -->
+                        <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px; background: rgba(15, 23, 42, 0.5); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); flex-wrap: wrap;">
+                            <label for="agent-sales-period-select" style="font-size: 11px; font-weight: 700; color: #cbd5e1; display: flex; align-items: center; gap: 4px;">
+                                <span>📅</span> Periodo del informe:
+                            </label>
+                            <select id="agent-sales-period-select" class="form-select" style="font-size: 12px; padding: 4px 8px; width: auto; font-weight: 600;">
+                                <option value="30" selected>Últimos 30 días (1 mes)</option>
+                                <option value="60">Últimos 60 días (2 meses)</option>
+                                <option value="90">Últimos 90 días (3 meses)</option>
+                                <option value="180">Últimos 180 días (Semestre)</option>
+                                <option value="365">Últimos 365 días (1 año)</option>
+                                <option value="custom">Personalizado (indicar días)...</option>
+                            </select>
+                            <input type="number" id="agent-sales-period-custom" min="1" max="1000" placeholder="Días" class="form-input" style="display: none; width: 75px; padding: 4px 6px; font-size: 12px; text-align: center;">
+                            <span style="font-size: 11px; color: var(--text-muted); margin-left: auto;">Coordina el cálculo con el PDF</span>
+                        </div>
+
+                        <!-- Zona de carga de PDF de Ventas -->
+                        <div id="agent-sales-dropzone" class="upload-zone" style="padding: 16px; border-color: rgba(16, 185, 129, 0.45); background: rgba(16, 185, 129, 0.04); margin-bottom: 10px; cursor: pointer;">
+                            <input type="file" id="agent-sales-file-input" accept=".pdf" style="display: none;">
+                            <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                                <span style="font-size: 26px;">📈</span>
+                                <div style="text-align: left;">
+                                    <div id="agent-sales-dropzone-title" style="font-size: 13px; font-weight: 700; color: #f1f5f9;">
+                                        Haz clic o arrastra aquí el Informe de Ventas ERP (.pdf)
+                                    </div>
+                                    <div style="font-size: 11px; color: var(--text-muted);">
+                                        Calcula rotación, ventas/día, proyección y cobertura de días frente al stock y pedido.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vista previa de Ventas extraídas del PDF -->
+                        <div id="agent-sales-workspace" style="display: none;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Refs. Vendidas</div>
+                                    <div id="agent-sales-kpi-refs" style="font-size: 16px; font-weight: 800; color: #10b981;">0</div>
+                                </div>
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Uds. Vendidas</div>
+                                    <div id="agent-sales-kpi-units" style="font-size: 16px; font-weight: 800; color: #34d399;">0</div>
+                                </div>
+                                <div style="background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                                    <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Ritmo Medio</div>
+                                    <div id="agent-sales-kpi-rate" style="font-size: 15px; font-weight: 800; color: #6ee7b7;">0 uds/d</div>
+                                </div>
+                            </div>
+
+                            <div class="table-container" style="max-height: 190px; overflow: auto; border: 1px solid var(--border-color); border-radius: 8px;">
+                                <table style="font-size: 12px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo / SKU</th>
+                                            <th>Descripción</th>
+                                            <th style="text-align: center;">Uds. Vendidas</th>
+                                            <th style="text-align: right;">Venta Diaria</th>
+                                            <th style="text-align: right;">Rotación/Mes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-sales-preview-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- MÓDULO 4: CONSOLA DE COMUNICACIÓN MULTI-AGENTE + PARÁMETROS DE MATCHING -->
-                <div class="card mb-20" style="border-top: 3px solid #10b981; background: rgba(15, 23, 42, 0.85);">
+                <!-- CONSOLA DE COORDINACIÓN MULTI-AGENTE + PARÁMETROS -->
+                <div class="card mb-20" style="border-top: 3px solid #6366f1; background: rgba(15, 23, 42, 0.85);">
                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
                         <div>
-                            <span style="font-size: 11px; font-weight: 700; color: #34d399; text-transform: uppercase; letter-spacing: 0.5px;">🟢 Módulo 4 · Comunicación Multi-Agente y Motor de Matching</span>
-                            <h3 class="card-title" style="font-size: 16px; margin: 2px 0 0 0;">Consola de Coordinación en Tiempo Real (Tarifa ⟷ Stock ⟷ Pedido ERP)</h3>
+                            <span style="font-size: 11px; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.5px;">🤝 Coordinador Multi-Agente y Motor de Cruce Inteligente</span>
+                            <h3 class="card-title" style="font-size: 16px; margin: 2px 0 0 0;">Consola de Coordinación en Tiempo Real (Tarifa · Stock · Pedido · Ventas)</h3>
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label for="agent-target-coverage-select" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Objetivo Cobertura:</label>
+                                <select id="agent-target-coverage-select" class="form-select" style="font-size: 12px; padding: 4px 8px; width: auto; font-weight: 600;">
+                                    <option value="30" selected>30 días (1 mes stock)</option>
+                                    <option value="45">45 días (1.5 meses)</option>
+                                    <option value="60">60 días (2 meses)</option>
+                                    <option value="90">90 días (3 meses)</option>
+                                </select>
+                            </div>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <label for="agent-fuzzy-threshold" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Similitud Fuzzy:</label>
                                 <select id="agent-fuzzy-threshold" class="form-select" style="font-size: 12px; padding: 4px 8px; width: auto;">
@@ -1429,7 +1520,7 @@
                                 <input type="number" id="agent-low-stock-threshold" value="2" min="1" max="50" class="form-input" style="width: 55px; padding: 4px 6px; font-size: 12px; text-align: center;">
                             </div>
                             <label style="font-size: 11px; color: #cbd5e1; display: flex; align-items: center; gap: 5px; cursor: pointer;">
-                                <input type="checkbox" id="agent-use-gemini" checked style="accent-color: #10b981;">
+                                <input type="checkbox" id="agent-use-gemini" checked style="accent-color: #6366f1;">
                                 Dictamen IA Gemini
                             </label>
                         </div>
@@ -1438,7 +1529,7 @@
                     <!-- Chat / Consola de conversación entre los agentes -->
                     <div id="agent-chat-feed" style="max-height: 220px; overflow-y: auto; background: rgba(2, 6, 23, 0.65); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
                         <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px;">
-                            💬 Sube una tarifa en el <strong>Módulo 1</strong> y un PDF de stock en el <strong>Módulo 2</strong> para iniciar la conversación entre los agentes.
+                            💬 Carga al menos <strong>2 de las 4 fuentes</strong> (Tarifa, Stock, Pedido ERP o Ventas) para activar el cruce multi-agente.
                         </div>
                     </div>
                 </div>
@@ -1472,6 +1563,11 @@
                             <div id="agent-kpi-order-diff" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0</div>
                             <div id="agent-kpi-order-sub" style="font-size: 11px; color: var(--text-muted);">Sin hoja de pedido cargada</div>
                         </div>
+                        <div class="card" id="agent-kpi-card-sales" style="border-left: 4px solid #10b981; padding: 14px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #34d399; text-transform: uppercase;">📈 VENTAS Y ROTACIÓN</div>
+                            <div id="agent-kpi-sales-summary" style="font-size: 26px; font-weight: 800; margin: 4px 0;">0 uds</div>
+                            <div id="agent-kpi-sales-sub" style="font-size: 11px; color: var(--text-muted);">Sin informe de ventas cargado</div>
+                        </div>
                     </div>
 
                     <!-- Pestañas de Resultados y Buscador -->
@@ -1489,6 +1585,9 @@
                                 </button>
                                 <button type="button" id="btn-tab-order-audit" class="btn btn-sm btn-secondary agent-result-tab" data-target="agent-panel-order-audit" style="font-weight: 700; border-color: rgba(245, 158, 11, 0.5); color: #fcd34d;">
                                     🟠 4. Auditoría Pedido vs Tarifa (<span id="agent-badge-order-audit">0</span>)
+                                </button>
+                                <button type="button" id="btn-tab-sales-rotation" class="btn btn-sm btn-secondary agent-result-tab" data-target="agent-panel-sales-rotation" style="font-weight: 700; border-color: rgba(16, 185, 129, 0.5); color: #6ee7b7;">
+                                    📈 5. Rotación de Ventas y Cobertura (<span id="agent-badge-sales-rotation">0</span>)
                                 </button>
                             </div>
                             <div style="display: flex; align-items: center; gap: 8px;">
@@ -1620,6 +1719,76 @@
                                         </tr>
                                     </thead>
                                     <tbody id="agent-tbody-order-audit"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Tabla 5: Rotación de Ventas y Cobertura de Pedido -->
+                        <div id="agent-panel-sales-rotation" class="agent-result-panel" style="display: none;">
+                            <!-- Banner de Resumen de Rotación y Cobertura -->
+                            <div style="background: rgba(16, 185, 129, 0.07); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px;">
+                                    <div>
+                                        <span style="font-size: 12px; font-weight: 800; color: #34d399;">📈 Análisis Operativo de Rotación, Cobertura y Demanda</span>
+                                        <span style="font-size: 11px; color: var(--text-muted); margin-left: 8px;">Calcula si el pedido es insuficiente para el ritmo de venta, detecta roturas inminentes y sobrepedidos.</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                        <button type="button" class="btn btn-xs agent-sales-filter-btn active" data-filter="ALL" style="background: #10b981; color: #0f172a; font-weight: 700; padding: 4px 10px; border-radius: 6px; border: none;">
+                                            Todos los artículos
+                                        </button>
+                                        <button type="button" class="btn btn-xs agent-sales-filter-btn" data-filter="SHORTAGE" style="background: rgba(239, 68, 68, 0.18); color: #fca5a5; font-weight: 700; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.4);">
+                                            🔴 Pedido Insuficiente / Rotura
+                                        </button>
+                                        <button type="button" class="btn btn-xs agent-sales-filter-btn" data-filter="OPTIMAL" style="background: rgba(16, 185, 129, 0.18); color: #6ee7b7; font-weight: 700; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.4);">
+                                            🟢 Cobertura Óptima
+                                        </button>
+                                        <button type="button" class="btn btn-xs agent-sales-filter-btn" data-filter="OVERORDER" style="background: rgba(245, 158, 11, 0.18); color: #fde68a; font-weight: 700; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.4);">
+                                            🟡 Sobrepedido (>90d)
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
+                                    <div style="background: rgba(15, 23, 42, 0.75); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Uds Vendidas en Periodo</div>
+                                        <div id="agent-sales-audit-total-sold" style="font-size: 16px; font-weight: 800; color: #f8fafc;">0</div>
+                                    </div>
+                                    <div style="background: rgba(15, 23, 42, 0.75); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Ritmo Medio Diario</div>
+                                        <div id="agent-sales-audit-daily-rate" style="font-size: 16px; font-weight: 800; color: #34d399;">0 uds/día</div>
+                                    </div>
+                                    <div style="background: rgba(239, 68, 68, 0.12); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.4);">
+                                        <div style="font-size: 10px; color: #fca5a5; text-transform: uppercase; font-weight: 700;">🔴 Pedidos Insuficientes</div>
+                                        <div id="agent-sales-audit-insufficient-count" style="font-size: 16px; font-weight: 800; color: #f87171;">0</div>
+                                    </div>
+                                    <div style="background: rgba(245, 158, 11, 0.12); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.4);">
+                                        <div style="font-size: 10px; color: #fde68a; text-transform: uppercase; font-weight: 700;">⚠️ Roturas Inminentes</div>
+                                        <div id="agent-sales-audit-imminent-stockouts" style="font-size: 16px; font-weight: 800; color: #fbbf24;">0</div>
+                                    </div>
+                                    <div style="background: rgba(15, 23, 42, 0.75); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+                                        <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Sobrepedidos (>90d)</div>
+                                        <div id="agent-sales-audit-overorders" style="font-size: 16px; font-weight: 800; color: #cbd5e1;">0</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="table-container" style="max-height: 460px; overflow: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Modelo / SKU</th>
+                                            <th>Descripción / Marca</th>
+                                            <th style="text-align: center;">Uds Vendidas</th>
+                                            <th style="text-align: right;">Ritmo Venta (día · mes)</th>
+                                            <th style="text-align: center;">Stock Almacén</th>
+                                            <th style="text-align: center;">Cobertura Actual</th>
+                                            <th style="text-align: center;">Uds Pedidas</th>
+                                            <th style="text-align: center;">Cobertura Proyectada</th>
+                                            <th style="text-align: center;">Falta p/ Objetivo</th>
+                                            <th style="text-align: center;">Diagnóstico / Alerta</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="agent-tbody-sales-rotation"></tbody>
                                 </table>
                             </div>
                         </div>

@@ -1,6 +1,7 @@
 import os
 import io
 import re
+import math
 import uuid
 import json
 import logging
@@ -22,6 +23,7 @@ logger = logging.getLogger("garde_app.purchase_agents")
 _TARIFF_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _STOCK_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _ORDER_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SALES_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _LAST_CROSS_RESULT: Dict[str, Any] = {}
 _MAX_SESSIONS = 15
 
@@ -883,6 +885,183 @@ def create_order_pdf_session(
     }
 
 
+def parse_sales_pdf_fallback(raw_text: str) -> List[Dict[str, Any]]:
+    """
+    Parser heurístico de reserva para informes de ventas del ERP en PDF.
+    Detecta líneas con SKU/Modelo, descripción, unidades vendidas en el periodo e importe de venta.
+    """
+    items = []
+    if not raw_text:
+        return items
+
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line or len(line) < 4:
+            continue
+
+        if re.search(r'(?:total|subtotal|p[aá]gina|fecha|informe|listado|art[ií]culo|descripci[oó]n|ventas|unidades)', line, re.IGNORECASE) and not re.search(r'\d{3,}', line):
+            continue
+
+        tokens = line.split()
+        if len(tokens) < 2:
+            continue
+
+        sku_cand = None
+        for tok in tokens[:4]:
+            t_clean = re.sub(r'^[^\w]+|[^\w]+$', '', tok)
+            if is_valid_sku(t_clean):
+                sku_cand = t_clean
+                break
+        if not sku_cand:
+            continue
+
+        nums = []
+        desc_tokens = []
+        for tok in tokens:
+            if tok == sku_cand and not desc_tokens:
+                continue
+            num_clean = re.sub(r'[\u20ac€EUR\$\s\*\xa0]', '', tok)
+            if re.match(r'^-?\d+([.,]\d+)?$', num_clean):
+                val = float(num_clean.replace(',', '.'))
+                nums.append(val)
+            else:
+                desc_tokens.append(tok)
+
+        units_sold = 1
+        sales_amt = 0.0
+        if len(nums) == 1:
+            units_sold = max(1, int(round(nums[0])))
+        elif len(nums) >= 2:
+            int_candidates = [n for n in nums if n == int(n) and 0 < n <= 10000]
+            if int_candidates:
+                units_sold = int(int_candidates[0])
+                sales_amt = max(nums) if max(nums) != units_sold else 0.0
+            else:
+                units_sold = max(1, int(round(nums[0])))
+                sales_amt = nums[-1]
+
+        desc_str = " ".join(desc_tokens).strip() or f"Artículo {sku_cand}"
+        brand_str = stock_analyzer.extract_brand_from_text(f"{sku_cand} {desc_str}") if hasattr(stock_analyzer, "extract_brand_from_text") else "General"
+        cat_str = stock_analyzer.classify_appliance_type(f"{desc_str} {sku_cand}", sku_cand)
+
+        items.append({
+            "sku": sku_cand,
+            "description": desc_str,
+            "stock": units_sold,
+            "units_sold": units_sold,
+            "sales_amount": round(sales_amt, 2),
+            "cost": round(sales_amt / units_sold, 2) if units_sold > 0 and sales_amt > 0 else 0.0,
+            "brand": brand_str or "General",
+            "category": cat_str
+        })
+    return items
+
+
+def create_sales_pdf_session(
+    pdf_path: Optional[str],
+    filename: str,
+    parsed_products: List[Dict[str, Any]],
+    period_days: int = 30,
+    raw_text_excerpt: str = "",
+    pages_count: int = 0
+) -> Dict[str, Any]:
+    """
+    Módulo 4 (Agente de Ventas y Rotación):
+    Almacena el histórico de ventas (unidades vendidas y rotación diaria/mensual)
+    para contrastarlo contra el stock disponible y las cantidades del pedido ERP.
+    """
+    sales_session_id = str(uuid.uuid4())[:12]
+    period_days = max(1, int(period_days or 30))
+
+    consolidated: Dict[str, Dict[str, Any]] = {}
+    for p in parsed_products:
+        sku = str(p.get("sku") or p.get("model") or "").strip()
+        if not sku:
+            continue
+        norm_sku = stock_analyzer.normalize_sku(sku)
+        if not norm_sku:
+            continue
+        qty = int(p.get("units_sold") if p.get("units_sold") is not None else p.get("stock", 1))
+        if qty <= 0:
+            qty = 1
+        amount = float(p.get("sales_amount") if p.get("sales_amount") is not None else (float(p.get("cost", 0.0)) * qty))
+        desc = str(p.get("description") or "").strip()
+        brand = str(p.get("brand") or "General").strip()
+        cat = str(p.get("category") or "").strip()
+        if not cat or cat in ("Otros", "N/D"):
+            cat = stock_analyzer.classify_appliance_type(f"{desc} {sku}", sku)
+
+        if norm_sku in consolidated:
+            consolidated[norm_sku]["units_sold"] += qty
+            consolidated[norm_sku]["sales_amount"] += amount
+        else:
+            consolidated[norm_sku] = {
+                "sku": sku,
+                "normalized_sku": norm_sku,
+                "brand": brand,
+                "category": cat,
+                "description": desc,
+                "units_sold": qty,
+                "sales_amount": round(amount, 2),
+                "period_days": period_days
+            }
+
+    for it in consolidated.values():
+        u = it["units_sold"]
+        it["daily_sales_rate"] = round(u / period_days, 3)
+        it["monthly_run_rate"] = round((u / period_days) * 30.0, 1)
+        it["avg_unit_price"] = round(it["sales_amount"] / u, 2) if u > 0 and it["sales_amount"] > 0 else 0.0
+
+    items_list = sorted(consolidated.values(), key=lambda x: x["units_sold"], reverse=True)
+    total_units_sold = sum(it["units_sold"] for it in items_list)
+    total_sales_amount = round(sum(it["sales_amount"] for it in items_list), 2)
+    daily_global_rate = round(total_units_sold / period_days, 2)
+
+    _SALES_SESSIONS[sales_session_id] = {
+        "sales_session_id": sales_session_id,
+        "filename": filename,
+        "pages_count": pages_count,
+        "period_days": period_days,
+        "items": items_list,
+        "raw_text_excerpt": raw_text_excerpt[:3000],
+        "total_units_sold": total_units_sold,
+        "total_sales_amount": total_sales_amount,
+        "daily_global_rate": daily_global_rate,
+        "created_at": _now_time()
+    }
+    _trim_sessions(_SALES_SESSIONS)
+
+    agent_messages = [
+        {
+            "agent": "sales",
+            "agent_name": "Agente de Ventas y Rotación (PDF ERP)",
+            "badge": f"Módulo 4 · Ventas ({period_days} días)",
+            "time": _now_time(),
+            "text": (
+                f"He procesado el informe de ventas **{filename}** ({pages_count or 1} pág.) "
+                f"para un periodo de **{period_days} días**. "
+                f"Analizadas **{len(items_list)} referencias vendidas** ({total_units_sold} uds totales, "
+                f"ritmo de **{daily_global_rate} uds/día**). Listo para verificar rotación y suficiencia de pedido."
+            )
+        }
+    ]
+
+    return {
+        "status": "success",
+        "sales_session_id": sales_session_id,
+        "filename": filename,
+        "pages_count": pages_count,
+        "period_days": period_days,
+        "items_count": len(items_list),
+        "total_units_sold": total_units_sold,
+        "total_sales_amount": total_sales_amount,
+        "daily_global_rate": daily_global_rate,
+        "raw_text_excerpt": raw_text_excerpt[:1500],
+        "items_preview": items_list[:50],
+        "agent_messages": agent_messages
+    }
+
+
 def _extract_numeric_signature(code: str) -> str:
     """Extrae la secuencia numérica principal de un modelo/SKU (ej. '3TS998BA' -> '3998')."""
     return "".join(re.findall(r'\d+', code or ""))
@@ -936,41 +1115,139 @@ def _compute_sku_similarity(tariff_norm: str, stock_norm: str) -> Tuple[float, s
     return 0.0, "NONE"
 
 
+def _build_lookup_indices(items: List[Dict[str, Any]], sku_key: str = "normalized_sku"):
+    """Construye índices O(1) de búsqueda por SKU normalizado, sin marca, base y numérico."""
+    by_norm: Dict[str, Dict[str, Any]] = {}
+    by_nobrand: Dict[str, Dict[str, Any]] = {}
+    by_base: Dict[str, Dict[str, Any]] = {}
+    by_numeric: Dict[str, List[Tuple[str, Dict[str, Any]]]] = collections.defaultdict(list)
+
+    for it in items:
+        norm = str(it.get(sku_key) or it.get("normalized_model") or it.get("sku") or "").strip()
+        if not norm:
+            continue
+        by_norm[norm] = it
+        if hasattr(stock_analyzer, "strip_brand_from_sku"):
+            nb = stock_analyzer.strip_brand_from_sku(norm)
+            if nb and nb not in by_nobrand:
+                by_nobrand[nb] = it
+        base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', norm)
+        if base and len(base) >= 5 and base not in by_base:
+            by_base[base] = it
+        num = _extract_numeric_signature(norm)
+        if num:
+            by_numeric[num].append((norm, it))
+
+    return by_norm, by_nobrand, by_base, by_numeric
+
+
+def _match_sku_to_catalog(
+    sku_norm: str,
+    catalog_by_norm: Dict[str, Any],
+    catalog_by_nobrand: Dict[str, Any],
+    catalog_by_base: Dict[str, Any],
+    catalog_by_numeric: Dict[str, List[Tuple[str, Any]]],
+    fuzzy_threshold: float = 0.78
+) -> Tuple[Optional[Any], str, float]:
+    """Busca un SKU en un catálogo usando coincidencia O(1) exacta, sin marca, base o fuzzy guiada."""
+    if not sku_norm:
+        return None, "NONE", 0.0
+
+    if sku_norm in catalog_by_norm:
+        return catalog_by_norm[sku_norm], "EXACTO", 1.0
+
+    nb = stock_analyzer.strip_brand_from_sku(sku_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else sku_norm
+    if nb and nb in catalog_by_norm:
+        return catalog_by_norm[nb], "EXACTO", 1.0
+    if sku_norm in catalog_by_nobrand:
+        return catalog_by_nobrand[sku_norm], "EXACTO", 1.0
+    if nb and nb in catalog_by_nobrand:
+        return catalog_by_nobrand[nb], "EXACTO", 1.0
+
+    base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', sku_norm)
+    if base and len(base) >= 5 and base in catalog_by_base:
+        return catalog_by_base[base], "EXACTO", 0.98
+    if nb:
+        nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', nb)
+        if nb_base and len(nb_base) >= 5 and nb_base in catalog_by_base:
+            return catalog_by_base[nb_base], "EXACTO", 0.98
+
+    num_s = _extract_numeric_signature(sku_norm)
+    cands = catalog_by_numeric.get(num_s, []) if num_s else []
+    best_cand = None
+    best_score = 0.0
+    best_type = "NONE"
+    for c_norm, c_item in cands:
+        score, mtype = _compute_sku_similarity(sku_norm, c_norm)
+        if score >= fuzzy_threshold and score > best_score:
+            best_score = score
+            best_cand = c_item
+            best_type = mtype
+
+    if best_cand is not None:
+        return best_cand, best_type, best_score
+
+    return None, "NONE", 0.0
+
+
 def run_multi_agent_cross_reference(
-    tariff_session_id: str,
+    tariff_session_id: Optional[str] = None,
     stock_session_id: Optional[str] = None,
     order_session_id: Optional[str] = None,
+    sales_session_id: Optional[str] = None,
+    sales_period_days: Optional[int] = 30,
+    target_coverage_days: Optional[int] = 30,
     fallback_stock_items: Optional[List[Dict[str, Any]]] = None,
     fuzzy_threshold: float = 0.78,
     low_stock_threshold: int = 2,
     gemini_api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Motor de Coordinación Multi-Agente y Matching (Exacto + Fuzzy).
-    Cruza el contexto del Agente de Tarifas (Excel/CSV), el Agente de Stock (PDF)
-    y el Agente Auditor de Pedido ERP (PDF), generando la conversación y el Dashboard final.
+    Motor de Coordinación Multi-Agente y Matching Desacoplado.
+    Permite cruzar CUALQUIER combinación de 2, 3 o los 4 documentos disponibles:
+    1. Tarifa de Proveedor (Excel / CSV)
+    2. Stock Interno (PDF / Inventario ERP)
+    3. Hoja de Pedido ERP (PDF)
+    4. Informe de Ventas y Rotación (PDF ERP)
     """
-    if tariff_session_id not in _TARIFF_SESSIONS:
-        raise ValueError("No se encontró la sesión del Agente de Tarifas. Sube y confirma primero el archivo Excel/CSV.")
-
-    t_sess = _TARIFF_SESSIONS[tariff_session_id]
-    tariff_items = t_sess.get("extracted_items") or []
-    if not tariff_items:
-        # Extraer automáticamente con el mapeo actual si aún no se había ejecutado
-        mapping = t_sess["mapping"]
-        extract_tariff_with_mapping(
-            session_id=tariff_session_id,
-            model_col=mapping["model_col"],
-            price_col=mapping["price_col"],
-            desc_col=mapping.get("desc_col", -1),
-            brand_col=mapping.get("brand_col", -1)
-        )
+    # 1. Obtener contexto de Tarifa (si se ha cargado)
+    tariff_items: List[Dict[str, Any]] = []
+    t_sess: Dict[str, Any] = {}
+    price_col_name = "Precio"
+    model_col_name = "Modelo"
+    if tariff_session_id and tariff_session_id in _TARIFF_SESSIONS:
+        t_sess = _TARIFF_SESSIONS[tariff_session_id]
         tariff_items = t_sess.get("extracted_items") or []
+        if not tariff_items and "mapping" in t_sess:
+            mapping = t_sess["mapping"]
+            extract_tariff_with_mapping(
+                session_id=tariff_session_id,
+                model_col=mapping["model_col"],
+                price_col=mapping["price_col"],
+                desc_col=mapping.get("desc_col", -1),
+                brand_col=mapping.get("brand_col", -1)
+            )
+            tariff_items = t_sess.get("extracted_items") or []
+        cols = t_sess.get("columns", [])
+        mapping = t_sess.get("mapping", {})
+        if cols and "price_col" in mapping and 0 <= mapping["price_col"] < len(cols):
+            price_col_name = cols[mapping["price_col"]]["name"]
+        if cols and "model_col" in mapping and 0 <= mapping["model_col"] < len(cols):
+            model_col_name = cols[mapping["model_col"]]["name"]
 
-    if not tariff_items:
-        raise ValueError("La tarifa no contiene artículos válidos con las columnas seleccionadas.")
+    # 2. Obtener contexto de Stock (si se ha cargado)
+    stock_items: List[Dict[str, Any]] = []
+    stock_filename = ""
+    if stock_session_id and stock_session_id in _STOCK_SESSIONS:
+        s_sess = _STOCK_SESSIONS[stock_session_id]
+        stock_items = s_sess["items"]
+        stock_filename = s_sess["filename"]
+    elif fallback_stock_items:
+        temp_res = create_stock_pdf_session(None, "inventory.json (Almacén Local)", fallback_stock_items)
+        stock_items = _STOCK_SESSIONS[temp_res["stock_session_id"]]["items"]
+        stock_filename = "inventory.json (Almacén Local)"
 
-    # Obtener contexto del Agente de Pedido ERP (Módulo 3) si se ha subido
+    # 3. Obtener contexto de Pedido ERP (si se ha cargado)
     order_items: List[Dict[str, Any]] = []
     order_filename = ""
     if order_session_id and order_session_id in _ORDER_SESSIONS:
@@ -978,179 +1255,126 @@ def run_multi_agent_cross_reference(
         order_items = o_sess["items"]
         order_filename = o_sess["filename"]
 
-    # Obtener contexto del Agente de Stock (Módulo 2)
-    stock_items: List[Dict[str, Any]] = []
-    stock_filename = "Sin PDF de Stock"
-    if stock_session_id and stock_session_id in _STOCK_SESSIONS:
-        s_sess = _STOCK_SESSIONS[stock_session_id]
-        stock_items = s_sess["items"]
-        stock_filename = s_sess["filename"]
-    elif _STOCK_SESSIONS:
-        latest_sid = list(_STOCK_SESSIONS.keys())[-1]
-        s_sess = _STOCK_SESSIONS[latest_sid]
-        stock_items = s_sess["items"]
-        stock_filename = s_sess["filename"]
-    elif fallback_stock_items:
-        temp_res = create_stock_pdf_session(None, "inventory.json (Almacén Local)", fallback_stock_items)
-        stock_items = _STOCK_SESSIONS[temp_res["stock_session_id"]]["items"]
-        stock_filename = "inventory.json (Almacén Local)"
-    elif not order_items:
-        raise ValueError("Sube al menos un PDF de Stock (Módulo 2) o un PDF de Pedido ERP (Módulo 3) para cruzar con la Tarifa.")
+    # 4. Obtener contexto de Ventas y Rotación (si se ha cargado)
+    sales_items: List[Dict[str, Any]] = []
+    sales_filename = ""
+    effective_period_days = int(sales_period_days or 30)
+    effective_target_coverage = int(target_coverage_days or 30)
+    if sales_session_id and sales_session_id in _SALES_SESSIONS:
+        sal_sess = _SALES_SESSIONS[sales_session_id]
+        sales_items = sal_sess["items"]
+        sales_filename = sal_sess["filename"]
+        effective_period_days = sal_sess.get("period_days", effective_period_days)
 
-    # Índices optimizados de búsqueda para Stock:
-    # 1. Exacto por SKU normalizado O(1)
-    stock_by_norm: Dict[str, Dict[str, Any]] = {}
-    # 2. Exacto sin nombre de marca O(1)
-    stock_by_nobrand: Dict[str, Dict[str, Any]] = {}
-    # 3. Base eliminando sufijos de versión/país (ej. /01, ES, SP, EU) O(1)
-    stock_by_base: Dict[str, Dict[str, Any]] = {}
-    # 4. Índice numérico para Fuzzy Matching ultrarrápido O(1): num_sig -> lista de (s_norm, s_item)
-    stock_by_numeric: Dict[str, List[Tuple[str, Dict[str, Any]]]] = collections.defaultdict(list)
+    # Validar regla de oro: al menos 2 fuentes activas
+    active_sources = []
+    if tariff_items:
+        active_sources.append("tariff")
+        for it in tariff_items:
+            if "normalized_model" not in it:
+                it["normalized_model"] = stock_analyzer.normalize_sku(it.get("model", ""))
+    if stock_items:
+        active_sources.append("stock")
+        for it in stock_items:
+            if "normalized_sku" not in it:
+                it["normalized_sku"] = stock_analyzer.normalize_sku(it.get("sku", ""))
+    if order_items:
+        active_sources.append("order")
+        for it in order_items:
+            if "normalized_sku" not in it:
+                it["normalized_sku"] = stock_analyzer.normalize_sku(it.get("sku", ""))
+    if sales_items:
+        active_sources.append("sales")
+        for it in sales_items:
+            if "normalized_sku" not in it:
+                it["normalized_sku"] = stock_analyzer.normalize_sku(it.get("sku", ""))
 
-    for it in stock_items:
-        s_norm = it["normalized_sku"]
-        stock_by_norm[s_norm] = it
-        if hasattr(stock_analyzer, "strip_brand_from_sku"):
-            s_nb = stock_analyzer.strip_brand_from_sku(s_norm)
-            if s_nb and s_nb not in stock_by_nobrand:
-                stock_by_nobrand[s_nb] = it
-        s_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', s_norm)
-        if s_base and len(s_base) >= 5 and s_base not in stock_by_base:
-            stock_by_base[s_base] = it
-        num_s = _extract_numeric_signature(s_norm)
-        if num_s:
-            stock_by_numeric[num_s].append((s_norm, it))
+    if len(active_sources) < 2:
+        raise ValueError(
+            f"Debes cargar al menos 2 fuentes de datos (Tarifa, Stock, Pedido o Ventas) para ejecutar el cruce comparativo. "
+            f"Actualmente solo hay {len(active_sources)} activa(s)."
+        )
 
-    # Índices optimizados de búsqueda para Tarifa (para auditar el Pedido ERP en O(1)):
-    tariff_by_norm: Dict[str, Dict[str, Any]] = {}
-    tariff_by_nobrand: Dict[str, Dict[str, Any]] = {}
-    tariff_by_base: Dict[str, Dict[str, Any]] = {}
-    tariff_by_numeric: Dict[str, List[Tuple[str, Dict[str, Any]]]] = collections.defaultdict(list)
-
-    for t_it in tariff_items:
-        tn = t_it["normalized_model"]
-        tariff_by_norm[tn] = t_it
-        if hasattr(stock_analyzer, "strip_brand_from_sku"):
-            tn_nb = stock_analyzer.strip_brand_from_sku(tn)
-            if tn_nb and tn_nb not in tariff_by_nobrand:
-                tariff_by_nobrand[tn_nb] = t_it
-        tn_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', tn)
-        if tn_base and len(tn_base) >= 5 and tn_base not in tariff_by_base:
-            tariff_by_base[tn_base] = t_it
-        num_tn = _extract_numeric_signature(tn)
-        if num_tn:
-            tariff_by_numeric[num_tn].append((tn, t_it))
+    # Construir índices O(1) para las fuentes activas
+    stock_by_norm, stock_by_nobrand, stock_by_base, stock_by_numeric = _build_lookup_indices(stock_items, "normalized_sku")
+    tariff_by_norm, tariff_by_nobrand, tariff_by_base, tariff_by_numeric = _build_lookup_indices(tariff_items, "normalized_model")
+    order_by_norm, order_by_nobrand, order_by_base, order_by_numeric = _build_lookup_indices(order_items, "normalized_sku")
+    sales_by_norm, sales_by_nobrand, sales_by_base, sales_by_numeric = _build_lookup_indices(sales_items, "normalized_sku")
 
     matched_stock_norms = set()
-
     matched_items: List[Dict[str, Any]] = []
     missing_items: List[Dict[str, Any]] = []
+    stock_only_items: List[Dict[str, Any]] = []
     exact_matches_count = 0
     fuzzy_matches_count = 0
 
-    for t_item in tariff_items:
-        t_norm = t_item["normalized_model"]
-        t_model = t_item["model"]
-        t_price = float(t_item["price"])
-        t_desc = t_item["description"]
-        t_cat = t_item.get("category") or "Otros"
-        t_brand = t_item.get("brand") or "General"
+    if tariff_items and stock_items:
+        for t_item in tariff_items:
+            t_norm = t_item["normalized_model"]
+            t_model = t_item["model"]
+            t_price = float(t_item["price"])
+            t_desc = t_item["description"]
+            t_cat = t_item.get("category") or "Otros"
+            t_brand = t_item.get("brand") or "General"
 
-        matched_s: Optional[Dict[str, Any]] = None
-        match_type = "NONE"
-        match_score = 0.0
+            matched_s, match_type, match_score = _match_sku_to_catalog(
+                t_norm, stock_by_norm, stock_by_nobrand, stock_by_base, stock_by_numeric, fuzzy_threshold
+            )
 
-        t_nobrand = stock_analyzer.strip_brand_from_sku(t_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else t_norm
+            if matched_s is not None:
+                matched_stock_norms.add(matched_s["normalized_sku"])
+                if match_type == "EXACTO":
+                    exact_matches_count += 1
+                else:
+                    fuzzy_matches_count += 1
 
-        # 1. Intento de coincidencia exacta normalizada O(1) (con y sin prefijo de marca)
-        if t_norm in stock_by_norm:
-            matched_s = stock_by_norm[t_norm]
-            match_type = "EXACTO"
-            match_score = 1.0
-        elif t_nobrand and t_nobrand in stock_by_norm:
-            matched_s = stock_by_norm[t_nobrand]
-            match_type = "EXACTO"
-            match_score = 1.0
-        elif t_norm in stock_by_nobrand:
-            matched_s = stock_by_nobrand[t_norm]
-            match_type = "EXACTO"
-            match_score = 1.0
-        elif t_nobrand and t_nobrand in stock_by_nobrand:
-            matched_s = stock_by_nobrand[t_nobrand]
-            match_type = "EXACTO"
-            match_score = 1.0
-        else:
-            # 2. Coincidencia por modelo base (sufijo ES, SP, /01) O(1)
-            t_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', t_norm)
-            t_nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', t_nobrand) if t_nobrand else ""
-            if t_base and len(t_base) >= 5 and t_base in stock_by_base:
-                matched_s = stock_by_base[t_base]
-                match_type = "EXACTO"
-                match_score = 0.98
-            elif t_nb_base and len(t_nb_base) >= 5 and t_nb_base in stock_by_base:
-                matched_s = stock_by_base[t_nb_base]
-                match_type = "EXACTO"
-                match_score = 0.98
+                s_qty = int(matched_s.get("stock", 0))
+                s_cost = float(matched_s.get("cost", 0.0))
+                price_diff = round(t_price - s_cost, 2) if s_cost > 0 else 0.0
+                price_diff_pct = round(((t_price - s_cost) / s_cost) * 100, 1) if s_cost > 0 else 0.0
+
+                if s_qty <= 0:
+                    status = "SIN_STOCK_PDF"
+                    suggested_order = max(1, low_stock_threshold)
+                elif s_qty < low_stock_threshold:
+                    status = "STOCK_BAJO"
+                    suggested_order = max(1, low_stock_threshold - s_qty)
+                else:
+                    status = "CUBIERTO"
+                    suggested_order = 0
+
+                matched_items.append({
+                    "tariff_model": t_model,
+                    "stock_model": matched_s["sku"],
+                    "match_type": match_type,
+                    "match_score": round(match_score * 100, 1),
+                    "brand": t_brand if t_brand != "General" else matched_s.get("brand", "General"),
+                    "category": (matched_s.get("category") if matched_s.get("category") and matched_s.get("category") not in ("Otros", "N/D", "") else (t_cat if t_cat and t_cat != "Otros" else "Otros")),
+                    "description": t_desc if len(t_desc) >= len(matched_s.get("description", "")) else matched_s.get("description", t_desc),
+                    "tariff_price": t_price,
+                    "stock_cost": s_cost,
+                    "stock_unit_cost": s_cost,
+                    "stock_total_cost": round(s_cost * s_qty, 2),
+                    "price_diff": price_diff,
+                    "price_diff_pct": price_diff_pct,
+                    "stock_qty": s_qty,
+                    "status": status,
+                    "suggested_order_qty": suggested_order
+                })
+
+                if s_qty <= 0:
+                    missing_items.append({
+                        "tariff_model": t_model,
+                        "brand": t_brand,
+                        "category": t_cat,
+                        "description": t_desc,
+                        "tariff_price": t_price,
+                        "stock_qty": 0,
+                        "reason": "En PDF con 0 uds (Agotado)",
+                        "suggested_order_qty": max(1, low_stock_threshold),
+                        "estimated_cost": round(t_price * max(1, low_stock_threshold), 2)
+                    })
             else:
-                # 3. Fuzzy Matching dirigido SOLO a candidatos con la misma firma numérica (0 lags, O(1))
-                num_t = _extract_numeric_signature(t_norm)
-                cands = stock_by_numeric.get(num_t, []) if num_t else []
-                if cands:
-                    best_score = 0.0
-                    best_cand = None
-                    for s_norm, s_item in cands:
-                        score, mtype = _compute_sku_similarity(t_norm, s_norm)
-                        if score >= fuzzy_threshold and score > best_score:
-                            best_score = score
-                            best_cand = s_item
-                            match_type = mtype
-                    if best_cand is not None:
-                        matched_s = best_cand
-                        match_score = best_score
-
-        if matched_s is not None:
-            matched_stock_norms.add(matched_s["normalized_sku"])
-            if match_type == "EXACTO":
-                exact_matches_count += 1
-            else:
-                fuzzy_matches_count += 1
-
-            s_qty = int(matched_s.get("stock", 0))
-            s_cost = float(matched_s.get("cost", 0.0))
-            price_diff = round(t_price - s_cost, 2) if s_cost > 0 else 0.0
-            price_diff_pct = round(((t_price - s_cost) / s_cost) * 100, 1) if s_cost > 0 else 0.0
-
-            if s_qty <= 0:
-                status = "SIN_STOCK_PDF"
-                suggested_order = max(1, low_stock_threshold)
-            elif s_qty < low_stock_threshold:
-                status = "STOCK_BAJO"
-                suggested_order = max(1, low_stock_threshold - s_qty)
-            else:
-                status = "CUBIERTO"
-                suggested_order = 0
-
-            matched_items.append({
-                "tariff_model": t_model,
-                "stock_model": matched_s["sku"],
-                "match_type": match_type,
-                "match_score": round(match_score * 100, 1),
-                "brand": t_brand if t_brand != "General" else matched_s.get("brand", "General"),
-                "category": (matched_s.get("category") if matched_s.get("category") and matched_s.get("category") not in ("Otros", "N/D", "") else (t_cat if t_cat and t_cat != "Otros" else "Otros")),
-                "description": t_desc if len(t_desc) >= len(matched_s.get("description", "")) else matched_s.get("description", t_desc),
-                "tariff_price": t_price,
-                "stock_cost": s_cost,
-                "stock_unit_cost": s_cost,
-                "stock_total_cost": round(s_cost * s_qty, 2),
-                "price_diff": price_diff,
-                "price_diff_pct": price_diff_pct,
-                "stock_qty": s_qty,
-                "status": status,
-                "suggested_order_qty": suggested_order
-            })
-
-            # Si aparece en el PDF pero con 0 unidades, también lo incluimos en la vista de revisión de faltantes
-            if s_qty <= 0:
                 missing_items.append({
                     "tariff_model": t_model,
                     "brand": t_brand,
@@ -1158,28 +1382,27 @@ def run_multi_agent_cross_reference(
                     "description": t_desc,
                     "tariff_price": t_price,
                     "stock_qty": 0,
-                    "reason": "En PDF con 0 uds (Agotado)",
-                    "suggested_order_qty": max(1, low_stock_threshold),
-                    "estimated_cost": round(t_price * max(1, low_stock_threshold), 2)
+                    "reason": "No figura en el PDF de Stock",
+                    "suggested_order_qty": 1,
+                    "estimated_cost": round(t_price, 2)
                 })
-        else:
-            # No aparece en absoluto en el PDF de stock
-            missing_items.append({
-                "tariff_model": t_model,
-                "brand": t_brand,
-                "category": t_cat,
-                "description": t_desc,
-                "tariff_price": t_price,
-                "stock_qty": 0,
-                "reason": "No figura en el PDF de Stock",
-                "suggested_order_qty": 1,
-                "estimated_cost": round(t_price, 2)
-            })
 
-    # Artículos que están en el PDF de Stock pero NO en la tarifa del proveedor (viceversa)
-    stock_only_items: List[Dict[str, Any]] = []
-    for s_norm, s_item in stock_by_norm.items():
-        if s_norm not in matched_stock_norms:
+        for s_norm, s_item in stock_by_norm.items():
+            if s_norm not in matched_stock_norms:
+                stock_only_items.append({
+                    "stock_model": s_item["sku"],
+                    "brand": s_item.get("brand", "Genérico"),
+                    "category": s_item.get("category", "Otros"),
+                    "description": s_item.get("description", ""),
+                    "stock_qty": int(s_item.get("stock", 0)),
+                    "stock_cost": float(s_item.get("cost", 0.0))
+                })
+
+        matched_items.sort(key=lambda x: (x["stock_qty"], -x["tariff_price"]))
+        missing_items.sort(key=lambda x: (0 if "0 uds" in x["reason"] else 1, x["tariff_price"]))
+        stock_only_items.sort(key=lambda x: -x["stock_qty"])
+    elif stock_items and not tariff_items:
+        for s_norm, s_item in stock_by_norm.items():
             stock_only_items.append({
                 "stock_model": s_item["sku"],
                 "brand": s_item.get("brand", "Genérico"),
@@ -1189,13 +1412,8 @@ def run_multi_agent_cross_reference(
                 "stock_cost": float(s_item.get("cost", 0.0))
             })
 
-    # Ordenar resultados: primero los que tienen stock bajo o agotado en coincidentes
-    matched_items.sort(key=lambda x: (x["stock_qty"], -x["tariff_price"]))
-    missing_items.sort(key=lambda x: (0 if "0 uds" in x["reason"] else 1, x["tariff_price"]))
-    stock_only_items.sort(key=lambda x: -x["stock_qty"])
-
     # -------------------------------------------------------------------------
-    # AUDITORÍA DE HOJA DE PEDIDO ERP vs TARIFA (MÓDULO 3)
+    # AUDITORÍA DE HOJA DE PEDIDO ERP vs TARIFA, STOCK Y VENTAS (MÓDULO 3)
     # -------------------------------------------------------------------------
     order_audit_items: List[Dict[str, Any]] = []
     order_matched_count = 0
@@ -1204,140 +1422,255 @@ def run_multi_agent_cross_reference(
     order_gross_overprice_amount = 0.0
     order_expected_tariff_total = 0.0
 
-    for o_item in order_items:
-        o_norm = o_item["normalized_sku"]
-        o_sku = o_item["sku"]
-        o_qty = int(o_item.get("order_qty", 1))
-        o_unit_price = float(o_item.get("order_unit_price", 0.0))
-        o_total_price = round(o_unit_price * o_qty, 2)
-        o_desc = o_item.get("description", "")
-        o_brand = o_item.get("brand", "General")
-        o_cat = o_item.get("category", "Otros")
+    if order_items:
+        for o_item in order_items:
+            o_norm = o_item["normalized_sku"]
+            o_sku = o_item["sku"]
+            o_qty = int(o_item.get("order_qty", 1))
+            o_unit_price = float(o_item.get("order_unit_price", 0.0))
+            o_total_price = round(o_unit_price * o_qty, 2)
+            o_desc = o_item.get("description", "")
+            o_brand = o_item.get("brand", "General")
+            o_cat = o_item.get("category", "Otros")
 
-        o_nobrand = stock_analyzer.strip_brand_from_sku(o_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else o_norm
+            matched_t, o_match_type, o_match_score = _match_sku_to_catalog(
+                o_norm, tariff_by_norm, tariff_by_nobrand, tariff_by_base, tariff_by_numeric, fuzzy_threshold
+            )
 
-        # Buscar coincidencia en Tarifa en O(1)
-        matched_t: Optional[Dict[str, Any]] = None
-        o_match_type = "NONE"
-        o_match_score = 0.0
+            matched_s, _, _ = _match_sku_to_catalog(
+                o_norm, stock_by_norm, stock_by_nobrand, stock_by_base, stock_by_numeric, fuzzy_threshold
+            )
+            current_stock_qty = int(matched_s["stock"]) if matched_s else None
 
-        if o_norm in tariff_by_norm:
-            matched_t = tariff_by_norm[o_norm]
-            o_match_type = "EXACTO"
-            o_match_score = 1.0
-        elif o_nobrand and o_nobrand in tariff_by_norm:
-            matched_t = tariff_by_norm[o_nobrand]
-            o_match_type = "EXACTO"
-            o_match_score = 1.0
-        elif o_norm in tariff_by_nobrand:
-            matched_t = tariff_by_nobrand[o_norm]
-            o_match_type = "EXACTO"
-            o_match_score = 1.0
-        elif o_nobrand and o_nobrand in tariff_by_nobrand:
-            matched_t = tariff_by_nobrand[o_nobrand]
-            o_match_type = "EXACTO"
-            o_match_score = 1.0
-        else:
-            o_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', o_norm)
-            o_nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', o_nobrand) if o_nobrand else ""
-            if o_base and len(o_base) >= 5 and o_base in tariff_by_base:
-                matched_t = tariff_by_base[o_base]
-                o_match_type = "EXACTO"
-                o_match_score = 0.98
-            elif o_nb_base and len(o_nb_base) >= 5 and o_nb_base in tariff_by_base:
-                matched_t = tariff_by_base[o_nb_base]
-                o_match_type = "EXACTO"
-                o_match_score = 0.98
+            matched_sal, _, _ = _match_sku_to_catalog(
+                o_norm, sales_by_norm, sales_by_nobrand, sales_by_base, sales_by_numeric, fuzzy_threshold
+            )
+            sal_monthly_run = float(matched_sal["monthly_run_rate"]) if matched_sal else None
+
+            if matched_t is not None:
+                order_matched_count += 1
+                t_price_val = float(matched_t["price"])
+                unit_diff = round(o_unit_price - t_price_val, 2)
+                total_diff = round(unit_diff * o_qty, 2)
+                diff_pct = round((unit_diff / t_price_val) * 100, 1) if t_price_val > 0 else 0.0
+                order_expected_tariff_total += round(t_price_val * o_qty, 2)
+
+                if abs(unit_diff) <= 0.05:
+                    audit_status = "PRECIO_OK"
+                elif unit_diff > 0.05:
+                    audit_status = "MAS_CARO_EN_PEDIDO"
+                    order_discrepancies_count += 1
+                    order_overprice_count += 1
+                    order_gross_overprice_amount += total_diff
+                else:
+                    audit_status = "MAS_BARATO_EN_PEDIDO"
+                    order_discrepancies_count += 1
+
+                final_cat = o_cat if o_cat not in ("Otros", "N/D", "") else matched_t.get("category", "Otros")
+                final_desc = o_desc if len(o_desc) >= len(matched_t.get("description", "")) else matched_t.get("description", o_desc)
+                t_model_str = matched_t["model"]
             else:
-                num_o = _extract_numeric_signature(o_norm)
-                t_cands = tariff_by_numeric.get(num_o, []) if num_o else []
-                if t_cands:
-                    best_sc = 0.0
-                    best_tc = None
-                    for tn_cand, t_cand_it in t_cands:
-                        sc, mt = _compute_sku_similarity(tn_cand, o_norm)
-                        if sc >= fuzzy_threshold and sc > best_sc:
-                            best_sc = sc
-                            best_tc = t_cand_it
-                            o_match_type = mt
-                    if best_tc is not None:
-                        matched_t = best_tc
-                        o_match_score = best_sc
+                t_price_val = 0.0
+                unit_diff = 0.0
+                total_diff = 0.0
+                diff_pct = 0.0
+                audit_status = "NO_EN_TARIFA"
+                final_cat = o_cat
+                final_desc = o_desc
+                t_model_str = "No figura en tarifa" if tariff_items else "Sin tarifa cargada"
 
-        # Comprobar también stock disponible en almacén si hay PDF de stock cargado
-        s_match = stock_by_norm.get(o_norm) or (stock_by_nobrand.get(o_nobrand) if o_nobrand else None)
-        current_stock_qty = int(s_match.get("stock", 0)) if s_match else None
+            order_audit_items.append({
+                "order_model": o_sku,
+                "tariff_model": t_model_str,
+                "match_type": o_match_type,
+                "match_score": round(o_match_score * 100, 1),
+                "brand": o_brand,
+                "category": final_cat,
+                "description": final_desc,
+                "order_qty": o_qty,
+                "stock_qty": current_stock_qty,
+                "monthly_run_rate": sal_monthly_run,
+                "order_unit_price": o_unit_price,
+                "order_total_price": o_total_price,
+                "tariff_price": t_price_val,
+                "unit_diff": unit_diff,
+                "total_diff": total_diff,
+                "diff_pct": diff_pct,
+                "audit_status": audit_status,
+                "has_off_invoice": False,
+                "off_invoice_unit": 0.0
+            })
 
-        if matched_t is not None:
-            order_matched_count += 1
-            t_price_val = float(matched_t["price"])
-            unit_diff = round(o_unit_price - t_price_val, 2)
-            total_diff = round(unit_diff * o_qty, 2)
-            diff_pct = round((unit_diff / t_price_val) * 100, 1) if t_price_val > 0 else 0.0
-            order_expected_tariff_total += round(t_price_val * o_qty, 2)
+        def _order_audit_sort_key(x: Dict[str, Any]):
+            st = x["audit_status"]
+            if st == "MAS_CARO_EN_PEDIDO":
+                return (0, -x["total_diff"])
+            if st == "MAS_BARATO_EN_PEDIDO":
+                return (1, x["total_diff"])
+            if st == "NO_EN_TARIFA":
+                return (2, -x["order_total_price"])
+            return (3, -x["order_total_price"])
 
-            if abs(unit_diff) <= 0.05:
-                audit_status = "PRECIO_OK"
-            elif unit_diff > 0.05:
-                audit_status = "MAS_CARO_EN_PEDIDO"
-                order_discrepancies_count += 1
-                order_overprice_count += 1
-                order_gross_overprice_amount += total_diff
+        order_audit_items.sort(key=_order_audit_sort_key)
+
+    # -------------------------------------------------------------------------
+    # ANÁLISIS DE VENTAS, ROTACIÓN Y COBERTURA DE PEDIDO (MÓDULO 4)
+    # -------------------------------------------------------------------------
+    sales_rotation_items: List[Dict[str, Any]] = []
+    sales_insufficient_count = 0
+    sales_imminent_stockout_count = 0
+    sales_overorder_count = 0
+    processed_sales_norms = set()
+
+    if sales_items:
+        for sal_it in sales_items:
+            sn = sal_it["normalized_sku"]
+            processed_sales_norms.add(sn)
+            u_sold = sal_it["units_sold"]
+            d_rate = sal_it["daily_sales_rate"]
+            m_rate = sal_it["monthly_run_rate"]
+
+            st_cand, _, _ = _match_sku_to_catalog(sn, stock_by_norm, stock_by_nobrand, stock_by_base, stock_by_numeric, fuzzy_threshold)
+            curr_stock = int(st_cand["stock"]) if st_cand else 0
+
+            ord_cand, _, _ = _match_sku_to_catalog(sn, order_by_norm, order_by_nobrand, order_by_base, order_by_numeric, fuzzy_threshold)
+            ord_qty = int(ord_cand["order_qty"]) if ord_cand else 0
+            ord_unit_price = float(ord_cand["order_unit_price"]) if ord_cand else 0.0
+
+            tar_cand, _, _ = _match_sku_to_catalog(sn, tariff_by_norm, tariff_by_nobrand, tariff_by_base, tariff_by_numeric, fuzzy_threshold)
+            tar_price = float(tar_cand["price"]) if tar_cand else 0.0
+
+            curr_days = round(curr_stock / d_rate, 1) if d_rate > 0 else 999.0
+            proj_days = round((curr_stock + ord_qty) / d_rate, 1) if d_rate > 0 else 999.0
+
+            target_units = int(math.ceil(effective_target_coverage * d_rate)) if d_rate > 0 else 0
+            shortage_units = max(0, target_units - (curr_stock + ord_qty))
+            surplus_units = max(0, (curr_stock + ord_qty) - int(math.ceil(60 * d_rate))) if d_rate > 0 else 0
+
+            if ord_qty > 0 and proj_days < 20 and d_rate > 0:
+                diag_status = "PEDIDO_INSUFICIENTE"
+                diag_badge = "🔴 Pedido Insuficiente"
+                diag_text = (
+                    f"Cubre solo {proj_days:.0f} días de demanda (ritmo {m_rate:.0f} uds/mes). "
+                    f"Faltan ~{shortage_units} uds para cubrir {effective_target_coverage} días."
+                )
+                sales_insufficient_count += 1
+            elif ord_qty > 0 and proj_days > 90 and d_rate > 0:
+                diag_status = "SOBREPEDIDO"
+                diag_badge = "🟡 Sobrepedido (>90d)"
+                diag_text = (
+                    f"Stock + Pedido cubren {proj_days:.0f} días de venta "
+                    f"(exceso de ~{surplus_units} uds sobre cobertura de 60 días)."
+                )
+                sales_overorder_count += 1
+            elif ord_qty > 0:
+                diag_status = "COBERTURA_OPTIMA"
+                diag_badge = "🟢 Cobertura Óptima"
+                diag_text = f"Cubre {proj_days:.0f} días de venta ({curr_stock} en stock + {ord_qty} pedidas)."
+            elif ord_qty == 0 and curr_stock > 0 and curr_days < 15 and d_rate > 0:
+                diag_status = "ROTURA_INMINENTE"
+                diag_badge = "⚠️ Rotura Inminente"
+                diag_text = f"Quedan solo {curr_stock} uds en almacén ({curr_days:.0f} días de cobertura) y NO está en el pedido."
+                sales_imminent_stockout_count += 1
+            elif ord_qty == 0 and curr_stock > 0:
+                diag_status = "STOCK_DISPONIBLE"
+                diag_badge = "⚪ Stock Disponible"
+                diag_text = f"Stock en almacén cubre {curr_days:.0f} días de venta."
+            elif ord_qty == 0 and curr_stock <= 0 and d_rate > 0:
+                diag_status = "ROTURA_TOTAL_SIN_PEDIDO"
+                diag_badge = "🔴 Sin Stock ni Pedido"
+                diag_text = f"0 uds en almacén y NO se ha pedido. Ritmo de {m_rate:.0f} uds/mes."
+                sales_imminent_stockout_count += 1
             else:
-                audit_status = "MAS_BARATO_EN_PEDIDO"
-                order_discrepancies_count += 1
+                diag_status = "SIN_VENTAS_PREVIAS"
+                diag_badge = "⚪ Sin Rotación"
+                diag_text = f"Sin rotación en el periodo analizado ({effective_period_days} días)."
 
-            final_cat = o_cat if o_cat not in ("Otros", "N/D", "") else matched_t.get("category", "Otros")
-            final_desc = o_desc if len(o_desc) >= len(matched_t.get("description", "")) else matched_t.get("description", o_desc)
-            t_model_str = matched_t["model"]
-        else:
-            t_price_val = 0.0
-            unit_diff = 0.0
-            total_diff = 0.0
-            diff_pct = 0.0
-            audit_status = "NO_EN_TARIFA"
-            final_cat = o_cat
-            final_desc = o_desc
-            t_model_str = "No figura en tarifa"
+            sales_rotation_items.append({
+                "sku": sal_it["sku"],
+                "description": sal_it["description"],
+                "brand": sal_it["brand"],
+                "category": sal_it["category"],
+                "units_sold": u_sold,
+                "units_sold_in_period": u_sold,
+                "period_days": effective_period_days,
+                "daily_sales_rate": d_rate,
+                "monthly_run_rate": m_rate,
+                "stock_qty": curr_stock,
+                "current_stock": curr_stock,
+                "current_stock_days": curr_days,
+                "stock_coverage_days": round(curr_days, 1) if curr_days < 900 else None,
+                "order_qty": ord_qty,
+                "ordered_units": ord_qty,
+                "projected_stock_days": proj_days,
+                "projected_coverage_days": round(proj_days, 1) if proj_days < 900 else None,
+                "target_coverage_days": effective_target_coverage,
+                "shortage_units": shortage_units,
+                "shortage_units_for_target": shortage_units,
+                "surplus_units": surplus_units,
+                "excess_surplus_units": surplus_units,
+                "tariff_price": tar_price,
+                "order_unit_price": ord_unit_price,
+                "diag_status": diag_status,
+                "diagnostic": diag_status,
+                "diag_badge": diag_badge,
+                "diag_text": diag_text
+            })
 
-        order_audit_items.append({
-            "order_model": o_sku,
-            "tariff_model": t_model_str,
-            "match_type": o_match_type,
-            "match_score": round(o_match_score * 100, 1),
-            "brand": o_brand,
-            "category": final_cat,
-            "description": final_desc,
-            "order_qty": o_qty,
-            "stock_qty": current_stock_qty,
-            "order_unit_price": o_unit_price,
-            "order_total_price": o_total_price,
-            "tariff_price": t_price_val,
-            "unit_diff": unit_diff,
-            "total_diff": total_diff,
-            "diff_pct": diff_pct,
-            "audit_status": audit_status,
-            "has_off_invoice": False,
-            "off_invoice_unit": 0.0
-        })
+        if order_items:
+            for o_it in order_items:
+                on = o_it["normalized_sku"]
+                s_cand, _, _ = _match_sku_to_catalog(on, sales_by_norm, sales_by_nobrand, sales_by_base, sales_by_numeric, fuzzy_threshold)
+                if not s_cand and on not in processed_sales_norms:
+                    st_cand, _, _ = _match_sku_to_catalog(on, stock_by_norm, stock_by_nobrand, stock_by_base, stock_by_numeric, fuzzy_threshold)
+                    curr_s = int(st_cand["stock"]) if st_cand else 0
+                    tar_cand, _, _ = _match_sku_to_catalog(on, tariff_by_norm, tariff_by_nobrand, tariff_by_base, tariff_by_numeric, fuzzy_threshold)
+                    tar_p = float(tar_cand["price"]) if tar_cand else 0.0
 
-    # Ordenar auditoría de pedido: primero las líneas con diferencia positiva (más caras que la tarifa), luego descuentos, luego OK
-    def _order_audit_sort_key(x: Dict[str, Any]):
-        st = x["audit_status"]
-        if st == "MAS_CARO_EN_PEDIDO":
-            return (0, -x["total_diff"])
-        if st == "MAS_BARATO_EN_PEDIDO":
-            return (1, x["total_diff"])
-        if st == "NO_EN_TARIFA":
-            return (2, -x["order_total_price"])
-        return (3, -x["order_total_price"])
+                    sales_rotation_items.append({
+                        "sku": o_it["sku"],
+                        "description": o_it["description"],
+                        "brand": o_it["brand"],
+                        "category": o_it["category"],
+                        "units_sold": 0,
+                        "units_sold_in_period": 0,
+                        "period_days": effective_period_days,
+                        "daily_sales_rate": 0.0,
+                        "monthly_run_rate": 0.0,
+                        "stock_qty": curr_s,
+                        "current_stock": curr_s,
+                        "current_stock_days": 999.0,
+                        "stock_coverage_days": None,
+                        "order_qty": o_it["order_qty"],
+                        "ordered_units": o_it["order_qty"],
+                        "projected_stock_days": 999.0,
+                        "projected_coverage_days": None,
+                        "target_coverage_days": effective_target_coverage,
+                        "shortage_units": 0,
+                        "shortage_units_for_target": 0,
+                        "surplus_units": 0,
+                        "excess_surplus_units": 0,
+                        "tariff_price": tar_p,
+                        "order_unit_price": o_it["order_unit_price"],
+                        "diag_status": "PEDIDO_SIN_VENTAS",
+                        "diagnostic": "PEDIDO_SIN_VENTAS",
+                        "diag_badge": "ℹ️ Pedido sin Venta Registrada",
+                        "diag_text": f"En pedido ({o_it['order_qty']} uds) pero sin ventas en los últimos {effective_period_days} días. Comprobar si es novedad."
+                    })
 
-    order_audit_items.sort(key=_order_audit_sort_key)
+        def _sales_rotation_sort_key(x: Dict[str, Any]):
+            st = x["diag_status"]
+            if st in ("PEDIDO_INSUFICIENTE", "ROTURA_TOTAL_SIN_PEDIDO"):
+                return (0, -x["shortage_units"], -x["monthly_run_rate"])
+            if st == "ROTURA_INMINENTE":
+                return (1, x["current_stock_days"], -x["monthly_run_rate"])
+            if st == "SOBREPEDIDO":
+                return (2, -x["surplus_units"])
+            if st == "COBERTURA_OPTIMA":
+                return (3, -x["monthly_run_rate"])
+            return (4, -x["units_sold"])
 
-    columns = t_sess["columns"]
-    mapping = t_sess["mapping"]
-    price_col_name = columns[mapping["price_col"]]["name"] if 0 <= mapping["price_col"] < len(columns) else "Precio"
-    model_col_name = columns[mapping["model_col"]]["name"] if 0 <= mapping["model_col"] < len(columns) else "Modelo"
+        sales_rotation_items.sort(key=_sales_rotation_sort_key)
 
     # Si hay clave de Gemini y quedan modelos con categoría 'Otros', resolverlos en un único lote ultrarrápido
     if gemini_api_key:
@@ -1351,6 +1684,9 @@ def run_multi_agent_cross_reference(
         for it in order_audit_items:
             if it.get("category") in ("Otros", "N/D", "", None):
                 unknown_skus.append(it["order_model"])
+        for it in sales_rotation_items:
+            if it.get("category") in ("Otros", "N/D", "", None):
+                unknown_skus.append(it["sku"])
         unique_unknown = list(dict.fromkeys([m for m in unknown_skus if m and len(m) >= 2]))
         if unique_unknown:
             try:
@@ -1373,23 +1709,28 @@ def run_multi_agent_cross_reference(
                         m_key = it["order_model"]
                         if m_key in resolved_map:
                             it["category"] = resolved_map[m_key]
+                    for it in sales_rotation_items:
+                        m_key = it["sku"]
+                        if m_key in resolved_map:
+                            it["category"] = resolved_map[m_key]
             except Exception as e_ai:
                 logger.debug(f"Error resolviendo modelos desconocidos con IA en lote: {e_ai}")
 
     # Construir transcripción de comunicación Multi-Agente
-    dialogue = [
-        {
+    dialogue = []
+
+    if tariff_items:
+        dialogue.append({
             "agent": "tariff",
             "agent_name": "Agente de Tarifas (Proveedor)",
-            "badge": f"Tarifa: {t_sess['filename']}",
+            "badge": f"Tarifa: {t_sess.get('filename', 'Tarifa')}",
             "time": _now_time(),
             "text": (
-                f"Envío al coordinador **{len(tariff_items)} modelos** extraídos de `{t_sess['filename']}` "
-                f"(Hoja `{t_sess['active_sheet']}`). Columna de referencia: **{model_col_name}** | "
+                f"Envío al coordinador **{len(tariff_items)} modelos** extraídos de `{t_sess.get('filename', 'Tarifa')}` "
+                f"(Hoja `{t_sess.get('active_sheet', 'Activa')}`). Columna de referencia: **{model_col_name}** | "
                 f"Columna de precio seleccionada por el usuario: **{price_col_name}**."
             )
-        }
-    ]
+        })
 
     if stock_items:
         dialogue.append({
@@ -1398,8 +1739,8 @@ def run_multi_agent_cross_reference(
             "badge": f"Stock: {stock_filename}",
             "time": _now_time(),
             "text": (
-                f"Envío inventario extraído del PDF `{stock_filename}` con **{len(stock_items)} referencias únicas** "
-                f"y **{sum(it['stock'] for it in stock_items)} unidades** totales en almacén."
+                f"Envío inventario extraído de `{stock_filename}` con **{len(stock_items)} referencias** "
+                f"y **{sum(it.get('stock', 0) for it in stock_items)} unidades** totales en almacén."
             )
         })
 
@@ -1410,47 +1751,74 @@ def run_multi_agent_cross_reference(
             "badge": f"Pedido: {order_filename}",
             "time": _now_time(),
             "text": (
-                f"He auditado las **{len(order_items)} líneas** de la Hoja de Pedido `{order_filename}` contra la tarifa:\n"
-                f"• **{order_matched_count} modelos localizados en tarifa**.\n"
-                f"• **{order_overprice_count} modelos con precio superior a la tarifa** "
-                f"(diferencia bruta acumulada: **+{order_gross_overprice_amount:,.2f} €** — revisa si corresponden a **Fuera de Factura**).\n"
-                f"• **{len(order_items) - order_matched_count} modelos del pedido** no figuran en esta tarifa."
+                f"He procesado las **{len(order_items)} líneas** de la Hoja de Pedido `{order_filename}`:\n"
+                + (
+                    f"• **{order_matched_count} localizados en tarifa** ({order_overprice_count} con precio superior, "
+                    f"variación bruta: **+{order_gross_overprice_amount:,.2f} €** — revisa si corresponden a *Fuera de Factura*).\n"
+                    if tariff_items else ""
+                )
+                + f"• Importe total pedido: **{sum(it['order_total_price'] for it in order_items):,.2f} €** ({sum(it['order_qty'] for it in order_items)} uds)."
             )
         })
 
+    if sales_items:
+        dialogue.append({
+            "agent": "sales",
+            "agent_name": "Agente de Ventas y Rotación (PDF ERP)",
+            "badge": f"Ventas ({effective_period_days} días): {sales_filename}",
+            "time": _now_time(),
+            "text": (
+                f"He analizado el histórico de ventas de **{effective_period_days} días**:\n"
+                f"• **{len(sales_items)} referencias vendidas** ({sum(it['units_sold'] for it in sales_items)} uds totales, "
+                f"ritmo de **{sum(it['units_sold'] for it in sales_items)/effective_period_days:.1f} uds/día**).\n"
+                + (
+                    f"• ⚠️ **{sales_insufficient_count} artículos del pedido son INSUFICIENTES** para cubrir la rotación mensual (riesgo de rotura en <20 días).\n"
+                    if order_items else ""
+                )
+                + (
+                    f"• 🚨 **{sales_imminent_stockout_count} referencias en almacén con rotura inminente** (<15 días de existencias) que conviene reponer."
+                    if stock_items and not order_items else ""
+                )
+            )
+        })
+
+    # Mensaje resumen del Coordinador
+    coord_lines = [f"Cruce coordinado entre **{len(active_sources)} fuentes activas**:"]
+    if tariff_items and stock_items:
+        coord_lines.append(f"• **Tarifa ↔ Stock:** {len(matched_items)} coincidentes ({exact_matches_count} exactos, {fuzzy_matches_count} fuzzy), {len(missing_items)} faltantes.")
+    if order_items and tariff_items:
+        coord_lines.append(f"• **Pedido ERP ↔ Tarifa:** {order_matched_count}/{len(order_items)} auditados, **{order_discrepancies_count} diferencias de precio**.")
+    if sales_items and order_items:
+        coord_lines.append(f"• **Ventas ↔ Pedido ERP:** {sales_insufficient_count} pedidos insuficientes vs rotación real.")
+    if sales_items and stock_items and not order_items:
+        coord_lines.append(f"• **Ventas ↔ Stock:** {sales_imminent_stockout_count} referencias en riesgo inminente de rotura.")
+
     dialogue.append({
         "agent": "coordinator",
-        "agent_name": "Agente Coordinador (Motor de Matching)",
-        "badge": "Cruce Exacto + Fuzzy",
+        "agent_name": "Agente Coordinador Multi-Agente",
+        "badge": f"Cruce {len(active_sources)} Fuentes",
         "time": _now_time(),
-        "text": (
-            f"Cruce completado:\n"
-            f"• **Tarifa ↔ Stock:** {len(matched_items)} coincidentes ({exact_matches_count} exactos, {fuzzy_matches_count} fuzzy), "
-            f"{len(missing_items)} faltantes en stock.\n"
-            + (
-                f"• **Tarifa ↔ Hoja de Pedido:** {order_matched_count}/{len(order_items)} cruzados, "
-                f"**{order_discrepancies_count} variaciones de precio detectadas**."
-                if order_items else ""
-            )
-        )
+        "text": "\n".join(coord_lines)
     })
 
-    # Si hay clave de Gemini configurada, añadir análisis breve del Agente IA de Compras
-    if gemini_api_key and len(tariff_items) > 0:
+    # Dictamen Gemini si hay API key
+    if gemini_api_key:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_api_key, http_options={"timeout": 6.0})
-            top_missing = [f"{m['tariff_model']} ({m['tariff_price']}€)" for m in missing_items[:5]]
-            overpriced_order = [
-                f"{m['order_model']} (Pedido: {m['order_unit_price']}€ vs Tarifa: {m['tariff_price']}€, dif: +{m['unit_diff']}€/ud)"
-                for m in order_audit_items if m["audit_status"] == "MAS_CARO_EN_PEDIDO"
-            ][:5]
+            summary_facts = [f"- Fuentes cruzadas: {', '.join(active_sources)}"]
+            if tariff_items:
+                summary_facts.append(f"- Tarifa: {len(tariff_items)} modelos.")
+            if stock_items:
+                summary_facts.append(f"- Stock: {len(stock_items)} referencias.")
+            if order_items:
+                summary_facts.append(f"- Pedido ERP: {len(order_items)} líneas, {order_overprice_count} con sobrecoste vs tarifa (+{order_gross_overprice_amount:.2f}€).")
+            if sales_items:
+                summary_facts.append(f"- Ventas ({effective_period_days}d): {sales_insufficient_count} pedidos insuficientes, {sales_imminent_stockout_count} en riesgo rotura.")
+
             prompt = (
-                f"Eres el Agente Director de Compras IA. Resume en 3 frases breves y accionables el resultado del cruce:\n"
-                f"- Tarifa: {t_sess['filename']} ({len(tariff_items)} refs, columna precio '{price_col_name}')\n"
-                f"- Stock PDF: {stock_filename} ({len(stock_items)} refs, {len(matched_items)} coincidentes)\n"
-                f"- Pedido ERP PDF: {order_filename or 'No subido'} ({len(order_items)} líneas, {order_overprice_count} más caras que tarifa: {', '.join(overpriced_order) or 'ninguna'})\n"
-                f"- Faltantes/Sin stock en tarifa: {len(missing_items)} (ejemplos: {', '.join(top_missing) or 'ninguno'})."
+                f"Eres el Agente Estratega de Compras y Aprovisionamiento. Resume en 3 frases breves y directas las conclusiones clave y qué acciones debe tomar el comprador:\n"
+                + "\n".join(summary_facts)
             )
             for m_name in ["gemini-3.5-flash", "gemini-3.5-flash-lite"]:
                 try:
@@ -1471,14 +1839,17 @@ def run_multi_agent_cross_reference(
 
     order_total_units = sum(it["order_qty"] for it in order_audit_items)
     order_total_amount = round(sum(it["order_total_price"] for it in order_audit_items), 2)
+    sales_total_units = sum(it["units_sold"] for it in sales_rotation_items)
 
     kpis = {
+        "active_sources": active_sources,
+        "active_modules_count": len(active_sources),
         "total_tariff_items": len(tariff_items),
         "total_stock_items": len(stock_items),
         "matched_count": len(matched_items),
         "exact_matches_count": exact_matches_count,
         "fuzzy_matches_count": fuzzy_matches_count,
-        "matched_with_stock_count": sum(1 for m in matched_items if m["stock_qty"] > 0),
+        "matched_with_stock_count": sum(1 for m in matched_items if m.get("stock_qty", 0) > 0),
         "missing_in_stock_count": len(missing_items),
         "stock_only_count": len(stock_only_items),
         "price_col_name": price_col_name,
@@ -1490,17 +1861,29 @@ def run_multi_agent_cross_reference(
         "order_expected_tariff_total": round(order_expected_tariff_total, 2),
         "order_discrepancies_count": order_discrepancies_count,
         "order_overprice_count": order_overprice_count,
-        "order_gross_overprice_amount": round(order_gross_overprice_amount, 2)
+        "order_gross_overprice_amount": round(order_gross_overprice_amount, 2),
+        "sales_items_count": len(sales_rotation_items),
+        "sales_total_units": sales_total_units,
+        "sales_period_days": effective_period_days,
+        "target_coverage_days": effective_target_coverage,
+        "sales_daily_run_rate": round(sales_total_units / max(1, effective_period_days), 2),
+        "sales_monthly_run_rate": round((sales_total_units / max(1, effective_period_days)) * 30.0, 1),
+        "sales_insufficient_order_count": sales_insufficient_count,
+        "sales_imminent_stockout_count": sales_imminent_stockout_count,
+        "sales_overorder_count": sales_overorder_count
     }
 
     result_payload = {
         "status": "success",
+        "active_sources": active_sources,
+        "active_modules_count": len(active_sources),
         "kpis": kpis,
         "dialogue": dialogue,
         "matched_items": matched_items,
         "missing_items": missing_items,
         "stock_only_items": stock_only_items,
-        "order_audit_items": order_audit_items
+        "order_audit_items": order_audit_items,
+        "sales_rotation_items": sales_rotation_items
     }
 
     global _LAST_CROSS_RESULT
@@ -1508,14 +1891,15 @@ def run_multi_agent_cross_reference(
     return result_payload
 
 
-def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None) -> io.BytesIO:
-    """Genera un archivo Excel (.xlsx) profesional con las pestañas del cruce Multi-Agente y la Auditoría de Pedido."""
-    data = custom_payload or _LAST_CROSS_RESULT
+def export_cross_reference_excel(cross_result: Optional[Dict[str, Any]] = None) -> io.BytesIO:
+    """Genera un archivo Excel (.xlsx) con las pestañas de los módulos activos (Tarifa, Stock, Pedido y Ventas)."""
+    data = cross_result or _LAST_CROSS_RESULT
     if not data or not data.get("kpis"):
         raise ValueError("No hay ningún cruce Multi-Agente calculado para exportar.")
 
     wb = Workbook()
-    header_fill = PatternFill(start_color="1E1B4B", end_color="1E1B4B", fill_type="solid")
+    default_ws = wb.active
+
     header_font = Font(color="FFFFFF", bold=True, size=11)
     border_thin = Border(
         left=Side(style="thin", color="CBD5E1"),
@@ -1523,98 +1907,111 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
         top=Side(style="thin", color="CBD5E1"),
         bottom=Side(style="thin", color="CBD5E1")
     )
-
     sheets_to_format = []
+    created_sheets = 0
 
-    # Si hay auditoría de pedido, ponerla en la primera hoja o incluirla destacada
+    matched_items = data.get("matched_items") or []
+    missing_items = data.get("missing_items") or []
+    stock_only = data.get("stock_only_items") or []
     order_audit = data.get("order_audit_items") or []
+    sales_rotation = data.get("sales_rotation_items") or []
 
-    # Hoja 1: Artículos Coincidentes
-    ws1 = wb.active
-    ws1.title = "1_Coincidentes_Tarifa_Stock"
-    sheets_to_format.append(ws1)
-    headers1 = [
-        "Modelo (Tarifa)", "Modelo (PDF Stock)", "Tipo Match", "Similitud (%)",
-        "Marca", "Categoría", "Descripción", "Precio Tarifa (€)",
-        "Coste ERP (€)", "Diferencia (€)", "Stock Actual (Uds)", "Estado", "Uds Sugeridas"
-    ]
-    ws1.append(headers1)
-    for col_num in range(1, len(headers1) + 1):
-        c = ws1.cell(row=1, column=col_num)
-        c.fill = header_fill
-        c.font = header_font
-        c.alignment = Alignment(horizontal="center", vertical="center")
+    # Hoja 1: Artículos Coincidentes Tarifa/Stock
+    if matched_items:
+        ws1 = default_ws if created_sheets == 0 else wb.create_sheet(title="1_Coincidentes_Tarifa_Stock")
+        ws1.title = "1_Coincidentes_Tarifa_Stock"
+        created_sheets += 1
+        sheets_to_format.append(ws1)
+        headers1 = [
+            "Modelo (Tarifa)", "Modelo (PDF Stock)", "Tipo Match", "Similitud (%)",
+            "Marca", "Categoría", "Descripción", "Precio Tarifa (€)",
+            "Coste ERP (€)", "Diferencia (€)", "Stock Actual (Uds)", "Estado", "Uds Sugeridas"
+        ]
+        ws1.append(headers1)
+        for col_num in range(1, len(headers1) + 1):
+            c = ws1.cell(row=1, column=col_num)
+            c.fill = PatternFill(start_color="1E1B4B", end_color="1E1B4B", fill_type="solid")
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
 
-    for item in data.get("matched_items", []):
-        ws1.append([
-            item.get("tariff_model", ""),
-            item.get("stock_model", ""),
-            item.get("match_type", "EXACTO"),
-            item.get("match_score", 100.0),
-            item.get("brand", ""),
-            item.get("category", ""),
-            item.get("description", ""),
-            item.get("tariff_price", 0.0),
-            item.get("stock_cost", 0.0),
-            item.get("price_diff", 0.0),
-            item.get("stock_qty", 0),
-            item.get("status", ""),
-            item.get("suggested_order_qty", 0)
-        ])
+        for item in matched_items:
+            ws1.append([
+                item.get("tariff_model", ""),
+                item.get("stock_model", ""),
+                item.get("match_type", "EXACTO"),
+                item.get("match_score", 100.0),
+                item.get("brand", ""),
+                item.get("category", ""),
+                item.get("description", ""),
+                item.get("tariff_price", 0.0),
+                item.get("stock_cost", 0.0),
+                item.get("price_diff", 0.0),
+                item.get("stock_qty", 0),
+                item.get("status", ""),
+                item.get("suggested_order_qty", 0)
+            ])
 
-    # Hoja 2: Artículos Faltantes / Pendientes de Revisar
-    ws2 = wb.create_sheet(title="2_Faltantes_En_Tarifa")
-    sheets_to_format.append(ws2)
-    headers2 = [
-        "Modelo (Tarifa)", "Marca", "Categoría", "Descripción",
-        "Precio Tarifa (€)", "Stock Actual", "Motivo / Estado", "Cantidad a Pedir", "Importe Estimado (€)"
-    ]
-    ws2.append(headers2)
-    for col_num in range(1, len(headers2) + 1):
-        c = ws2.cell(row=1, column=col_num)
-        c.fill = PatternFill(start_color="7F1D1D", end_color="7F1D1D", fill_type="solid")
-        c.font = header_font
-        c.alignment = Alignment(horizontal="center", vertical="center")
+    # Hoja 2: Faltantes en Tarifa
+    if missing_items:
+        ws2 = default_ws if created_sheets == 0 else wb.create_sheet(title="2_Faltantes_En_Tarifa")
+        ws2.title = "2_Faltantes_En_Tarifa"
+        created_sheets += 1
+        sheets_to_format.append(ws2)
+        headers2 = [
+            "Modelo (Tarifa)", "Marca", "Categoría", "Descripción",
+            "Precio Tarifa (€)", "Stock Actual", "Motivo / Estado", "Cantidad a Pedir", "Importe Estimado (€)"
+        ]
+        ws2.append(headers2)
+        for col_num in range(1, len(headers2) + 1):
+            c = ws2.cell(row=1, column=col_num)
+            c.fill = PatternFill(start_color="7F1D1D", end_color="7F1D1D", fill_type="solid")
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
 
-    for item in data.get("missing_items", []):
-        qty = int(item.get("suggested_order_qty", 1))
-        price = float(item.get("tariff_price", 0.0))
-        ws2.append([
-            item.get("tariff_model", ""),
-            item.get("brand", ""),
-            item.get("category", ""),
-            item.get("description", ""),
-            price,
-            item.get("stock_qty", 0),
-            item.get("reason", "No figura en PDF de Stock"),
-            qty,
-            round(price * qty, 2)
-        ])
+        for item in missing_items:
+            qty = int(item.get("suggested_order_qty", 1))
+            price = float(item.get("tariff_price", 0.0))
+            ws2.append([
+                item.get("tariff_model", ""),
+                item.get("brand", ""),
+                item.get("category", ""),
+                item.get("description", ""),
+                price,
+                item.get("stock_qty", 0),
+                item.get("reason", "No figura en PDF de Stock"),
+                qty,
+                round(price * qty, 2)
+            ])
 
-    # Hoja 3: En Stock PDF pero No en Tarifa
-    ws3 = wb.create_sheet(title="3_Solo_En_PDF_Stock")
-    sheets_to_format.append(ws3)
-    headers3 = ["Modelo (PDF Stock)", "Marca", "Categoría", "Descripción", "Stock en Almacén (Uds)", "Coste Unitario ERP (€)"]
-    ws3.append(headers3)
-    for col_num in range(1, len(headers3) + 1):
-        c = ws3.cell(row=1, column=col_num)
-        c.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
-        c.font = header_font
-        c.alignment = Alignment(horizontal="center", vertical="center")
+    # Hoja 3: Solo en PDF de Stock
+    if stock_only:
+        ws3 = default_ws if created_sheets == 0 else wb.create_sheet(title="3_Solo_En_PDF_Stock")
+        ws3.title = "3_Solo_En_PDF_Stock"
+        created_sheets += 1
+        sheets_to_format.append(ws3)
+        headers3 = ["Modelo (PDF Stock)", "Marca", "Categoría", "Descripción", "Stock en Almacén (Uds)", "Coste Unitario ERP (€)"]
+        ws3.append(headers3)
+        for col_num in range(1, len(headers3) + 1):
+            c = ws3.cell(row=1, column=col_num)
+            c.fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
 
-    for item in data.get("stock_only_items", []):
-        ws3.append([
-            item.get("stock_model", ""),
-            item.get("brand", ""),
-            item.get("category", ""),
-            item.get("description", ""),
-            item.get("stock_qty", 0),
-            item.get("stock_cost", 0.0)
-        ])
+        for item in stock_only:
+            ws3.append([
+                item.get("stock_model", ""),
+                item.get("brand", ""),
+                item.get("category", ""),
+                item.get("description", ""),
+                item.get("stock_qty", 0),
+                item.get("stock_cost", 0.0)
+            ])
 
     # Hoja 4: Auditoría de Pedido ERP vs Tarifa (con Fuera de Factura)
     if order_audit:
-        ws4 = wb.create_sheet(title="4_Auditoria_Pedido_ERP")
+        ws4 = default_ws if created_sheets == 0 else wb.create_sheet(title="4_Auditoria_Pedido_ERP")
+        ws4.title = "4_Auditoria_Pedido_ERP"
+        created_sheets += 1
         sheets_to_format.append(ws4)
         headers4 = [
             "Modelo (Pedido ERP)", "Modelo (Tarifa)", "Marca", "Categoría", "Descripción",
@@ -1662,7 +2059,49 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
                 st_label
             ])
 
-    # Ajustar ancho de columnas en todas las hojas
+    # Hoja 5: Rotación de Ventas y Cobertura de Pedido
+    if sales_rotation:
+        ws5 = default_ws if created_sheets == 0 else wb.create_sheet(title="5_Rotacion_Ventas_Cobertura")
+        ws5.title = "5_Rotacion_Ventas_Cobertura"
+        created_sheets += 1
+        sheets_to_format.append(ws5)
+        headers5 = [
+            "Modelo / SKU", "Marca", "Categoría", "Descripción",
+            "Uds Vendidas en Periodo", "Días Periodo", "Venta Diaria (Uds/día)", "Rotación Mensual (Uds/mes)",
+            "Stock Almacén (Uds)", "Cobertura Stock (Días)", "Uds en Pedido ERP", "Cobertura Proyectada (Días)",
+            "Uds Faltantes p/ Objetivo", "Alerta / Diagnóstico", "Recomendación del Agente"
+        ]
+        ws5.append(headers5)
+        for col_num in range(1, len(headers5) + 1):
+            c = ws5.cell(row=1, column=col_num)
+            c.fill = PatternFill(start_color="065F46", end_color="065F46", fill_type="solid")
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
+
+        for item in sales_rotation:
+            ws5.append([
+                item.get("sku", ""),
+                item.get("brand", ""),
+                item.get("category", ""),
+                item.get("description", ""),
+                item.get("units_sold", 0),
+                item.get("period_days", 30),
+                item.get("daily_sales_rate", 0.0),
+                item.get("monthly_run_rate", 0.0),
+                item.get("stock_qty", 0),
+                item.get("current_stock_days", 0.0) if item.get("current_stock_days", 0.0) < 900 else "—",
+                item.get("order_qty", 0),
+                item.get("projected_stock_days", 0.0) if item.get("projected_stock_days", 0.0) < 900 else "—",
+                item.get("shortage_units", 0),
+                item.get("diag_badge", item.get("diag_status", "")),
+                item.get("diag_text", "")
+            ])
+
+    if created_sheets == 0:
+        default_ws.title = "Resumen"
+        default_ws.append(["Sin datos suficientes para exportar"])
+        sheets_to_format.append(default_ws)
+
     for ws in sheets_to_format:
         for col in ws.columns:
             max_len = 0
