@@ -21,6 +21,7 @@ logger = logging.getLogger("garde_app.purchase_agents")
 # Almacenamiento en memoria de sesiones de trabajo de los Agentes (con limpieza automática FIFO)
 _TARIFF_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _STOCK_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_ORDER_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _LAST_CROSS_RESULT: Dict[str, Any] = {}
 _MAX_SESSIONS = 15
 
@@ -686,6 +687,202 @@ def create_stock_pdf_session(
     }
 
 
+def parse_order_pdf_fallback(raw_text: str) -> List[Dict[str, Any]]:
+    """
+    Parser de respaldo para hojas de pedido PDF (ERP o albaranes de compra) cuando el formato difiere
+    del informe de stock valorado estándar. Detecta líneas con SKU, cantidad y precio unitario.
+    """
+    if not raw_text:
+        return []
+    items: List[Dict[str, Any]] = []
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if len(line) < 6:
+            continue
+        # Ignorar cabeceras comunes de pedido
+        if re.search(r'\b(p[aá]gina|fecha|proveedor|cliente|nif|cif|subtotal|base imponible|iva|total pedido)\b', line, re.IGNORECASE):
+            if not any(ch.isdigit() for ch in line[:10]):
+                continue
+        tokens = line.split()
+        if len(tokens) < 2:
+            continue
+        # Buscar un token que sea un SKU válido
+        sku_cand = ""
+        sku_idx = -1
+        for idx, tok in enumerate(tokens[:6]):
+            clean_tok = tok.strip("()[].,;:")
+            if is_valid_sku(clean_tok) and any(c.isalpha() for c in clean_tok) and any(c.isdigit() for c in clean_tok):
+                sku_cand = clean_tok
+                sku_idx = idx
+                break
+        if not sku_cand:
+            continue
+
+        # Extraer números (cantidades y precios) al final de la línea
+        tail_tokens = tokens[sku_idx + 1:]
+        nums: List[float] = []
+        desc_tokens: List[str] = []
+        for tok in tail_tokens:
+            p_val = _clean_price_value(tok)
+            if p_val is not None and re.search(r'\d', tok):
+                nums.append(p_val)
+            elif not nums:
+                desc_tokens.append(tok)
+
+        if not nums:
+            continue
+
+        # Determinar cantidad y precio unitario (si hay 2 o más números al final: ej. Cantidad, Precio Unitario, Total)
+        qty = 1
+        unit_price = 0.0
+        if len(nums) == 1:
+            unit_price = nums[0]
+        elif len(nums) >= 2:
+            # Comprobar relación Cantidad * Precio_Unitario ≈ Total
+            found_rel = False
+            for i_q in range(len(nums)):
+                q_cand = nums[i_q]
+                if q_cand == int(q_cand) and 1 <= q_cand <= 500:
+                    for i_p in range(len(nums)):
+                        if i_p == i_q:
+                            continue
+                        p_cand = nums[i_p]
+                        for i_tot in range(len(nums)):
+                            if i_tot in (i_q, i_p):
+                                continue
+                            if abs((q_cand * p_cand) - nums[i_tot]) <= 1.5 and p_cand > 5.0:
+                                qty = int(q_cand)
+                                unit_price = float(p_cand)
+                                found_rel = True
+                                break
+                        if found_rel:
+                            break
+                if found_rel:
+                    break
+            if not found_rel:
+                # Si el primero es un entero pequeño (unidades) y el siguiente es el precio unitario
+                if nums[0] == int(nums[0]) and 1 <= nums[0] <= 200 and nums[1] > 5.0:
+                    qty = int(nums[0])
+                    unit_price = float(nums[1])
+                elif nums[-2] > 5.0 and nums[-1] >= nums[-2]:
+                    unit_price = float(nums[-2])
+                    if nums[0] == int(nums[0]) and 1 <= nums[0] <= 200:
+                        qty = int(nums[0])
+                else:
+                    unit_price = float(nums[-1])
+
+        if unit_price <= 0:
+            continue
+
+        desc_str = " ".join(desc_tokens).strip() or f"Artículo {sku_cand}"
+        brand_str = stock_analyzer.extract_brand_from_text(f"{sku_cand} {desc_str}") if hasattr(stock_analyzer, "extract_brand_from_text") else "General"
+        cat_str = stock_analyzer.classify_appliance_type(f"{desc_str} {sku_cand}", sku_cand)
+        items.append({
+            "sku": sku_cand,
+            "description": desc_str,
+            "stock": qty,
+            "cost": round(unit_price, 2),
+            "brand": brand_str or "General",
+            "category": cat_str
+        })
+    return items
+
+
+def create_order_pdf_session(
+    pdf_path: Optional[str],
+    filename: str,
+    parsed_products: List[Dict[str, Any]],
+    raw_text_excerpt: str = "",
+    pages_count: int = 0
+) -> Dict[str, Any]:
+    """
+    Módulo 3 (Agente Auditor de Pedidos ERP):
+    Almacena las líneas extraídas de la Hoja de Pedido del ERP (PDF) para auditar sus precios
+    contra la tarifa actual del proveedor y gestionar diferencias por 'Fuera de Factura'.
+    """
+    order_session_id = str(uuid.uuid4())[:12]
+
+    consolidated: Dict[str, Dict[str, Any]] = {}
+    for p in parsed_products:
+        sku = str(p.get("sku") or p.get("model") or "").strip()
+        if not sku:
+            continue
+        norm_sku = stock_analyzer.normalize_sku(sku)
+        if not norm_sku:
+            continue
+        qty = int(p.get("stock") if p.get("stock") is not None else p.get("order_qty", 1))
+        if qty <= 0:
+            qty = 1
+        unit_price = float(p.get("cost") if p.get("cost") is not None else p.get("unit_price", 0.0))
+        desc = str(p.get("description") or "").strip()
+        brand = str(p.get("brand") or "General").strip()
+        cat = str(p.get("category") or "").strip()
+        if not cat or cat in ("Otros", "N/D"):
+            cat = stock_analyzer.classify_appliance_type(f"{desc} {sku}", sku)
+
+        if norm_sku in consolidated:
+            consolidated[norm_sku]["order_qty"] += qty
+            if unit_price > 0:
+                consolidated[norm_sku]["order_unit_price"] = round(unit_price, 2)
+            consolidated[norm_sku]["order_total_price"] = round(
+                consolidated[norm_sku]["order_qty"] * consolidated[norm_sku]["order_unit_price"], 2
+            )
+        else:
+            consolidated[norm_sku] = {
+                "sku": sku,
+                "normalized_sku": norm_sku,
+                "brand": brand,
+                "category": cat,
+                "description": desc,
+                "order_qty": qty,
+                "order_unit_price": round(unit_price, 2),
+                "order_total_price": round(unit_price * qty, 2)
+            }
+
+    items_list = list(consolidated.values())
+    total_units = sum(it["order_qty"] for it in items_list)
+    total_amount = round(sum(it["order_total_price"] for it in items_list), 2)
+
+    _ORDER_SESSIONS[order_session_id] = {
+        "order_session_id": order_session_id,
+        "filename": filename,
+        "pages_count": pages_count,
+        "items": items_list,
+        "raw_text_excerpt": raw_text_excerpt[:3000],
+        "total_units": total_units,
+        "total_order_amount": total_amount,
+        "created_at": _now_time()
+    }
+    _trim_sessions(_ORDER_SESSIONS)
+
+    agent_messages = [
+        {
+            "agent": "order",
+            "agent_name": "Agente Auditor de Pedido (PDF ERP)",
+            "badge": "Módulo 3 · Hoja de Pedido",
+            "time": _now_time(),
+            "text": (
+                f"He leído la Hoja de Pedido **{filename}** ({pages_count or 1} pág.). "
+                f"Detectadas **{len(items_list)} referencias pedidas** ({total_units} uds en total) "
+                f"por un importe bruto en pedido de **{total_amount:,.2f} €**. Listo para auditar contra la Tarifa."
+            )
+        }
+    ]
+
+    return {
+        "status": "success",
+        "order_session_id": order_session_id,
+        "filename": filename,
+        "pages_count": pages_count,
+        "items_count": len(items_list),
+        "total_units": total_units,
+        "total_order_amount": total_amount,
+        "raw_text_excerpt": raw_text_excerpt[:1500],
+        "items_preview": items_list[:50],
+        "agent_messages": agent_messages
+    }
+
+
 def _extract_numeric_signature(code: str) -> str:
     """Extrae la secuencia numérica principal de un modelo/SKU (ej. '3TS998BA' -> '3998')."""
     return "".join(re.findall(r'\d+', code or ""))
@@ -742,15 +939,16 @@ def _compute_sku_similarity(tariff_norm: str, stock_norm: str) -> Tuple[float, s
 def run_multi_agent_cross_reference(
     tariff_session_id: str,
     stock_session_id: Optional[str] = None,
+    order_session_id: Optional[str] = None,
     fallback_stock_items: Optional[List[Dict[str, Any]]] = None,
     fuzzy_threshold: float = 0.78,
     low_stock_threshold: int = 2,
     gemini_api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Módulo 3: Motor de Coordinación Multi-Agente y Matching (Exacto + Fuzzy).
-    Cruza el contexto del Agente de Tarifas (con la columna de precio elegida por el usuario)
-    y el contexto del Agente de Stock (PDF), generando la conversación entre agentes y el Dashboard final.
+    Motor de Coordinación Multi-Agente y Matching (Exacto + Fuzzy).
+    Cruza el contexto del Agente de Tarifas (Excel/CSV), el Agente de Stock (PDF)
+    y el Agente Auditor de Pedido ERP (PDF), generando la conversación y el Dashboard final.
     """
     if tariff_session_id not in _TARIFF_SESSIONS:
         raise ValueError("No se encontró la sesión del Agente de Tarifas. Sube y confirma primero el archivo Excel/CSV.")
@@ -772,9 +970,17 @@ def run_multi_agent_cross_reference(
     if not tariff_items:
         raise ValueError("La tarifa no contiene artículos válidos con las columnas seleccionadas.")
 
-    # Obtener contexto del Agente de Stock
+    # Obtener contexto del Agente de Pedido ERP (Módulo 3) si se ha subido
+    order_items: List[Dict[str, Any]] = []
+    order_filename = ""
+    if order_session_id and order_session_id in _ORDER_SESSIONS:
+        o_sess = _ORDER_SESSIONS[order_session_id]
+        order_items = o_sess["items"]
+        order_filename = o_sess["filename"]
+
+    # Obtener contexto del Agente de Stock (Módulo 2)
     stock_items: List[Dict[str, Any]] = []
-    stock_filename = "Inventario Activo en Memoria"
+    stock_filename = "Sin PDF de Stock"
     if stock_session_id and stock_session_id in _STOCK_SESSIONS:
         s_sess = _STOCK_SESSIONS[stock_session_id]
         stock_items = s_sess["items"]
@@ -788,8 +994,8 @@ def run_multi_agent_cross_reference(
         temp_res = create_stock_pdf_session(None, "inventory.json (Almacén Local)", fallback_stock_items)
         stock_items = _STOCK_SESSIONS[temp_res["stock_session_id"]]["items"]
         stock_filename = "inventory.json (Almacén Local)"
-    else:
-        raise ValueError("No se ha cargado ningún PDF de Stock en el Agente de Almacén.")
+    elif not order_items:
+        raise ValueError("Sube al menos un PDF de Stock (Módulo 2) o un PDF de Pedido ERP (Módulo 3) para cruzar con la Tarifa.")
 
     # Índices optimizados de búsqueda para Stock:
     # 1. Exacto por SKU normalizado O(1)
@@ -814,6 +1020,26 @@ def run_multi_agent_cross_reference(
         num_s = _extract_numeric_signature(s_norm)
         if num_s:
             stock_by_numeric[num_s].append((s_norm, it))
+
+    # Índices optimizados de búsqueda para Tarifa (para auditar el Pedido ERP en O(1)):
+    tariff_by_norm: Dict[str, Dict[str, Any]] = {}
+    tariff_by_nobrand: Dict[str, Dict[str, Any]] = {}
+    tariff_by_base: Dict[str, Dict[str, Any]] = {}
+    tariff_by_numeric: Dict[str, List[Tuple[str, Dict[str, Any]]]] = collections.defaultdict(list)
+
+    for t_it in tariff_items:
+        tn = t_it["normalized_model"]
+        tariff_by_norm[tn] = t_it
+        if hasattr(stock_analyzer, "strip_brand_from_sku"):
+            tn_nb = stock_analyzer.strip_brand_from_sku(tn)
+            if tn_nb and tn_nb not in tariff_by_nobrand:
+                tariff_by_nobrand[tn_nb] = t_it
+        tn_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', tn)
+        if tn_base and len(tn_base) >= 5 and tn_base not in tariff_by_base:
+            tariff_by_base[tn_base] = t_it
+        num_tn = _extract_numeric_signature(tn)
+        if num_tn:
+            tariff_by_numeric[num_tn].append((tn, t_it))
 
     matched_stock_norms = set()
 
@@ -968,6 +1194,146 @@ def run_multi_agent_cross_reference(
     missing_items.sort(key=lambda x: (0 if "0 uds" in x["reason"] else 1, x["tariff_price"]))
     stock_only_items.sort(key=lambda x: -x["stock_qty"])
 
+    # -------------------------------------------------------------------------
+    # AUDITORÍA DE HOJA DE PEDIDO ERP vs TARIFA (MÓDULO 3)
+    # -------------------------------------------------------------------------
+    order_audit_items: List[Dict[str, Any]] = []
+    order_matched_count = 0
+    order_discrepancies_count = 0
+    order_overprice_count = 0
+    order_gross_overprice_amount = 0.0
+    order_expected_tariff_total = 0.0
+
+    for o_item in order_items:
+        o_norm = o_item["normalized_sku"]
+        o_sku = o_item["sku"]
+        o_qty = int(o_item.get("order_qty", 1))
+        o_unit_price = float(o_item.get("order_unit_price", 0.0))
+        o_total_price = round(o_unit_price * o_qty, 2)
+        o_desc = o_item.get("description", "")
+        o_brand = o_item.get("brand", "General")
+        o_cat = o_item.get("category", "Otros")
+
+        o_nobrand = stock_analyzer.strip_brand_from_sku(o_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else o_norm
+
+        # Buscar coincidencia en Tarifa en O(1)
+        matched_t: Optional[Dict[str, Any]] = None
+        o_match_type = "NONE"
+        o_match_score = 0.0
+
+        if o_norm in tariff_by_norm:
+            matched_t = tariff_by_norm[o_norm]
+            o_match_type = "EXACTO"
+            o_match_score = 1.0
+        elif o_nobrand and o_nobrand in tariff_by_norm:
+            matched_t = tariff_by_norm[o_nobrand]
+            o_match_type = "EXACTO"
+            o_match_score = 1.0
+        elif o_norm in tariff_by_nobrand:
+            matched_t = tariff_by_nobrand[o_norm]
+            o_match_type = "EXACTO"
+            o_match_score = 1.0
+        elif o_nobrand and o_nobrand in tariff_by_nobrand:
+            matched_t = tariff_by_nobrand[o_nobrand]
+            o_match_type = "EXACTO"
+            o_match_score = 1.0
+        else:
+            o_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', o_norm)
+            o_nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', o_nobrand) if o_nobrand else ""
+            if o_base and len(o_base) >= 5 and o_base in tariff_by_base:
+                matched_t = tariff_by_base[o_base]
+                o_match_type = "EXACTO"
+                o_match_score = 0.98
+            elif o_nb_base and len(o_nb_base) >= 5 and o_nb_base in tariff_by_base:
+                matched_t = tariff_by_base[o_nb_base]
+                o_match_type = "EXACTO"
+                o_match_score = 0.98
+            else:
+                num_o = _extract_numeric_signature(o_norm)
+                t_cands = tariff_by_numeric.get(num_o, []) if num_o else []
+                if t_cands:
+                    best_sc = 0.0
+                    best_tc = None
+                    for tn_cand, t_cand_it in t_cands:
+                        sc, mt = _compute_sku_similarity(tn_cand, o_norm)
+                        if sc >= fuzzy_threshold and sc > best_sc:
+                            best_sc = sc
+                            best_tc = t_cand_it
+                            o_match_type = mt
+                    if best_tc is not None:
+                        matched_t = best_tc
+                        o_match_score = best_sc
+
+        # Comprobar también stock disponible en almacén si hay PDF de stock cargado
+        s_match = stock_by_norm.get(o_norm) or (stock_by_nobrand.get(o_nobrand) if o_nobrand else None)
+        current_stock_qty = int(s_match.get("stock", 0)) if s_match else None
+
+        if matched_t is not None:
+            order_matched_count += 1
+            t_price_val = float(matched_t["price"])
+            unit_diff = round(o_unit_price - t_price_val, 2)
+            total_diff = round(unit_diff * o_qty, 2)
+            diff_pct = round((unit_diff / t_price_val) * 100, 1) if t_price_val > 0 else 0.0
+            order_expected_tariff_total += round(t_price_val * o_qty, 2)
+
+            if abs(unit_diff) <= 0.05:
+                audit_status = "PRECIO_OK"
+            elif unit_diff > 0.05:
+                audit_status = "MAS_CARO_EN_PEDIDO"
+                order_discrepancies_count += 1
+                order_overprice_count += 1
+                order_gross_overprice_amount += total_diff
+            else:
+                audit_status = "MAS_BARATO_EN_PEDIDO"
+                order_discrepancies_count += 1
+
+            final_cat = o_cat if o_cat not in ("Otros", "N/D", "") else matched_t.get("category", "Otros")
+            final_desc = o_desc if len(o_desc) >= len(matched_t.get("description", "")) else matched_t.get("description", o_desc)
+            t_model_str = matched_t["model"]
+        else:
+            t_price_val = 0.0
+            unit_diff = 0.0
+            total_diff = 0.0
+            diff_pct = 0.0
+            audit_status = "NO_EN_TARIFA"
+            final_cat = o_cat
+            final_desc = o_desc
+            t_model_str = "No figura en tarifa"
+
+        order_audit_items.append({
+            "order_model": o_sku,
+            "tariff_model": t_model_str,
+            "match_type": o_match_type,
+            "match_score": round(o_match_score * 100, 1),
+            "brand": o_brand,
+            "category": final_cat,
+            "description": final_desc,
+            "order_qty": o_qty,
+            "stock_qty": current_stock_qty,
+            "order_unit_price": o_unit_price,
+            "order_total_price": o_total_price,
+            "tariff_price": t_price_val,
+            "unit_diff": unit_diff,
+            "total_diff": total_diff,
+            "diff_pct": diff_pct,
+            "audit_status": audit_status,
+            "has_off_invoice": False,
+            "off_invoice_unit": 0.0
+        })
+
+    # Ordenar auditoría de pedido: primero las líneas con diferencia positiva (más caras que la tarifa), luego descuentos, luego OK
+    def _order_audit_sort_key(x: Dict[str, Any]):
+        st = x["audit_status"]
+        if st == "MAS_CARO_EN_PEDIDO":
+            return (0, -x["total_diff"])
+        if st == "MAS_BARATO_EN_PEDIDO":
+            return (1, x["total_diff"])
+        if st == "NO_EN_TARIFA":
+            return (2, -x["order_total_price"])
+        return (3, -x["order_total_price"])
+
+    order_audit_items.sort(key=_order_audit_sort_key)
+
     columns = t_sess["columns"]
     mapping = t_sess["mapping"]
     price_col_name = columns[mapping["price_col"]]["name"] if 0 <= mapping["price_col"] < len(columns) else "Precio"
@@ -982,6 +1348,9 @@ def run_multi_agent_cross_reference(
         for it in missing_items:
             if it.get("category") in ("Otros", "N/D", "", None):
                 unknown_skus.append(it["tariff_model"])
+        for it in order_audit_items:
+            if it.get("category") in ("Otros", "N/D", "", None):
+                unknown_skus.append(it["order_model"])
         unique_unknown = list(dict.fromkeys([m for m in unknown_skus if m and len(m) >= 2]))
         if unique_unknown:
             try:
@@ -1000,6 +1369,10 @@ def run_multi_agent_cross_reference(
                         m_key = it["tariff_model"]
                         if m_key in resolved_map:
                             it["category"] = resolved_map[m_key]
+                    for it in order_audit_items:
+                        m_key = it["order_model"]
+                        if m_key in resolved_map:
+                            it["category"] = resolved_map[m_key]
             except Exception as e_ai:
                 logger.debug(f"Error resolviendo modelos desconocidos con IA en lote: {e_ai}")
 
@@ -1015,8 +1388,11 @@ def run_multi_agent_cross_reference(
                 f"(Hoja `{t_sess['active_sheet']}`). Columna de referencia: **{model_col_name}** | "
                 f"Columna de precio seleccionada por el usuario: **{price_col_name}**."
             )
-        },
-        {
+        }
+    ]
+
+    if stock_items:
+        dialogue.append({
             "agent": "stock",
             "agent_name": "Agente de Stock (Almacén PDF)",
             "badge": f"Stock: {stock_filename}",
@@ -1025,39 +1401,56 @@ def run_multi_agent_cross_reference(
                 f"Envío inventario extraído del PDF `{stock_filename}` con **{len(stock_items)} referencias únicas** "
                 f"y **{sum(it['stock'] for it in stock_items)} unidades** totales en almacén."
             )
-        },
-        {
-            "agent": "coordinator",
-            "agent_name": "Agente Coordinador (Motor de Matching)",
-            "badge": "Cruce Exacto + Fuzzy",
+        })
+
+    if order_items:
+        dialogue.append({
+            "agent": "order",
+            "agent_name": "Agente Auditor de Pedido (PDF ERP)",
+            "badge": f"Pedido: {order_filename}",
             "time": _now_time(),
             "text": (
-                f"Cruce completado entre ambas fuentes:\n"
-                f"• **{len(matched_items)} artículos coincidentes** ({exact_matches_count} por coincidencia exacta y "
-                f"{fuzzy_matches_count} por *Fuzzy Matching* de variantes de código).\n"
-                f"• **{len(missing_items)} artículos de la tarifa faltantes / sin stock** pendientes de revisar.\n"
-                f"• **{len(stock_only_items)} artículos del PDF de almacén** que no figuran en esta tarifa."
+                f"He auditado las **{len(order_items)} líneas** de la Hoja de Pedido `{order_filename}` contra la tarifa:\n"
+                f"• **{order_matched_count} modelos localizados en tarifa**.\n"
+                f"• **{order_overprice_count} modelos con precio superior a la tarifa** "
+                f"(diferencia bruta acumulada: **+{order_gross_overprice_amount:,.2f} €** — revisa si corresponden a **Fuera de Factura**).\n"
+                f"• **{len(order_items) - order_matched_count} modelos del pedido** no figuran en esta tarifa."
             )
-        }
-    ]
+        })
+
+    dialogue.append({
+        "agent": "coordinator",
+        "agent_name": "Agente Coordinador (Motor de Matching)",
+        "badge": "Cruce Exacto + Fuzzy",
+        "time": _now_time(),
+        "text": (
+            f"Cruce completado:\n"
+            f"• **Tarifa ↔ Stock:** {len(matched_items)} coincidentes ({exact_matches_count} exactos, {fuzzy_matches_count} fuzzy), "
+            f"{len(missing_items)} faltantes en stock.\n"
+            + (
+                f"• **Tarifa ↔ Hoja de Pedido:** {order_matched_count}/{len(order_items)} cruzados, "
+                f"**{order_discrepancies_count} variaciones de precio detectadas**."
+                if order_items else ""
+            )
+        )
+    })
 
     # Si hay clave de Gemini configurada, añadir análisis breve del Agente IA de Compras
     if gemini_api_key and len(tariff_items) > 0:
         try:
             from google import genai
             client = genai.Client(api_key=gemini_api_key, http_options={"timeout": 6.0})
-            top_missing = [f"{m['tariff_model']} ({m['tariff_price']}€)" for m in missing_items[:6]]
-            cheaper_in_tariff = [
-                f"{m['tariff_model']} (Tarifa: {m['tariff_price']}€ vs Coste ERP: {m['stock_cost']}€)"
-                for m in matched_items if m["stock_cost"] > 0 and m["price_diff"] < -1.0
+            top_missing = [f"{m['tariff_model']} ({m['tariff_price']}€)" for m in missing_items[:5]]
+            overpriced_order = [
+                f"{m['order_model']} (Pedido: {m['order_unit_price']}€ vs Tarifa: {m['tariff_price']}€, dif: +{m['unit_diff']}€/ud)"
+                for m in order_audit_items if m["audit_status"] == "MAS_CARO_EN_PEDIDO"
             ][:5]
             prompt = (
                 f"Eres el Agente Director de Compras IA. Resume en 3 frases breves y accionables el resultado del cruce:\n"
                 f"- Tarifa: {t_sess['filename']} ({len(tariff_items)} refs, columna precio '{price_col_name}')\n"
-                f"- Stock PDF: {stock_filename} ({len(stock_items)} refs)\n"
-                f"- Coincidentes: {len(matched_items)} ({exact_matches_count} exactos, {fuzzy_matches_count} fuzzy)\n"
-                f"- Faltantes/Sin stock en tarifa: {len(missing_items)} (ejemplos: {', '.join(top_missing) or 'ninguno'})\n"
-                f"- Oportunidades con precio tarifa menor al coste actual: {', '.join(cheaper_in_tariff) or 'sin bajadas destacadas'}."
+                f"- Stock PDF: {stock_filename} ({len(stock_items)} refs, {len(matched_items)} coincidentes)\n"
+                f"- Pedido ERP PDF: {order_filename or 'No subido'} ({len(order_items)} líneas, {order_overprice_count} más caras que tarifa: {', '.join(overpriced_order) or 'ninguna'})\n"
+                f"- Faltantes/Sin stock en tarifa: {len(missing_items)} (ejemplos: {', '.join(top_missing) or 'ninguno'})."
             )
             for m_name in ["gemini-3.5-flash", "gemini-3.5-flash-lite"]:
                 try:
@@ -1076,6 +1469,9 @@ def run_multi_agent_cross_reference(
         except Exception as e:
             logger.debug(f"Error generando dictamen Gemini en cruce multi-agente: {e}")
 
+    order_total_units = sum(it["order_qty"] for it in order_audit_items)
+    order_total_amount = round(sum(it["order_total_price"] for it in order_audit_items), 2)
+
     kpis = {
         "total_tariff_items": len(tariff_items),
         "total_stock_items": len(stock_items),
@@ -1086,7 +1482,15 @@ def run_multi_agent_cross_reference(
         "missing_in_stock_count": len(missing_items),
         "stock_only_count": len(stock_only_items),
         "price_col_name": price_col_name,
-        "model_col_name": model_col_name
+        "model_col_name": model_col_name,
+        "order_lines_count": len(order_audit_items),
+        "order_matched_count": order_matched_count,
+        "order_total_units": order_total_units,
+        "order_total_amount": order_total_amount,
+        "order_expected_tariff_total": round(order_expected_tariff_total, 2),
+        "order_discrepancies_count": order_discrepancies_count,
+        "order_overprice_count": order_overprice_count,
+        "order_gross_overprice_amount": round(order_gross_overprice_amount, 2)
     }
 
     result_payload = {
@@ -1095,7 +1499,8 @@ def run_multi_agent_cross_reference(
         "dialogue": dialogue,
         "matched_items": matched_items,
         "missing_items": missing_items,
-        "stock_only_items": stock_only_items
+        "stock_only_items": stock_only_items,
+        "order_audit_items": order_audit_items
     }
 
     global _LAST_CROSS_RESULT
@@ -1104,7 +1509,7 @@ def run_multi_agent_cross_reference(
 
 
 def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None) -> io.BytesIO:
-    """Genera un archivo Excel (.xlsx) profesional con las 3 pestañas del cruce Multi-Agente."""
+    """Genera un archivo Excel (.xlsx) profesional con las pestañas del cruce Multi-Agente y la Auditoría de Pedido."""
     data = custom_payload or _LAST_CROSS_RESULT
     if not data or not data.get("kpis"):
         raise ValueError("No hay ningún cruce Multi-Agente calculado para exportar.")
@@ -1119,9 +1524,15 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
         bottom=Side(style="thin", color="CBD5E1")
     )
 
+    sheets_to_format = []
+
+    # Si hay auditoría de pedido, ponerla en la primera hoja o incluirla destacada
+    order_audit = data.get("order_audit_items") or []
+
     # Hoja 1: Artículos Coincidentes
     ws1 = wb.active
     ws1.title = "1_Coincidentes_Tarifa_Stock"
+    sheets_to_format.append(ws1)
     headers1 = [
         "Modelo (Tarifa)", "Modelo (PDF Stock)", "Tipo Match", "Similitud (%)",
         "Marca", "Categoría", "Descripción", "Precio Tarifa (€)",
@@ -1153,6 +1564,7 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
 
     # Hoja 2: Artículos Faltantes / Pendientes de Revisar
     ws2 = wb.create_sheet(title="2_Faltantes_En_Tarifa")
+    sheets_to_format.append(ws2)
     headers2 = [
         "Modelo (Tarifa)", "Marca", "Categoría", "Descripción",
         "Precio Tarifa (€)", "Stock Actual", "Motivo / Estado", "Cantidad a Pedir", "Importe Estimado (€)"
@@ -1181,6 +1593,7 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
 
     # Hoja 3: En Stock PDF pero No en Tarifa
     ws3 = wb.create_sheet(title="3_Solo_En_PDF_Stock")
+    sheets_to_format.append(ws3)
     headers3 = ["Modelo (PDF Stock)", "Marca", "Categoría", "Descripción", "Stock en Almacén (Uds)", "Coste Unitario ERP (€)"]
     ws3.append(headers3)
     for col_num in range(1, len(headers3) + 1):
@@ -1199,8 +1612,58 @@ def export_cross_reference_excel(custom_payload: Optional[Dict[str, Any]] = None
             item.get("stock_cost", 0.0)
         ])
 
-    # Ajustar ancho de columnas en las 3 hojas
-    for ws in [ws1, ws2, ws3]:
+    # Hoja 4: Auditoría de Pedido ERP vs Tarifa (con Fuera de Factura)
+    if order_audit:
+        ws4 = wb.create_sheet(title="4_Auditoria_Pedido_ERP")
+        sheets_to_format.append(ws4)
+        headers4 = [
+            "Modelo (Pedido ERP)", "Modelo (Tarifa)", "Marca", "Categoría", "Descripción",
+            "Uds Pedidas", "Stock Actual", "Precio Unit. Pedido (€)", "Precio Unit. Tarifa (€)",
+            "Dif. Unitaria Bruta (€)", "¿Lleva Fuera de Factura?", "Fuera de Factura Unit. (€)",
+            "Total Fuera de Factura Línea (€)", "Precio Neto Real Unit. (€)", "Dif. Neta Final Unit. (€)", "Estado Auditoría"
+        ]
+        ws4.append(headers4)
+        for col_num in range(1, len(headers4) + 1):
+            c = ws4.cell(row=1, column=col_num)
+            c.fill = PatternFill(start_color="9A3412", end_color="9A3412", fill_type="solid")
+            c.font = header_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
+
+        for item in order_audit:
+            o_qty = int(item.get("order_qty", 1))
+            o_unit = float(item.get("order_unit_price", 0.0))
+            t_unit = float(item.get("tariff_price", 0.0))
+            u_diff = round(o_unit - t_unit, 2) if t_unit > 0 else 0.0
+            has_ff = bool(item.get("has_off_invoice", False))
+            ff_unit = float(item.get("off_invoice_unit", 0.0)) if has_ff else 0.0
+            ff_total = round(ff_unit * o_qty, 2)
+            net_real = round(o_unit - ff_unit, 2)
+            net_diff = round(net_real - t_unit, 2) if t_unit > 0 else 0.0
+            st_label = item.get("audit_status", "")
+            if has_ff and abs(net_diff) <= 0.05 and t_unit > 0:
+                st_label = "CUADRA CON FUERA DE FACTURA"
+
+            ws4.append([
+                item.get("order_model", ""),
+                item.get("tariff_model", ""),
+                item.get("brand", ""),
+                item.get("category", ""),
+                item.get("description", ""),
+                o_qty,
+                item.get("stock_qty", "") if item.get("stock_qty") is not None else "—",
+                o_unit,
+                t_unit,
+                u_diff,
+                "SÍ" if has_ff else "NO",
+                ff_unit,
+                ff_total,
+                net_real,
+                net_diff,
+                st_label
+            ])
+
+    # Ajustar ancho de columnas en todas las hojas
+    for ws in sheets_to_format:
         for col in ws.columns:
             max_len = 0
             col_letter = get_column_letter(col[0].column)

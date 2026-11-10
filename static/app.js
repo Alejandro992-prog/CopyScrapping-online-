@@ -4954,6 +4954,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const stockPreviewTbody = document.getElementById("agent-stock-preview-tbody");
         const stockRawText = document.getElementById("agent-stock-raw-text");
 
+        // Módulo 3 (Hoja de Pedido ERP PDF)
+        const orderDropzone = document.getElementById("agent-order-dropzone");
+        const orderFileInput = document.getElementById("agent-order-file-input");
+        const orderDropzoneTitle = document.getElementById("agent-order-dropzone-title");
+        const orderStatusBadge = document.getElementById("agent-order-status-badge");
+        const orderWorkspace = document.getElementById("agent-order-workspace");
+        const orderKpiRefs = document.getElementById("agent-order-kpi-refs");
+        const orderKpiUnits = document.getElementById("agent-order-kpi-units");
+        const orderKpiVal = document.getElementById("agent-order-kpi-val");
+        const orderPreviewTbody = document.getElementById("agent-order-preview-tbody");
+
         const chatFeed = document.getElementById("agent-chat-feed");
         const btnRunCross = document.getElementById("btn-agent-run-cross");
         const btnExportExcel = document.getElementById("btn-agent-export-excel");
@@ -4969,6 +4980,8 @@ document.addEventListener("DOMContentLoaded", () => {
         let agentState = {
             tariffSessionId: null,
             stockSessionId: null,
+            orderSessionId: null,
+            orderFilter: "ALL",
             activeClickRole: "price", // Por defecto, hacer clic en una columna asigna el PRECIO
             columns: [],
             previewRows: [],
@@ -5001,6 +5014,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     borderCol = "#3b82f6";
                     bgCol = "rgba(59, 130, 246, 0.1)";
                     icon = "🔵";
+                } else if (msg.agent === "order") {
+                    borderCol = "#f59e0b";
+                    bgCol = "rgba(245, 158, 11, 0.12)";
+                    icon = "🟠";
                 } else if (msg.agent === "coordinator") {
                     borderCol = "#10b981";
                     bgCol = "rgba(16, 185, 129, 0.1)";
@@ -5383,7 +5400,149 @@ document.addEventListener("DOMContentLoaded", () => {
             btnUseExistingStock.addEventListener("click", () => processStockPdf(null, true));
         }
 
-        // Renderizado de las 3 tablas del Dashboard Multi-Agente con filtro de búsqueda
+        // Módulo 3: Subida y procesamiento de PDF de Hoja de Pedido ERP
+        async function processOrderPdf(fileObj = null) {
+            if (!fileObj) return;
+            const formData = new FormData();
+            formData.append("file", fileObj);
+
+            if (orderStatusBadge) orderStatusBadge.textContent = "⏳ Leyendo Pedido PDF...";
+            try {
+                const res = await fetch("/api/agents/order/upload", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Error procesando el PDF de pedido");
+
+                agentState.orderSessionId = data.order_session_id;
+                if (orderDropzoneTitle) {
+                    orderDropzoneTitle.textContent = `🧾 ${data.filename} (${data.items_count} líneas de pedido)`;
+                }
+                if (orderStatusBadge) {
+                    orderStatusBadge.textContent = `✅ ${data.items_count} líneas en pedido`;
+                    orderStatusBadge.style.background = "rgba(245, 158, 11, 0.22)";
+                    orderStatusBadge.style.color = "#fcd34d";
+                }
+
+                if (orderKpiRefs) orderKpiRefs.textContent = String(data.items_count || 0);
+                if (orderKpiUnits) orderKpiUnits.textContent = String(data.total_units || 0);
+                if (orderKpiVal) orderKpiVal.textContent = `${Number(data.total_order_value || 0).toLocaleString("es-ES", { minimumFractionDigits: 2 })} €`;
+
+                if (orderPreviewTbody) {
+                    orderPreviewTbody.innerHTML = (data.items_preview || []).map(it => `
+                        <tr>
+                            <td style="font-weight: 700; color: #fcd34d;">${escapeHtmlSafe(it.sku)}</td>
+                            <td style="max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtmlSafe(it.description)}</td>
+                            <td style="text-align: center; font-weight: 700; color: #34d399;">${it.order_qty} uds</td>
+                            <td style="text-align: right; font-weight: 700; color: #f8fafc;">${Number(it.order_unit_price || 0).toFixed(2)} €</td>
+                            <td style="text-align: right; color: #fbbf24; font-weight: 600;">${Number(it.order_total_price || 0).toFixed(2)} €</td>
+                        </tr>
+                    `).join("");
+                }
+
+                if (orderWorkspace) orderWorkspace.style.display = "block";
+                appendAgentMessages(data.agent_messages || []);
+            } catch (err) {
+                if (orderStatusBadge) orderStatusBadge.textContent = "❌ Error en Pedido PDF";
+                const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
+                alert("Error en Agente de Pedido ERP: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
+            }
+        }
+
+        if (orderDropzone && orderFileInput) {
+            orderDropzone.addEventListener("click", () => orderFileInput.click());
+            orderDropzone.addEventListener("dragover", e => { e.preventDefault(); orderDropzone.style.borderColor = "#f59e0b"; });
+            orderDropzone.addEventListener("dragleave", () => { orderDropzone.style.borderColor = "rgba(245, 158, 11, 0.45)"; });
+            orderDropzone.addEventListener("drop", e => {
+                e.preventDefault();
+                orderDropzone.style.borderColor = "rgba(245, 158, 11, 0.45)";
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processOrderPdf(e.dataTransfer.files[0]);
+                }
+            });
+            orderFileInput.addEventListener("change", () => {
+                if (orderFileInput.files && orderFileInput.files.length > 0) {
+                    processOrderPdf(orderFileInput.files[0]);
+                }
+            });
+        }
+
+        // Recalcula en vivo los totales financieros del Pedido y el Fuera de Factura sin guardar memoria
+        function updateOrderAuditFinancialSummary() {
+            if (!agentState.crossData) return;
+            const items = agentState.crossData.order_audit_items || [];
+            let totalErp = 0;
+            let totalTariff = 0;
+            let grossOverprice = 0;
+            let totalFf = 0;
+            let netDiffTotal = 0;
+            let unresolvedDiffCount = 0;
+
+            items.forEach(it => {
+                const qty = Math.max(1, Number(it.order_qty || 1));
+                const orderUnit = Number(it.order_unit_price || 0);
+                const tariffUnit = Number(it.tariff_price || 0);
+                const ffUnit = it.has_off_invoice ? Math.max(0, Number(it.off_invoice_unit || 0)) : 0;
+
+                totalErp += orderUnit * qty;
+                if (it.match_type !== "NO_EN_TARIFA" && tariffUnit > 0) {
+                    totalTariff += tariffUnit * qty;
+                    const unitDiff = orderUnit - tariffUnit;
+                    if (unitDiff > 0.05) {
+                        grossOverprice += unitDiff * qty;
+                    }
+                    const netUnitDiff = (orderUnit - ffUnit) - tariffUnit;
+                    netDiffTotal += netUnitDiff * qty;
+                    if (Math.abs(netUnitDiff) > 0.05) {
+                        unresolvedDiffCount++;
+                    }
+                }
+                totalFf += ffUnit * qty;
+            });
+
+            const fmt = val => `${val.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+            const elTotalErp = document.getElementById("agent-order-audit-total-erp");
+            const elTotalTariff = document.getElementById("agent-order-audit-total-tariff");
+            const elGrossDiff = document.getElementById("agent-order-audit-gross-diff");
+            const elFfTotal = document.getElementById("agent-order-audit-ff-total");
+            const elNetDiff = document.getElementById("agent-order-audit-net-diff");
+
+            if (elTotalErp) elTotalErp.textContent = fmt(totalErp);
+            if (elTotalTariff) elTotalTariff.textContent = fmt(totalTariff);
+            if (elGrossDiff) elGrossDiff.textContent = (grossOverprice > 0 ? "+" : "") + fmt(grossOverprice);
+            if (elFfTotal) elFfTotal.textContent = fmt(totalFf);
+            if (elNetDiff) {
+                elNetDiff.textContent = (netDiffTotal > 0 ? "+" : "") + fmt(netDiffTotal);
+                elNetDiff.style.color = Math.abs(netDiffTotal) <= 0.05 ? "#34d399" : (netDiffTotal > 0 ? "#f87171" : "#60a5fa");
+            }
+
+            const elOrderKpi = document.getElementById("agent-kpi-order-diff");
+            const elOrderSub = document.getElementById("agent-kpi-order-sub");
+            if (elOrderKpi && items.length > 0) {
+                elOrderKpi.textContent = `${unresolvedDiffCount} dif. / ${items.length} lín.`;
+            }
+            if (elOrderSub && items.length > 0) {
+                elOrderSub.textContent = totalFf > 0
+                    ? `Fuera Factura: ${fmt(totalFf)}`
+                    : `Importe pedido: ${fmt(totalErp)}`;
+            }
+        }
+
+        // Botones de filtro rápido en la pestaña de Auditoría de Pedido
+        document.querySelectorAll(".agent-order-filter-btn").forEach(btn => {
+            btn.addEventListener("click", () => {
+                agentState.orderFilter = btn.getAttribute("data-filter") || "ALL";
+                document.querySelectorAll(".agent-order-filter-btn").forEach(b => {
+                    const isAct = b === btn;
+                    b.classList.toggle("active", isAct);
+                    b.style.boxShadow = isAct ? "0 0 0 2px rgba(255,255,255,0.35)" : "none";
+                });
+                renderCrossReferenceTables(searchInput ? searchInput.value : "");
+            });
+        });
+
+        // Renderizado de las 4 tablas del Dashboard Multi-Agente con filtro de búsqueda
         function renderCrossReferenceTables(filterQuery = "") {
             if (!agentState.crossData) return;
             const q = (filterQuery || "").trim().toLowerCase();
@@ -5397,10 +5556,24 @@ document.addEventListener("DOMContentLoaded", () => {
             const stockOnly = (agentState.crossData.stock_only_items || []).filter(it =>
                 !q || `${it.stock_model} ${it.description} ${it.brand} ${it.category}`.toLowerCase().includes(q)
             );
+            const orderAuditAll = (agentState.crossData.order_audit_items || []);
+            const orderAudit = orderAuditAll.map((it, idx) => ({ it, idx })).filter(({ it }) => {
+                if (q && !`${it.order_model} ${it.tariff_model} ${it.description} ${it.brand}`.toLowerCase().includes(q)) {
+                    return false;
+                }
+                if (agentState.orderFilter === "DIFF") {
+                    return Math.abs(Number(it.unit_diff || 0)) > 0.05 || it.status === "NO_EN_TARIFA";
+                }
+                if (agentState.orderFilter === "FF") {
+                    return Boolean(it.has_off_invoice);
+                }
+                return true;
+            });
 
             const tbodyMatched = document.getElementById("agent-tbody-matched");
             const tbodyMissing = document.getElementById("agent-tbody-missing");
             const tbodyStockOnly = document.getElementById("agent-tbody-stock-only");
+            const tbodyOrderAudit = document.getElementById("agent-tbody-order-audit");
 
             if (tbodyMatched) {
                 tbodyMatched.innerHTML = matched.length ? matched.map(it => {
@@ -5454,9 +5627,127 @@ document.addEventListener("DOMContentLoaded", () => {
                     </tr>
                 `).join("") : `<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);">No hay artículos exclusivos del almacén con este filtro.</td></tr>`;
             }
+
+            if (tbodyOrderAudit) {
+                if (!orderAuditAll.length) {
+                    tbodyOrderAudit.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:28px;color:var(--text-muted);">Sube una <strong>Hoja de Pedido ERP (.pdf)</strong> en el Módulo 3 y pulsa <em>Ejecutar Cruce Multi-Agente</em> para auditar precios y Fuera de Factura.</td></tr>`;
+                } else if (!orderAudit.length) {
+                    tbodyOrderAudit.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:24px;color:var(--text-muted);">No hay líneas de pedido que coincidan con el filtro seleccionado.</td></tr>`;
+                } else {
+                    tbodyOrderAudit.innerHTML = orderAudit.map(({ it, idx }) => {
+                        const qty = Math.max(1, Number(it.order_qty || 1));
+                        const orderUnit = Number(it.order_unit_price || 0);
+                        const tariffUnit = Number(it.tariff_price || 0);
+                        const unitDiff = Number(it.unit_diff || 0);
+                        const hasFf = Boolean(it.has_off_invoice);
+                        const ffUnit = hasFf ? Math.max(0, Number(it.off_invoice_unit || 0)) : 0;
+                        const ffLineTotal = ffUnit * qty;
+                        const netUnitDiff = it.match_type === "NO_EN_TARIFA" ? 0 : ((orderUnit - ffUnit) - tariffUnit);
+
+                        const diffSign = unitDiff > 0 ? "+" : "";
+                        const diffColor = unitDiff > 0.05 ? "#f87171" : (unitDiff < -0.05 ? "#38bdf8" : "#34d399");
+                        const netSign = netUnitDiff > 0 ? "+" : "";
+                        const netColor = Math.abs(netUnitDiff) <= 0.05 ? "#34d399" : (netUnitDiff > 0 ? "#f87171" : "#38bdf8");
+
+                        let statusBadge = "";
+                        if (it.status === "NO_EN_TARIFA") {
+                            statusBadge = `<span class="badge" style="background:rgba(148,163,184,0.2);color:#cbd5e1;font-size:10px;">⚪ No en tarifa</span>`;
+                        } else if (hasFf && Math.abs(netUnitDiff) <= 0.05) {
+                            statusBadge = `<span class="badge" style="background:rgba(16,185,129,0.22);color:#6ee7b7;font-size:10px;">🏷️ Cuadrado con FF</span>`;
+                        } else if (hasFf) {
+                            statusBadge = `<span class="badge" style="background:rgba(245,158,11,0.22);color:#fcd34d;font-size:10px;">🏷️ FF Parcial (${netSign}${netUnitDiff.toFixed(2)}€)</span>`;
+                        } else if (unitDiff > 0.05) {
+                            statusBadge = `<span class="badge" style="background:rgba(239,68,68,0.22);color:#fca5a5;font-size:10px;">🔴 +Caro en Pedido</span>`;
+                        } else if (unitDiff < -0.05) {
+                            statusBadge = `<span class="badge" style="background:rgba(59,130,246,0.22);color:#93c5fd;font-size:10px;">🔵 +Barato en Pedido</span>`;
+                        } else {
+                            statusBadge = `<span class="badge" style="background:rgba(16,185,129,0.2);color:#34d399;font-size:10px;">🟢 Precio OK</span>`;
+                        }
+
+                        const rowBg = (unitDiff > 0.05 && !hasFf) ? "rgba(239, 68, 68, 0.06)" : (hasFf ? "rgba(16, 185, 129, 0.06)" : "transparent");
+
+                        return `
+                            <tr data-order-idx="${idx}" style="background: ${rowBg};">
+                                <td style="font-weight: 700; color: #fcd34d;">${escapeHtmlSafe(it.order_model)}</td>
+                                <td style="font-weight: 700; color: #c4b5fd;">${escapeHtmlSafe(it.tariff_model)}</td>
+                                <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtmlSafe(it.description)}">${escapeHtmlSafe(it.description)}</td>
+                                <td style="text-align: center; font-weight: 800;">${qty} uds</td>
+                                <td style="text-align: right; font-weight: 700; color: #f8fafc;">${orderUnit.toFixed(2)} €</td>
+                                <td style="text-align: right; font-weight: 700; color: #a78bfa;">${it.match_type === "NO_EN_TARIFA" ? "—" : tariffUnit.toFixed(2) + " €"}</td>
+                                <td style="text-align: right; font-weight: 700; color: ${diffColor};">${it.match_type === "NO_EN_TARIFA" ? "—" : diffSign + unitDiff.toFixed(2) + " €"}</td>
+                                <td style="text-align: center;">
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; font-weight: 700; color: ${hasFf ? '#34d399' : '#94a3b8'}; background: rgba(15,23,42,0.7); padding: 4px 8px; border-radius: 6px; border: 1px solid ${hasFf ? '#10b981' : 'rgba(255,255,255,0.12)'};">
+                                        <input type="checkbox" class="agent-ff-checkbox" data-order-idx="${idx}" ${hasFf ? "checked" : ""} style="accent-color: #10b981; cursor: pointer;">
+                                        <span>🏷️ FF</span>
+                                    </label>
+                                </td>
+                                <td style="text-align: right;">
+                                    <input type="number" step="0.01" min="0" class="form-input agent-ff-amount-input" data-order-idx="${idx}" value="${ffUnit.toFixed(2)}" ${hasFf ? "" : "disabled"} style="width: 82px; padding: 4px 6px; font-size: 12px; text-align: right; font-weight: 700; color: ${hasFf ? '#34d399' : '#64748b'}; background: rgba(15,23,42,0.85); border: 1px solid ${hasFf ? '#10b981' : 'rgba(255,255,255,0.1)'}; border-radius: 5px;">
+                                </td>
+                                <td class="agent-ff-line-total-cell" style="text-align: right; font-weight: 700; color: ${hasFf ? '#34d399' : '#64748b'};">${hasFf ? ffLineTotal.toFixed(2) + " €" : "0.00 €"}</td>
+                                <td class="agent-ff-net-diff-cell" style="text-align: right; font-weight: 700; color: ${netColor};">${it.match_type === "NO_EN_TARIFA" ? "—" : netSign + netUnitDiff.toFixed(2) + " €"}</td>
+                                <td class="agent-ff-status-cell" style="text-align: center;">${statusBadge}</td>
+                            </tr>
+                        `;
+                    }).join("");
+
+                    // Eventos interactivos para marcar Fuera de Factura o ajustar su importe por unidad
+                    tbodyOrderAudit.querySelectorAll(".agent-ff-checkbox").forEach(chk => {
+                        chk.addEventListener("change", () => {
+                            const idx = parseInt(chk.getAttribute("data-order-idx"), 10);
+                            const item = agentState.crossData.order_audit_items[idx];
+                            if (!item) return;
+                            item.has_off_invoice = chk.checked;
+                            if (chk.checked && (!item.off_invoice_unit || Number(item.off_invoice_unit) <= 0)) {
+                                // Por defecto autocompletar con la diferencia positiva detectada
+                                item.off_invoice_unit = item.unit_diff > 0 ? Number(Number(item.unit_diff).toFixed(2)) : 0;
+                            } else if (!chk.checked) {
+                                item.off_invoice_unit = 0;
+                            }
+                            updateOrderAuditFinancialSummary();
+                            renderCrossReferenceTables(searchInput ? searchInput.value : "");
+                        });
+                    });
+
+                    tbodyOrderAudit.querySelectorAll(".agent-ff-amount-input").forEach(inp => {
+                        inp.addEventListener("input", () => {
+                            const idx = parseInt(inp.getAttribute("data-order-idx"), 10);
+                            const item = agentState.crossData.order_audit_items[idx];
+                            if (!item) return;
+                            const val = Math.max(0, parseFloat(inp.value) || 0);
+                            item.off_invoice_unit = val;
+                            item.has_off_invoice = val > 0 || Boolean(item.has_off_invoice);
+
+                            const row = inp.closest("tr");
+                            if (row) {
+                                const qty = Math.max(1, Number(item.order_qty || 1));
+                                const orderUnit = Number(item.order_unit_price || 0);
+                                const tariffUnit = Number(item.tariff_price || 0);
+                                const lineCell = row.querySelector(".agent-ff-line-total-cell");
+                                const netCell = row.querySelector(".agent-ff-net-diff-cell");
+                                const statusCell = row.querySelector(".agent-ff-status-cell");
+                                if (lineCell) lineCell.textContent = `${(val * qty).toFixed(2)} €`;
+                                if (netCell && item.match_type !== "NO_EN_TARIFA") {
+                                    const netUnitDiff = (orderUnit - val) - tariffUnit;
+                                    const netSign = netUnitDiff > 0 ? "+" : "";
+                                    netCell.textContent = `${netSign}${netUnitDiff.toFixed(2)} €`;
+                                    netCell.style.color = Math.abs(netUnitDiff) <= 0.05 ? "#34d399" : (netUnitDiff > 0 ? "#f87171" : "#38bdf8");
+                                    if (statusCell) {
+                                        statusCell.innerHTML = Math.abs(netUnitDiff) <= 0.05
+                                            ? `<span class="badge" style="background:rgba(16,185,129,0.22);color:#6ee7b7;font-size:10px;">🏷️ Cuadrado con FF</span>`
+                                            : `<span class="badge" style="background:rgba(245,158,11,0.22);color:#fcd34d;font-size:10px;">🏷️ FF Parcial (${netSign}${netUnitDiff.toFixed(2)}€)</span>`;
+                                    }
+                                }
+                            }
+                            updateOrderAuditFinancialSummary();
+                        });
+                    });
+                }
+            }
+            updateOrderAuditFinancialSummary();
         }
 
-        // Ejecutar el Cruce Multi-Agente (Módulo 3)
+        // Ejecutar el Cruce Multi-Agente (Módulo 4)
         if (btnRunCross) {
             btnRunCross.addEventListener("click", async () => {
                 if (!agentState.tariffSessionId) {
@@ -5472,6 +5763,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         body: JSON.stringify({
                             tariff_session_id: agentState.tariffSessionId,
                             stock_session_id: agentState.stockSessionId,
+                            order_session_id: agentState.orderSessionId,
                             model_col: agentState.modelCol,
                             price_col: agentState.priceCol,
                             desc_col: agentState.descCol,
@@ -5505,14 +5797,22 @@ document.addEventListener("DOMContentLoaded", () => {
                     const bMatched = document.getElementById("agent-badge-matched");
                     const bMissing = document.getElementById("agent-badge-missing");
                     const bStockOnly = document.getElementById("agent-badge-stock-only");
+                    const bOrderAudit = document.getElementById("agent-badge-order-audit");
                     if (bMatched) bMatched.textContent = String(kpis.matched_count || 0);
                     if (bMissing) bMissing.textContent = String(kpis.missing_in_stock_count || 0);
                     if (bStockOnly) bStockOnly.textContent = String(kpis.stock_only_count || 0);
+                    if (bOrderAudit) bOrderAudit.textContent = String(kpis.order_lines_count || 0);
 
                     if (resultsDashboard) resultsDashboard.style.display = "block";
                     if (btnExportExcel) btnExportExcel.style.display = "inline-flex";
 
                     renderCrossReferenceTables(searchInput ? searchInput.value : "");
+
+                    // Si el usuario subió una Hoja de Pedido ERP, abrir directamente la pestaña de Auditoría de Pedido
+                    if (kpis.order_lines_count > 0) {
+                        const btnTabOrder = document.getElementById("btn-tab-order-audit");
+                        if (btnTabOrder) btnTabOrder.click();
+                    }
                 } catch (err) {
                     const isConnErr = (err.message || "").includes("Failed to fetch") || (err.message || "").includes("NetworkError");
                     alert("Error en Cruce Multi-Agente: " + (isConnErr ? "No se pudo conectar con el servidor local (localhost:8000). Revisa que 'iniciar_servidor.bat' siga en ejecución." : err.message));
@@ -5546,8 +5846,31 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (btnExportExcel) {
-            btnExportExcel.addEventListener("click", () => {
-                window.location.href = "/api/agents/export-excel";
+            btnExportExcel.addEventListener("click", async () => {
+                try {
+                    const res = await fetch("/api/agents/export-excel", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            order_audit_items: agentState.crossData ? agentState.crossData.order_audit_items : null
+                        })
+                    });
+                    if (!res.ok) {
+                        window.location.href = "/api/agents/export-excel";
+                        return;
+                    }
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `Cruce_Agentes_Compras_${new Date().toISOString().slice(0,16).replace(/[:T-]/g, "")}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                } catch (e) {
+                    window.location.href = "/api/agents/export-excel";
+                }
             });
         }
     }

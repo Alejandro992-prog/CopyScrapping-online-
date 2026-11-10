@@ -6524,6 +6524,7 @@ class AgentTariffExtractRequest(BaseModel):
 class AgentCrossReferenceRequest(BaseModel):
     tariff_session_id: str
     stock_session_id: Optional[str] = None
+    order_session_id: Optional[str] = None
     model_col: Optional[int] = None
     price_col: Optional[int] = None
     desc_col: Optional[int] = None
@@ -6531,6 +6532,9 @@ class AgentCrossReferenceRequest(BaseModel):
     fuzzy_threshold: float = 0.78
     low_stock_threshold: int = 2
     use_gemini_summary: bool = True
+
+class AgentExportExcelRequest(BaseModel):
+    order_audit_items: Optional[List[Dict[str, Any]]] = None
 
 @app.post("/api/agents/tariff/preview")
 async def agent_tariff_preview_endpoint(
@@ -6694,9 +6698,69 @@ async def agent_stock_upload_endpoint(
     finally:
         safe_remove(temp_pdf)
 
+@app.post("/api/agents/order/upload")
+async def agent_order_upload_endpoint(
+    file: Optional[UploadFile] = File(None)
+):
+    """Módulo 3 (Agente de Pedido ERP): Procesa la hoja de pedido en PDF para auditar precios contra la tarifa."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+
+    if file is None:
+        raise HTTPException(status_code=400, detail="Debes subir un archivo PDF con la hoja de pedido del ERP.")
+    filename = file.filename or "pedido_erp.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="El archivo de pedido debe ser un documento .pdf.")
+
+    temp_pdf = os.path.join(DATA_DIR, "stock", f"temp_agent_order_{int(time.time()*1000)}.pdf")
+    os.makedirs(os.path.dirname(temp_pdf), exist_ok=True)
+    try:
+        content = await file.read()
+        with open(temp_pdf, "wb") as f:
+            f.write(content)
+
+        raw_excerpt_lines = []
+        full_raw_pages = []
+        pages_count = 0
+        if _pypdf_module is not None:
+            try:
+                reader = _pypdf_module.PdfReader(temp_pdf)
+                pages_count = len(reader.pages)
+                for p_i in range(pages_count):
+                    txt = reader.pages[p_i].extract_text() or ""
+                    if txt.strip():
+                        full_raw_pages.append(txt)
+                        if p_i < 3:
+                            raw_excerpt_lines.append(f"--- Página {p_i + 1} ---\n{txt.strip()[:600]}")
+            except Exception as ex_pdf:
+                logger.debug(f"Error extrayendo texto de muestra PDF de pedido: {ex_pdf}")
+
+        parsed_orders = parse_erp_pdf(temp_pdf, lookup_online_eans=False, use_gemini=False)
+        if not parsed_orders and full_raw_pages:
+            parsed_orders = purchase_agents.parse_order_pdf_fallback("\n".join(full_raw_pages))
+
+        if not parsed_orders:
+            raise HTTPException(status_code=400, detail="No se pudieron detectar líneas de pedido ni precios en el PDF subido.")
+
+        res = purchase_agents.create_order_pdf_session(
+            pdf_path=temp_pdf,
+            filename=filename,
+            parsed_products=parsed_orders,
+            raw_text_excerpt="\n\n".join(raw_excerpt_lines),
+            pages_count=pages_count
+        )
+        add_log("success", f"🧾 Agente de Pedido ERP: procesado PDF '{filename}' ({res['items_count']} referencias, {res['total_units']} uds, {res['total_order_value']:.2f} €).")
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando PDF de pedido: {str(e)}")
+    finally:
+        safe_remove(temp_pdf)
+
 @app.post("/api/agents/cross-reference")
 async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
-    """Módulo 3 (Coordinador Multi-Agente): Cruza los contextos del Agente de Tarifas y del Agente de Stock."""
+    """Coordinador Multi-Agente: Cruza los contextos de Tarifa, Stock y Hoja de Pedido ERP (sin guardar memoria)."""
     if purchase_agents is None:
         raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
     try:
@@ -6727,12 +6791,13 @@ async def agent_cross_reference_endpoint(req: AgentCrossReferenceRequest):
             purchase_agents.run_multi_agent_cross_reference,
             tariff_session_id=req.tariff_session_id,
             stock_session_id=req.stock_session_id,
+            order_session_id=req.order_session_id,
             fallback_stock_items=fallback_stock,
             fuzzy_threshold=req.fuzzy_threshold,
             low_stock_threshold=req.low_stock_threshold,
             gemini_api_key=api_key
         )
-        add_log("success", f"🤝 Coordinador Multi-Agente: {res['kpis']['matched_count']} coincidentes, {res['kpis']['missing_in_stock_count']} faltantes.")
+        add_log("success", f"🤝 Coordinador Multi-Agente: {res['kpis']['matched_count']} coincidentes stock, {res['kpis'].get('order_lines_count', 0)} líneas de pedido auditadas.")
         return res
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -6744,6 +6809,26 @@ async def agent_export_excel_endpoint():
         raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
     try:
         out_buffer = purchase_agents.export_cross_reference_excel()
+        fname = f"Cruce_Agentes_Compras_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return StreamingResponse(
+            out_buffer,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={fname}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/agents/export-excel")
+async def agent_export_excel_post_endpoint(req: AgentExportExcelRequest):
+    """Exporta a Excel (.xlsx) incluyendo las anotaciones en vivo de Fuera de Factura marcadas por el usuario."""
+    if purchase_agents is None:
+        raise HTTPException(status_code=500, detail="Módulo purchase_agents no disponible.")
+    try:
+        cross_data = purchase_agents._LAST_CROSS_RESULT
+        if cross_data and req.order_audit_items is not None:
+            cross_data = dict(cross_data)
+            cross_data["order_audit_items"] = req.order_audit_items
+        out_buffer = purchase_agents.export_cross_reference_excel(cross_result=cross_data)
         fname = f"Cruce_Agentes_Compras_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         return StreamingResponse(
             out_buffer,
