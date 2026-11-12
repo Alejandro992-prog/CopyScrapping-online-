@@ -622,18 +622,35 @@ def create_stock_pdf_session(
             continue
         qty = int(p.get("stock") if p.get("stock") is not None else p.get("stock_qty", 0))
         cost = float(p.get("cost") if p.get("cost") is not None else p.get("cost_price", 0.0))
+        
+        # Filtro de cordura estricto para stock unitario
+        if cost >= 20.0 and qty > 150:
+            qty = 1
+        elif qty > 1000:
+            qty = 1
+        elif qty < 0:
+            qty = 0
+            
         desc = str(p.get("description") or "").strip()
         brand = str(p.get("brand") or "Genérico").strip()
         cat = str(p.get("category") or "").strip()
         if not cat or cat in ("Otros", "N/D"):
             cat = stock_analyzer.classify_appliance_type(f"{desc} {sku}", sku)
 
-        if norm_sku in consolidated:
-            consolidated[norm_sku]["stock"] += qty
-            if cost > 0 and consolidated[norm_sku]["cost"] == 0:
-                consolidated[norm_sku]["cost"] = round(cost, 2)
+        # Clave de consolidación: si el SKU es numérico o muy genérico, diferenciar por inicio de descripción
+        if norm_sku.isdigit() or len(norm_sku) < 3 or not any(c.isalpha() for c in norm_sku):
+            cons_key = f"{norm_sku}_{desc[:25].lower().strip()}"
         else:
-            consolidated[norm_sku] = {
+            cons_key = norm_sku
+
+        if cons_key in consolidated:
+            consolidated[cons_key]["stock"] += qty
+            if cost >= 20.0 and consolidated[cons_key]["stock"] > 200:
+                consolidated[cons_key]["stock"] = 200
+            if cost > 0 and consolidated[cons_key]["cost"] == 0:
+                consolidated[cons_key]["cost"] = round(cost, 2)
+        else:
+            consolidated[cons_key] = {
                 "sku": sku,
                 "normalized_sku": norm_sku,
                 "brand": brand,
@@ -930,15 +947,20 @@ def parse_sales_pdf_fallback(raw_text: str) -> List[Dict[str, Any]]:
         units_sold = 1
         sales_amt = 0.0
         if len(nums) == 1:
-            units_sold = max(1, int(round(nums[0])))
+            units_sold = max(1, int(round(nums[0]))) if nums[0] <= 150 else 1
         elif len(nums) >= 2:
-            int_candidates = [n for n in nums if n == int(n) and 0 < n <= 10000]
+            # Filtrar candidatos a unidades: no confundir códigos de producto ni revoluciones/años
+            int_candidates = [
+                n for n in nums 
+                if n == int(n) and 0 < n <= 250 and n not in (1000, 1200, 1400, 1600, 1800, 2000, 2024, 2025, 2026)
+            ]
             if int_candidates:
                 units_sold = int(int_candidates[0])
                 sales_amt = max(nums) if max(nums) != units_sold else 0.0
             else:
-                units_sold = max(1, int(round(nums[0])))
-                sales_amt = nums[-1]
+                first_cand = int(round(nums[0])) if (0 < nums[0] <= 150) else 1
+                units_sold = max(1, first_cand)
+                sales_amt = nums[-1] if len(nums) > 1 else 0.0
 
         desc_str = " ".join(desc_tokens).strip() or f"Artículo {sku_cand}"
         brand_str = stock_analyzer.extract_brand_from_text(f"{sku_cand} {desc_str}") if hasattr(stock_analyzer, "extract_brand_from_text") else "General"
@@ -982,7 +1004,10 @@ def create_sales_pdf_session(
         if not norm_sku:
             continue
         qty = int(p.get("units_sold") if p.get("units_sold") is not None else p.get("stock", 1))
-        if qty <= 0:
+        # Filtro de cordura: si las unidades leídas superan 300, limitar a 1 para no desvirtuar rotaciones
+        if qty > 300:
+            qty = 1
+        elif qty <= 0:
             qty = 1
         amount = float(p.get("sales_amount") if p.get("sales_amount") is not None else (float(p.get("cost", 0.0)) * qty))
         desc = str(p.get("description") or "").strip()
@@ -991,11 +1016,17 @@ def create_sales_pdf_session(
         if not cat or cat in ("Otros", "N/D"):
             cat = stock_analyzer.classify_appliance_type(f"{desc} {sku}", sku)
 
-        if norm_sku in consolidated:
-            consolidated[norm_sku]["units_sold"] += qty
-            consolidated[norm_sku]["sales_amount"] += amount
+        # Clave de consolidación
+        if norm_sku.isdigit() or len(norm_sku) < 3 or not any(c.isalpha() for c in norm_sku):
+            cons_key = f"{norm_sku}_{desc[:25].lower().strip()}"
         else:
-            consolidated[norm_sku] = {
+            cons_key = norm_sku
+
+        if cons_key in consolidated:
+            consolidated[cons_key]["units_sold"] += qty
+            consolidated[cons_key]["sales_amount"] += amount
+        else:
+            consolidated[cons_key] = {
                 "sku": sku,
                 "normalized_sku": norm_sku,
                 "brand": brand,

@@ -4685,8 +4685,10 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                                 calc_qty = round(ratio)
                                 cost_val = val_unit
                                 
+                                # Límite de cordura: si el coste es > 20€, el stock no debe exceder 150 unidades
+                                max_stock_ratio = 150 if val_unit >= 20.0 else 1000
                                 # Verificación matemática precisa de ratio Total / Unitario
-                                if calc_qty > 0 and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
+                                if 0 < calc_qty <= max_stock_ratio and abs(calc_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
                                     stock_val = int(calc_qty)
                                     s_str = str(stock_val)
                                     # Comprobar si tokens[-3] era el stock como número independiente
@@ -4698,7 +4700,7 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                                         desc_end_idx = -2
                                     else:
                                         desc_end_idx = -2
-                                elif third_num is not None and 0 < third_num < 10000:
+                                elif third_num is not None and 0 < third_num <= max_stock_ratio:
                                     third_qty = int(round(third_num))
                                     if abs(third_qty * val_unit - val_total) < max(2.5, val_total * 0.05):
                                         stock_val = max(1, third_qty)
@@ -4715,7 +4717,8 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                                 desc_end_idx = -2
                         elif last_num is not None:
                             cost_val = last_num
-                            if prev_num and 0 < prev_num < 1000 and ',' not in tokens[-2] and '.' not in tokens[-2]:
+                            # Limitar prev_num a valores realistas de stock (< 150 y no códigos)
+                            if prev_num and 0 < prev_num <= (150 if cost_val >= 20.0 else 500) and ',' not in tokens[-2] and '.' not in tokens[-2]:
                                 stock_val = max(1, int(prev_num))
                                 desc_end_idx = -2
                             else:
@@ -4723,6 +4726,9 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                                 desc_end_idx = -1
                                 
                         if cost_val is not None:
+                            # Filtro de cordura global para la línea de stock
+                            if cost_val >= 20.0 and stock_val > 150:
+                                stock_val = 1
                             # Extraer tokens de descripción
                             desc_tokens = tokens[:desc_end_idx] if desc_end_idx < 0 else tokens[:]
                             
@@ -5063,9 +5069,16 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                 ean_val = "N/D"
                 for c_tok, c_val in candidate_numbers:
                     digits_only = re.sub(r'\D', '', c_tok)
+                    # Eliminar EANs largos (8+ dígitos) o números gigantes
                     if len(digits_only) >= 8 or c_val >= 100000:
                         if ean_val == "N/D" and len(digits_only) >= 8:
                             ean_val = digits_only
+                        continue
+                    # Eliminar códigos numéricos enteros típicos de ERP (5 a 7 dígitos sin decimales)
+                    if len(digits_only) >= 5 and ',' not in c_tok and '.' not in c_tok:
+                        continue
+                    # Eliminar especificaciones técnicas canónicas (rpm, potencia en W, o años)
+                    if c_val in (1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400) or (2020 <= c_val <= 2030):
                         continue
                     clean_candidates.append((c_tok, c_val))
                     
@@ -5089,10 +5102,11 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                     
                     if has_decimal1 and not has_decimal2:
                         cost = float(val1)
-                        stock = max(0, int(val2))
+                        # Si el coste es > 20€ y val2 > 150, val2 es un código interno, no el stock
+                        stock = max(0, int(val2)) if (cost < 20.0 or val2 <= 150) else 1
                     elif not has_decimal1 and has_decimal2:
-                        stock = max(0, int(val1))
                         cost = float(val2)
+                        stock = max(0, int(val1)) if (cost < 20.0 or val1 <= 150) else 1
                     else:
                         # Dos importes de precio (Unitario y Total):
                         # En informes de stock el menor es SIEMPRE el precio unitario y el mayor el total
@@ -5100,7 +5114,9 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                         total_cand = max(val1, val2)
                         if unit_cand > 0:
                             cost = float(unit_cand)  # SIEMPRE PRECIO UNITARIO
-                            stock = max(1, int(round(total_cand / unit_cand)))
+                            calc_ratio = round(total_cand / unit_cand)
+                            max_s = 150 if cost >= 20.0 else 500
+                            stock = max(1, int(calc_ratio)) if (0 < calc_ratio <= max_s) else 1
                         else:
                             cost = float(total_cand)
                             stock = 0
@@ -5133,17 +5149,23 @@ def parse_erp_pdf(pdf_path: str, lookup_online_eans: bool = False, use_gemini: b
                         if unit_cand > 0:
                             cost = float(unit_cand)  # SIEMPRE PRECIO UNITARIO
                             calc_stk = round(total_cand / unit_cand)
-                            if 0 < calc_stk < 1000:
+                            max_stk = 150 if cost >= 20.0 else 500
+                            if 0 < calc_stk <= max_stk and abs(calc_stk * unit_cand - total_cand) < max(5.0, total_cand * 0.05):
                                 stock = int(calc_stk)
-                            elif c1_val > 0 and c1_val < 1000:
+                            elif 0 < c1_val <= max_stk:
                                 stock = int(round(c1_val))
                             else:
                                 stock = 1
                         else:
                             cost = float(total_cand)
-                            stock = int(round(c1_val)) if (c1_val > 0 and c1_val < 1000) else 1
+                            stock = int(round(c1_val)) if (0 < c1_val <= 150) else 1
                                 
-                # Protección de cordura: si stock coincide con medidas típicas de electrodomésticos y coste > 50€
+                # Protección de cordura estricta para electrodomésticos y retail
+                if cost >= 20.0 and stock > 150:
+                    stock = 1
+                elif stock > 1000:
+                    stock = 1
+
                 if cost > 50.0 and stock in [144, 160, 170, 175, 177, 178, 180, 185, 186, 190, 200, 201, 203]:
                     stock = 1
 
