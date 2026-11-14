@@ -6052,7 +6052,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             model_col: agentState.modelCol,
                             price_col: agentState.priceCol,
                             desc_col: agentState.descCol,
-                            fuzzy_threshold: fuzzyThresholdSelect ? parseFloat(fuzzyThresholdSelect.value) : 0.78,
+                            fuzzy_threshold: fuzzyThresholdSelect ? parseFloat(fuzzyThresholdSelect.value) : 1.0,
                             low_stock_threshold: lowStockInput ? parseInt(lowStockInput.value, 10) || 2 : 2,
                             use_gemini_summary: useGeminiCheckbox ? useGeminiCheckbox.checked : true
                         })

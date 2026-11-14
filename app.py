@@ -6554,7 +6554,7 @@ class AgentCrossReferenceRequest(BaseModel):
     price_col: Optional[int] = None
     desc_col: Optional[int] = None
     brand_col: Optional[int] = None
-    fuzzy_threshold: float = 0.78
+    fuzzy_threshold: float = 1.0
     low_stock_threshold: int = 2
     use_gemini_summary: bool = True
 

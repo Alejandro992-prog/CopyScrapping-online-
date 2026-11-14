@@ -1101,7 +1101,8 @@ def _extract_numeric_signature(code: str) -> str:
 def _compute_sku_similarity(tariff_norm: str, stock_norm: str) -> Tuple[float, str]:
     """
     Calcula la similitud entre un código normalizado de tarifa y uno de stock PDF.
-    Garantiza que los números clave del modelo coincidan para no emparejar modelos distintos (ej. 3TS998B vs 3TS999B).
+    Garantiza que letras y números coincidan exactamente.
+    Si cambia una sola letra (ej. WG vs BG, X vs BG, o B vs X) es un artículo distinto.
     """
     if not tariff_norm or not stock_norm:
         return 0.0, "NONE"
@@ -1111,43 +1112,34 @@ def _compute_sku_similarity(tariff_norm: str, stock_norm: str) -> Tuple[float, s
 
     # Coincidencia si una de las dos referencias contiene el nombre de la marca como prefijo
     # (ej. Tarifa: 'BALAY 3TS988B' -> 'BALAY3TS988B' vs Stock: '3TS988B')
-    if hasattr(stock_analyzer, "strip_brand_from_sku"):
-        t_nobrand = stock_analyzer.strip_brand_from_sku(tariff_norm)
-        s_nobrand = stock_analyzer.strip_brand_from_sku(stock_norm)
-        if (t_nobrand and t_nobrand == stock_norm) or (s_nobrand and tariff_norm == s_nobrand) or (t_nobrand and s_nobrand and t_nobrand == s_nobrand):
-            return 1.0, "EXACTO"
+    t_nobrand = stock_analyzer.strip_brand_from_sku(tariff_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else tariff_norm
+    s_nobrand = stock_analyzer.strip_brand_from_sku(stock_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else stock_norm
+    if (t_nobrand and t_nobrand == stock_norm) or (s_nobrand and tariff_norm == s_nobrand) or (t_nobrand and s_nobrand and t_nobrand == s_nobrand):
+        return 1.0, "EXACTO"
 
-    # Coincidencia de modelo base eliminando revisiones (/01, /02) o sufijo país/acabado
-    t_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', tariff_norm)
-    s_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', stock_norm)
-    if t_base and s_base and t_base == s_base and len(t_base) >= 5:
-        return 0.98, "EXACTO"
+    # Comprobar sufijo de revisión de fabricación ej. 3TS994BT/01 vs 3TS994BT
+    t_rev = re.sub(r'0[1-9]$', '', t_nobrand)
+    s_rev = re.sub(r'0[1-9]$', '', s_nobrand)
+    if t_rev and s_rev and t_rev == s_rev and len(t_rev) >= 5:
+        return 0.99, "EXACTO"
 
-    # 1. Coincidencia por prefijo (ej. 'WGB256A0ES' vs 'WGB256A0' o variantes de color al final)
-    min_len = min(len(tariff_norm), len(stock_norm))
-    max_len = max(len(tariff_norm), len(stock_norm))
-    if min_len >= 5 and (tariff_norm.startswith(stock_norm) or stock_norm.startswith(tariff_norm)):
-        num_t = _extract_numeric_signature(tariff_norm)
-        num_s = _extract_numeric_signature(stock_norm)
-        # Si comparten la misma raíz numérica o uno es prefijo con letras finales de color/país
-        if num_t == num_s or (len(num_t) >= 3 and (num_t.startswith(num_s) or num_s.startswith(num_t))):
-            ratio = min_len / max_len
-            return max(0.86, round(ratio, 3)), "FUZZY"
-
-    # 2. Coincidencia Fuzzy controlada: requiere que el bloque numérico principal coincida
-    num_t = _extract_numeric_signature(tariff_norm)
-    num_s = _extract_numeric_signature(stock_norm)
-    if not num_t or not num_s or num_t != num_s:
+    # REGLA ESTRICTA DE INTEGRIDAD:
+    # Si las letras del modelo difieren (ej. WG vs BG, X vs BG, B vs X), NUNCA es el mismo artículo
+    letters_t = re.sub(r'[^A-Z]', '', t_nobrand)
+    letters_s = re.sub(r'[^A-Z]', '', s_nobrand)
+    if letters_t != letters_s:
         return 0.0, "NONE"
 
-    ratio = SequenceMatcher(None, tariff_norm, stock_norm).ratio()
-    if ratio >= 0.75:
-        return round(ratio, 3), "FUZZY"
+    digits_t = re.sub(r'\D', '', t_nobrand)
+    digits_s = re.sub(r'\D', '', s_nobrand)
+    if digits_t != digits_s:
+        return 0.0, "NONE"
+
     return 0.0, "NONE"
 
 
 def _build_lookup_indices(items: List[Dict[str, Any]], sku_key: str = "normalized_sku"):
-    """Construye índices O(1) de búsqueda por SKU normalizado, sin marca, base y numérico."""
+    """Construye índices O(1) de búsqueda por SKU normalizado, sin marca, revisión y numérico."""
     by_norm: Dict[str, Dict[str, Any]] = {}
     by_nobrand: Dict[str, Dict[str, Any]] = {}
     by_base: Dict[str, Dict[str, Any]] = {}
@@ -1162,9 +1154,9 @@ def _build_lookup_indices(items: List[Dict[str, Any]], sku_key: str = "normalize
             nb = stock_analyzer.strip_brand_from_sku(norm)
             if nb and nb not in by_nobrand:
                 by_nobrand[nb] = it
-        base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', norm)
-        if base and len(base) >= 5 and base not in by_base:
-            by_base[base] = it
+        rev = re.sub(r'0[1-9]$', '', norm)
+        if rev and len(rev) >= 5 and rev not in by_base:
+            by_base[rev] = it
         num = _extract_numeric_signature(norm)
         if num:
             by_numeric[num].append((norm, it))
@@ -1178,15 +1170,17 @@ def _match_sku_to_catalog(
     catalog_by_nobrand: Dict[str, Any],
     catalog_by_base: Dict[str, Any],
     catalog_by_numeric: Dict[str, List[Tuple[str, Any]]],
-    fuzzy_threshold: float = 0.78
+    fuzzy_threshold: float = 1.0
 ) -> Tuple[Optional[Any], str, float]:
-    """Busca un SKU en un catálogo usando coincidencia O(1) exacta, sin marca, base o fuzzy guiada."""
+    """Busca un SKU en un catálogo usando coincidencia O(1) exacta, sin marca o revisión."""
     if not sku_norm:
         return None, "NONE", 0.0
 
+    # 1. Match exacto por código normalizado
     if sku_norm in catalog_by_norm:
         return catalog_by_norm[sku_norm], "EXACTO", 1.0
 
+    # 2. Match exacto sin prefijo de marca (ej. BALAY3TS994BT vs 3TS994BT)
     nb = stock_analyzer.strip_brand_from_sku(sku_norm) if hasattr(stock_analyzer, "strip_brand_from_sku") else sku_norm
     if nb and nb in catalog_by_norm:
         return catalog_by_norm[nb], "EXACTO", 1.0
@@ -1195,14 +1189,17 @@ def _match_sku_to_catalog(
     if nb and nb in catalog_by_nobrand:
         return catalog_by_nobrand[nb], "EXACTO", 1.0
 
-    base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', sku_norm)
-    if base and len(base) >= 5 and base in catalog_by_base:
-        return catalog_by_base[base], "EXACTO", 0.98
-    if nb:
-        nb_base = re.sub(r'(?:0\d|ES|SP|EU|IB)$', '', nb)
-        if nb_base and len(nb_base) >= 5 and nb_base in catalog_by_base:
-            return catalog_by_base[nb_base], "EXACTO", 0.98
+    # 3. Match de revisión de lote ej. 3TS994BT/01 vs 3TS994BT
+    rev = re.sub(r'0[1-9]$', '', nb or sku_norm)
+    if rev and len(rev) >= 5 and rev in catalog_by_base:
+        return catalog_by_base[rev], "EXACTO", 0.99
 
+    # Si fuzzy_threshold >= 1.0 (modo exacto estricto por defecto), no buscar más
+    if fuzzy_threshold >= 1.0:
+        return None, "NONE", 0.0
+
+    # Búsqueda guiada solo si el usuario especificó fuzzy_threshold < 1.0
+    # PERO exigiendo siempre la regla de integridad de letras
     num_s = _extract_numeric_signature(sku_norm)
     cands = catalog_by_numeric.get(num_s, []) if num_s else []
     best_cand = None
@@ -1229,7 +1226,7 @@ def run_multi_agent_cross_reference(
     sales_period_days: Optional[int] = 30,
     target_coverage_days: Optional[int] = 30,
     fallback_stock_items: Optional[List[Dict[str, Any]]] = None,
-    fuzzy_threshold: float = 0.78,
+    fuzzy_threshold: float = 1.0,
     low_stock_threshold: int = 2,
     gemini_api_key: Optional[str] = None
 ) -> Dict[str, Any]:

@@ -204,12 +204,7 @@ def extract_base_model(sku: str) -> str:
     s = str(sku).upper().strip()
     # 1. Eliminar revisiones de fabricante ej. /01, /02, .01
     s = re.sub(r'[/\.]\d{1,2}$', '', s)
-    # 2. Eliminar sufijos precedidos de separador (- _ / .)
-    s = re.sub(r'[-_/\.](?:ES|XPN|SP|IB|EU|FR|IT|PT|WH|WHITE|BL|BLANCO|BK|BLACK|NEG|NEGRO|IX|INX|INOX|STEEL|ACERO|SL|SILVER|PLATA|GR|GREY|GRIS|W|B|X)$', '', s)
-    # 3. Eliminar sufijos de color o mercado pegados tras números si la base resultante tiene al menos 4 caracteres
-    m = re.search(r'^([A-Z0-9]{3,}[0-9])(?:ES|XPN|SP|IB|WH|WHITE|BL|BK|BLACK|IX|INX|INOX|W|B|X)$', s)
-    if m:
-        s = m.group(1)
+    # IMPORTANTE: NO eliminar letras de color ni variantes (ej. WG, BG, X, W, B), ya que son artículos distintos
     s = re.sub(r'[\s\-_/\\.:,;\'"|~•·\u2010-\u2015\u2212\u00A0\u200B\uFEFF]', '', s)
     return s
 
@@ -265,8 +260,15 @@ def fuzzy_match_sku(
     # Ajustar ratio mínimo según longitud (códigos más cortos requieren mayor precisión)
     effective_min_ratio = 0.88 if len(norm_model) <= 6 else min_ratio
 
+    letters1 = re.sub(r'[^A-Z]', '', norm_model)
+
     for cand_sku, cand_item in candidates.items():
         if abs(len(cand_sku) - len(norm_model)) > 3:
+            continue
+
+        # Regla de integridad estricta: si las letras difieren (ej. WG vs BG, X vs BG), NO es el mismo artículo
+        letters2 = re.sub(r'[^A-Z]', '', cand_sku)
+        if letters1 != letters2:
             continue
             
         # Si ambos tienen secuencias numéricas de 2+ dígitos, deben coincidir o contenerse
